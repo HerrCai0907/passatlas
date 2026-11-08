@@ -1,0 +1,151 @@
+---
+title: inliner
+subtitle: SCC inlining decisions
+summary: Bottom-up along the post-order of the call-graph SCCs, InlineCost and the inline advisor decide which calls are worth expanding; the actual cloning and CFG rewrite live in inline-function.
+category: interproc
+difficulty: 3
+status: ready
+order: 4
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['CGSCC', 'InlineCost', 'Threshold']
+source: llvm/lib/Transforms/IPO/Inliner.cpp
+updated: 2026-11-08
+---
+
+import SCCInlinerLabIsland from '../../../components/SCCInlinerLabIsland.astro';
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+Inlining tears down function boundaries: constants, return values and pointer aliases inside the callee become visible in the caller for the first time. But inlining is not free — code size, compile time and register pressure all go up, and a large function on a cold path can wreck the instruction cache.
+
+So the real question for the inliner is not "can this be expanded" but **is this call edge worth removing?**
+
+That question has to be answered in the right order. Inlining rewrites the call graph itself, and the shape of the callee changes the caller's cost. LLVM therefore registers `InlinerPass` as a CGSCC pass: process the callee's SCC first, then the caller's; by the time a decision is made, the callee has already been optimised. This page only covers "which calls do we look at, and how do we decide"; cloning, block splitting and return-value merging belong to <I18nLink href="/passes/inline-function/">inline-function</I18nLink>.
+
+## Algorithm
+
+One sentence to remember: **the SCC post-order decides when to look, the candidate queue decides which calls to look at, and the cost model plus the advisor decide whether to take them.**
+
+<div class="pa-scc-bleed">
+  <SCCInlinerLabIsland />
+</div>
+
+The lab's graph is always the pre-decision call graph; the eight frames only change "which SCC is being inspected" and "what is the decision for this call". Dragging the threshold changes the results for `render → hash` and `main → render`; note that raising the threshold can let the callee absorb more inlining and get fatter, so the caller is rejected instead.
+
+### Post-order: bottom-up from leaf SCCs
+
+`LazyCallGraph` builds a graph of functions and call edges, then collapses mutually reachable functions into SCCs. SCCs no longer contain cycles, so they can be ordered; `ModuleToPostOrderCGSCCPassAdaptor` visits them in post-order, that is, callees before callers.
+
+Recursion and mutual recursion are exactly why SCCs exist: `@hash` and `@mix` call each other, no topological order exists, and they can only be treated as a unit. The CGSCC walk guarantees that when an SCC is entered, every child SCC it calls has already been processed — the cost analysis sees the final shape of the callee, not a half-finished one.
+
+### The candidate queue inside one SCC
+
+When `InlinerPass::run` gets an SCC, it first collects the call sites of every function in that SCC into a `SmallVector<CallBase*>`, ordered by function and then by instruction. It then processes them one by one; each accepted call sends the newly cloned call sites from `InlineFunction` into `IFI.InlinedCallSites`, and they are **appended to the end of the queue**.
+
+```text
+calls = []
+for F in SCC:
+  for I in F:
+    if isa<CallBase>(I) and has_definition(I.callee):
+      calls.push(I)
+
+for i = 0; i < calls.size(); ++i:        // size changes
+  if calls[i].caller is no longer in the current SCC: continue
+  if !eligible(calls[i]): continue
+  ic = getInlineCost(calls[i])
+  if ic.cost < ic.threshold:
+    accept(calls[i])
+    calls.append(new_calls_exposed_by_inline)  // append, never jump the queue
+```
+
+Appending rather than jumping the queue is deliberate: finish the current sweep of the SCC first, then handle calls exposed transitively. Otherwise, in a densely connected SCC every edge looks worth inlining and the function balloons by inlining into itself.
+
+### Attribute gates and the inline advisor
+
+Before any cost is computed, a set of checks avoids the calculation entirely:
+
+- callers with `alwaysinline` or `flatten`: always;
+- `noinline`, `optnone`, interposable, incompatible target features, indirect branches / `blockaddress` / varargs: never;
+- a callee that already has `!inline_history`: never, to keep mutual recursion from expanding forever.
+
+These gates are implemented by `getAttributeBasedInliningDecision` and `isInlineViable`. Only then does the `InlineAdvisor` see the candidate: the default advisor calls `getInlineCost`, while an ML advisor or a replay advisor can override the policy; the first `OnlyMandatory` pass handles only mandatory cases. The advisor is also responsible for deferral: if inlining this callee into the caller would make the caller miss an inlining opportunity higher up, it can suggest waiting.
+
+### The cost model: not "small enough, inline it"
+
+`InlineCostCallAnalyzer` runs a BFS from the callee entry and only visits blocks that are live for this call site:
+
+- constant arguments are folded along the way, and a known branch condition follows only one side;
+- instructions that can be simplified cost nothing; the rest cost 5 units by default;
+- each call adds a 25-unit penalty, while the argument setup at the call site is subtracted;
+- a single-block callee gets a temporary 50% threshold bonus; vector-heavy code gets up to 150%;
+- the last call site of an internal function gets a 15000-unit discount — because the whole function can be deleted after inlining.
+
+The default threshold is 225 (`-O2`), 250 at `-O3`, 50 at `-Os` and 5 at `-Oz`; `inlinehint` raises it to 325, a hot call site can reach 3000, and a cold one drops to 45. The final decision is one line:
+
+```cpp
+return Cost < std::max(1, Threshold) ? success : failure("Cost over threshold");
+```
+
+The analysis can bail out early: once the cost crosses the threshold there is no point continuing. That saved time is exactly why the inliner remains practical on large modules.
+
+### Extra defences inside an SCC
+
+If a newly exposed call is still in the same sub-SCC as the callee that was just inlined, the call site carries a `function-inline-cost-multiplier`, multiplied by `-intra-scc-cost-multiplier` (default 2) each time. The more inlining crosses a sub-SCC boundary, the more expensive the next one becomes.
+
+Mutual recursion is cut off by `!inline_history` on the call site: if the same callee already appears in the history, the next `CanInlineCallSite` rejects it outright. The cost multiplier governs "how expensive", history governs "will it come back around"; both are needed.
+
+### After the decision
+
+When a call is accepted, `InlinerPass` hands the `CallBase` to `InlineFunction`; the real argument replacement, CFG splitting, return-value PHI and debug-info stitching happen there. The decision page ends here: it only produces the list of accepted and kept calls.
+
+## Cost and pitfalls
+
+- **The threshold is an empirical parameter, not semantics.** Different LLVM versions, targets and profiles change the numbers. Looking at the actual `-pass-remarks=inline` output is more useful than memorising 225.
+- **Code bloat is real.** Inlining copies the callee into every call site; a small function on a hot path is worth it, a large function on a cold path hurts both I-cache and compile time.
+- **The callee gets fatter before the caller decides.** That is the price of post-order, and the reason raising the threshold in the lab can reject `main → render`.
+- **Recursion does not expand forever.** Direct recursion is rejected in `isInlineViable`; mutual recursion is cut off by `!inline_history`.
+- **An SCC needs extra defences.** `intra-scc-cost-multiplier` and `InlinedInternalEdges` exist for densely connected SCCs; otherwise every step looks profitable and the result grows super-linearly.
+- **Profiles change the conclusion.** Hot call sites, cold callees and cost-benefit analysis can all bypass the normal threshold; without a profile those paths never trigger.
+
+## Where it sits in the pipeline
+
+The default `-O2` / `-O3` pipeline puts `ModuleInlinerWrapperPass` near the front: an optional mandatory-first pass (handling only `alwaysinline` and friends), followed by the normal `InlinerPass`. It is wrapped in `DevirtSCCRepeatedPass`, itself wrapped in `createModuleToPostOrderCGSCCPassAdaptor`, so the actual execution order is "SCC post-order + re-run after devirtualisation".
+
+Inlining is immediately followed by function-level cleanups such as SROA, instcombine and GVN. That is one reason the inliner is willing to accept a call that looks slightly unprofitable now: later passes will simplify the cloned code.
+
+LLVM also provides variants such as `always-inline`, `module-inline` and `partial-inliner`; they reuse `InlineCost` but traverse and decide differently. For what happens after a decision is accepted, see <I18nLink href="/passes/inline-function/">inline-function</I18nLink>.
+
+## Run it yourself
+
+```llvm
+define internal i32 @scale(i32 %x) {
+entry:
+  %mul = mul i32 %x, 3
+  ret i32 %mul
+}
+
+define i32 @total(i32 %x) {
+entry:
+  %sum = call i32 @scale(i32 %x)
+  %res = add i32 %sum, 1
+  ret i32 %res
+}
+```
+
+```bash
+opt -passes='print<inline-cost>' -disable-output demo.ll 2>&1
+opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
+```
+
+The first command prints the cost analysis call by call, which pairs well with the "5 units per instruction" rule above. The second writes decisions to stderr in a form like:
+
+```text
+inlined into ... with (cost=..., threshold=225)
+```
+
+The exact numbers vary with version and target. To see the rewrite as well, drop `-o /dev/null` and add `-S`; the result goes to stdout.
+
+If `opt` is a release build, `-debug-only=inline` is unavailable; `-pass-remarks=inline` is enough.
+
+This machine has no compiled `opt`, so the pass names above were cross-checked against the current LLVM `PassRegistry.def` but not executed; use `opt -print-passes` as the source of truth for your version.

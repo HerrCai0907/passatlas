@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { defaultLocale, type Locale } from '../i18n/config';
+import { sccLabText } from '../i18n/lab-scc';
 import './SCCInlinerLab.css';
 
 type SccId = 'clamp' | 'hashmix' | 'render' | 'main';
@@ -8,7 +10,6 @@ type NodeId = 'main' | 'render' | 'hash' | 'mix' | 'clamp';
 interface NodeDef {
   id: NodeId;
   label: string;
-  sub: string;
   scc: SccId;
   x: number;
   y: number;
@@ -22,11 +23,11 @@ const DEFAULT_THRESHOLD = 225;
 const METER_MAX = 400;
 
 const NODES: NodeDef[] = [
-  { id: 'main', label: '@main', sub: 'public · entry', scc: 'main', x: 260, y: 48 },
-  { id: 'render', label: '@render', sub: 'internal · 2 calls', scc: 'render', x: 260, y: 142 },
-  { id: 'hash', label: '@hash', sub: 'SCC 内 · 1 call', scc: 'hashmix', x: 112, y: 252 },
-  { id: 'mix', label: '@mix', sub: 'SCC 内 · 1 call', scc: 'hashmix', x: 340, y: 252 },
-  { id: 'clamp', label: '@clamp', sub: 'internal · 0 calls', scc: 'clamp', x: 438, y: 354 },
+  { id: 'main', label: '@main', scc: 'main', x: 260, y: 48 },
+  { id: 'render', label: '@render', scc: 'render', x: 260, y: 142 },
+  { id: 'hash', label: '@hash', scc: 'hashmix', x: 112, y: 252 },
+  { id: 'mix', label: '@mix', scc: 'hashmix', x: 340, y: 252 },
+  { id: 'clamp', label: '@clamp', scc: 'clamp', x: 438, y: 354 },
 ];
 
 const SCCS: { id: SccId; order: number; label: string; phase: number }[] = [
@@ -55,8 +56,6 @@ const PSEUDO = [
   '  summary = current_scc_decisions()',
 ];
 
-const PHASE_LABELS = ['建图', '缩点', '后序', 'clamp', 'hash / mix', 'render', 'main', '结论'];
-
 const PHASE_CODE: Record<number, number[]> = {
   0: [0],
   1: [0],
@@ -82,15 +81,6 @@ interface Decisions {
   inlineRenderHash: boolean;
   mainCost: number;
   inlineMain: boolean;
-}
-
-interface Candidate {
-  id: string;
-  caller: string;
-  callee: string;
-  cost: number;
-  inline: boolean;
-  why: string;
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -125,12 +115,22 @@ function thresholdStyle(value: number): CSSProperties {
   return { left: `${Math.min(100, (value / METER_MAX) * 100)}%` };
 }
 
-function CostMeter({ cost, threshold, inline }: { cost: number; threshold: number; inline: boolean }) {
+function CostMeter({
+  cost,
+  threshold,
+  inline,
+  locale,
+}: {
+  cost: number;
+  threshold: number;
+  inline: boolean;
+  locale: Locale;
+}) {
   return (
     <div
       className="pa-scc__meter"
       role="img"
-      aria-label={`代价 ${cost}，阈值 ${threshold}，${inline ? '低于阈值，可以内联' : '达到阈值，拒绝内联'}`}
+      aria-label={sccLabText[locale].meterAria(cost, threshold, inline)}
     >
       <div className="pa-scc__meter-track">
         <span
@@ -147,7 +147,8 @@ function CostMeter({ cost, threshold, inline }: { cost: number; threshold: numbe
   );
 }
 
-export default function SCCInlinerLab() {
+export default function SCCInlinerLab({ locale = defaultLocale }: { locale?: Locale }) {
+  const text = sccLabText[locale];
   const uid = useId().replace(/:/g, '');
   const [phase, setPhase] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -157,7 +158,7 @@ export default function SCCInlinerLab() {
   const sliderHintId = `${uid}-threshold-hint`;
 
   const decisions = useMemo(() => computeDecisions(threshold), [threshold]);
-  const lastPhase = PHASE_LABELS.length - 1;
+  const lastPhase = text.phaseLabels.length - 1;
 
   const goTo = useCallback((next: number) => {
     setPhase(Math.max(0, Math.min(lastPhase, next)));
@@ -229,115 +230,15 @@ export default function SCCInlinerLab() {
     return done;
   }, [phase]);
 
-  const candidates = useMemo<Candidate[]>(() => {
-    if (phase === 4) {
-      return [
-        {
-          id: 'hash-mix',
-          caller: '@hash',
-          callee: '@mix',
-          cost: 240,
-          inline: decisions.inlineHashMix,
-          why: decisions.inlineHashMix
-            ? `240 < 阈值 ${threshold}：可以内联一层；新产生的自递归 call 会被 !inline_history 截断。`
-            : `240 ≥ 阈值 ${threshold}：拒绝。SCC 内边也不会被成本乘子无限展开。`,
-        },
-      ];
-    }
+  const candidates = useMemo(
+    () => text.candidates(phase, decisions, threshold),
+    [text, phase, decisions, threshold],
+  );
 
-    if (phase === 5) {
-      return [
-        {
-          id: 'render-clamp',
-          caller: '@render',
-          callee: '@clamp',
-          cost: 30,
-          inline: decisions.inlineClamp,
-          why: 'clamp 只有两条指令，调用点开销比函数体还大；internal + 单一 caller，内联后还能整函数删除。',
-        },
-        {
-          id: 'render-hash',
-          caller: '@render',
-          callee: '@hash',
-          cost: decisions.renderHashCost,
-          inline: decisions.inlineRenderHash,
-          why: decisions.inlineRenderHash
-            ? `clamp 内联后 render 变大，但 ${decisions.renderHashCost} < 阈值 ${threshold}；hash 里的调用被一起拖进来。`
-            : `clamp 内联后代价涨到 ${decisions.renderHashCost}，越过阈值 ${threshold}；保留调用。`,
-        },
-      ];
-    }
-
-    if (phase === 6) {
-      return [
-        {
-          id: 'main-render',
-          caller: '@main',
-          callee: '@render',
-          cost: decisions.mainCost,
-          inline: decisions.inlineMain,
-          why: decisions.inlineMain
-            ? `${decisions.mainCost} < 阈值 ${threshold}：main → render 成立。注意 250 附近会出现窗口：render 还没吸收 hash，所以更瘦。`
-            : decisions.inlineRenderHash
-              ? `render 先吸收了 hash，代价涨到 ${decisions.mainCost}；即使阈值 ${threshold} 不低，main → render 仍被拒绝。`
-              : `render 吸收了 clamp，代价从 210 涨到 ${decisions.mainCost}，超过阈值 ${threshold}。`,
-        },
-      ];
-    }
-
-    return [];
-  }, [phase, decisions, threshold]);
-
-  const copy = useMemo(() => {
-    switch (phase) {
-      case 0:
-        return {
-          title: '建图：每条边都是一个 call site',
-          note: '5 个函数、6 条 call edge。main 是入口；hash 与 mix 互相调用，形成唯一的环。这一页只回答「哪条边值得内联」；真正的改写见另一页 inline-function。',
-        };
-      case 1:
-        return {
-          title: '缩点：把互递归收进一个 SCC',
-          note: '互相可达的函数缩成一个 SCC：{clamp}、{hash, mix}、{render}、{main}。SCC 之间不再有环，可以排序；{hash, mix} 内部的边必须特殊处理。',
-        };
-      case 2:
-        return {
-          title: '后序：先 callee，后 caller',
-          note: '后序编号 1 clamp → 2 {hash, mix} → 3 render → 4 main。进入 render 时 clamp 已经处理完；进入 main 时 render 已经处理完。这就是「自底向上」的全部含义。',
-        };
-      case 3:
-        return {
-          title: 'SCC 1 · clamp：没有出边，先标记就绪',
-          note: '当前 SCC 是 {clamp}。它没有 call，worklist 为空，直接标记就绪。注意：内联 render → clamp 是在 render 的 SCC 里发生的，不是在这里——SCC 决定的是「检查哪个函数的 call」。',
-        };
-      case 4:
-        return {
-          title: 'SCC 2 · {hash, mix}：SCC 内部的边',
-          note: decisions.inlineHashMix
-            ? `两条调用 hash → mix、mix → hash 都在 SCC 内部。代价 240 < 阈值 ${threshold}：可以内联一层；但 !inline_history 会阻止下一层。这一帧保留 SCC 原样，重点看 history 截断，而不是重画内部边。`
-            : `两条调用 hash → mix、mix → hash 都在 SCC 内部。代价 240，阈值 ${threshold}：拒绝。SCC 内的边即使代价可控，也会受 inline history 与成本乘子约束。`,
-        };
-      case 5:
-        return {
-          title: 'SCC 3 · render：两个候选',
-          note: decisions.inlineRenderHash
-            ? `worklist：render → clamp（30）、render → hash（${decisions.renderHashCost}）。阈值 ${threshold} 下两个都接受。注意：图始终是决策前的 call graph，高亮只表示当前 SCC 与候选；克隆、拆块在 inline-function 里。`
-            : `worklist：render → clamp（30）、render → hash（${decisions.renderHashCost}）。阈值 ${threshold}：接受 clamp，拒绝 hash。图仍是决策前的 call graph；删除与拆分不属于这一页。`,
-        };
-      case 6:
-        return {
-          title: 'SCC 4 · main：callee 变胖之后',
-          note: decisions.inlineMain
-            ? `假设上一步的决策已经生效：render 吸收了 clamp（以及可能的 hash），代价变成 ${decisions.mainCost}。main → render 低于阈值 ${threshold}，接受。这里只记录决定，不改写 IR。`
-            : `假设上一步的决策已经生效：render 吸收了 clamp（以及可能的 hash），代价变成 ${decisions.mainCost}。main → render 不低于阈值 ${threshold}，拒绝。后序的代价就在这里：callee 先变胖，caller 必须接受。`,
-        };
-      default:
-        return {
-          title: '结论：留下决定，改写交给 InlineFunction',
-          note: '本轮只产出决策：哪些 call 接受、哪些保留。真正的克隆、CFG 拆分、返回值 PHI 和死函数删除，见 inline-function。图从头到尾都是决策前的 call graph。',
-        };
-    }
-  }, [phase, decisions, threshold]);
+  const copy = useMemo(
+    () => text.copy(phase, decisions, threshold),
+    [text, phase, decisions, threshold],
+  );
 
   const handleNodeKey = (event: ReactKeyboardEvent<SVGGElement>, targetPhase: number) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -355,6 +256,7 @@ export default function SCCInlinerLab() {
       .filter(Boolean)
       .join(' ');
     const targetPhase = SCCS.find((scc) => scc.id === node.scc)?.phase ?? 0;
+    const sub = text.nodeSub[node.id];
 
     return (
       <g
@@ -362,7 +264,7 @@ export default function SCCInlinerLab() {
         className={classes}
         role="button"
         tabIndex={0}
-        aria-label={`${node.label}，${node.sub}；跳到第 ${targetPhase + 1} 帧`}
+        aria-label={text.nodeAria(node.label, sub, targetPhase + 1)}
         onClick={() => {
           setPlaying(false);
           goTo(targetPhase);
@@ -374,7 +276,7 @@ export default function SCCInlinerLab() {
           {node.label}
         </text>
         <text className="pa-scc__node-sub" x={node.x - NODE_W / 2 + 12} y={node.y + 15}>
-          {node.sub}
+          {sub}
         </text>
       </g>
     );
@@ -387,15 +289,15 @@ export default function SCCInlinerLab() {
     <div
       className="pa-scc"
       role="group"
-      aria-label="SCC 内联决策实验台"
+      aria-label={text.labAria}
       tabIndex={0}
       data-playing={playing ? 'true' : 'false'}
       onKeyDown={handleKeyDown}
     >
       <header className="pa-scc__head">
         <div className="pa-scc__heading">
-          <p className="pa-scc__kicker">Interactive · CGSCC · InlineCost</p>
-          <h3 className="pa-scc__title">SCC 内联决策台</h3>
+          <p className="pa-scc__kicker">{text.kicker}</p>
+          <h3 className="pa-scc__title">{text.title}</h3>
         </div>
         <div className="pa-scc__actions">
           <button
@@ -406,8 +308,8 @@ export default function SCCInlinerLab() {
               goTo(phase - 1);
             }}
             disabled={phase === 0}
-            aria-label="上一帧"
-            title="上一帧（←）"
+            aria-label={text.previousFrame}
+            title={text.previousFrameTitle}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M15 5l-7 7 7 7" />
@@ -422,14 +324,18 @@ export default function SCCInlinerLab() {
             }}
             disabled={reducedMotion}
             aria-label={
-              reducedMotion ? '已按系统「减少动态效果」设置关闭自动播放' : playing ? '暂停' : '自动播放'
+              reducedMotion
+                ? text.autoplayOff
+                : playing
+                  ? text.pause
+                  : text.play
             }
             title={
               reducedMotion
-                ? '已按系统设置关闭自动播放；可继续用 ← → 单步'
+                ? text.autoplayOffTitle
                 : playing
-                  ? '暂停（空格）'
-                  : '自动播放（空格）'
+                  ? text.pauseTitle
+                  : text.playTitle
             }
           >
             {playing ? (
@@ -450,8 +356,8 @@ export default function SCCInlinerLab() {
               goTo(phase + 1);
             }}
             disabled={phase === lastPhase}
-            aria-label="下一帧"
-            title="下一帧（→）"
+            aria-label={text.nextFrame}
+            title={text.nextFrameTitle}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M9 5l7 7-7 7" />
@@ -460,13 +366,13 @@ export default function SCCInlinerLab() {
           <span className="pa-scc__counter">
             <strong>{String(phase + 1).padStart(2, '0')}</strong>
             <span aria-hidden="true"> / </span>
-            {String(PHASE_LABELS.length).padStart(2, '0')}
+            {String(text.phaseLabels.length).padStart(2, '0')}
           </span>
         </div>
       </header>
 
       <div className="pa-scc__progress" aria-hidden="true">
-        <span style={{ width: `${((phase + 1) / PHASE_LABELS.length) * 100}%` }} />
+        <span style={{ width: `${((phase + 1) / text.phaseLabels.length) * 100}%` }} />
       </div>
 
       <div className="pa-scc__main">
@@ -475,7 +381,7 @@ export default function SCCInlinerLab() {
             className="pa-scc__svg"
             viewBox="0 0 520 410"
             role="group"
-            aria-label={`SCC 内联调度图。main 调用 render，render 调用 clamp 与 hash，hash 和 mix 互相调用。当前第 ${phase + 1} 帧：${copy.title}。`}
+            aria-label={text.graphAria(phase + 1, copy.title)}
           >
             <defs>
               <marker
@@ -511,7 +417,7 @@ export default function SCCInlinerLab() {
               rx={16}
             />
             <text className="pa-scc__scc-box-label" x={386} y={218} textAnchor="end">
-              互递归 SCC · 2 个函数
+              {text.sccBoxLabel}
             </text>
 
             <g className={edgeClass(phase === 6, false)}>
@@ -596,12 +502,12 @@ export default function SCCInlinerLab() {
 
         <aside className="pa-scc__panel">
           <p className="pa-scc__phase">
-            F{String(phase + 1).padStart(2, '0')} · {PHASE_LABELS[phase]}
+            F{String(phase + 1).padStart(2, '0')} · {text.phaseLabels[phase]}
           </p>
           <h4 className="pa-scc__panel-title">{copy.title}</h4>
           <p className="pa-scc__note">{copy.note}</p>
 
-          <ol className="pa-scc__code" aria-label="内联器伪代码，高亮当前动作">
+          <ol className="pa-scc__code" aria-label={text.pseudoAria}>
             {PSEUDO.map((line, index) => (
               <li key={line} className={PHASE_CODE[phase]?.includes(index) ? 'is-active' : ''}>
                 <span className="pa-scc__code-no" aria-hidden="true">
@@ -615,7 +521,7 @@ export default function SCCInlinerLab() {
           <div className="pa-scc__threshold">
             <div className="pa-scc__threshold-head">
               <label htmlFor={sliderId}>
-                内联阈值 <span className="pa-scc__threshold-value">{threshold}</span>
+                {text.thresholdLabel} <span className="pa-scc__threshold-value">{threshold}</span>
               </label>
               <span className="pa-scc__presets">
                 {PRESETS.map((preset) => (
@@ -643,7 +549,7 @@ export default function SCCInlinerLab() {
               onChange={(event) => setThreshold(Number(event.target.value))}
             />
             <p className="pa-scc__hint" id={sliderHintId}>
-              225 是 -O2 默认值。代价数字是教学示意；阈值不是单调旋钮：调高会让 callee 先吸收更多内联，caller 反而可能被拒绝。
+              {text.thresholdHint}
             </p>
           </div>
 
@@ -658,9 +564,14 @@ export default function SCCInlinerLab() {
                     <code>
                       {candidate.caller} → {candidate.callee}
                     </code>
-                    <span className="pa-scc__badge">{candidate.inline ? '内联' : '拒绝'}</span>
+                    <span className="pa-scc__badge">{candidate.inline ? text.inline : text.reject}</span>
                   </div>
-                  <CostMeter cost={candidate.cost} threshold={threshold} inline={candidate.inline} />
+                  <CostMeter
+                    cost={candidate.cost}
+                    threshold={threshold}
+                    inline={candidate.inline}
+                    locale={locale}
+                  />
                   <p className="pa-scc__why">{candidate.why}</p>
                 </article>
               ))}
@@ -668,36 +579,36 @@ export default function SCCInlinerLab() {
           ) : null}
 
           {phase === 7 ? (
-            <ul className="pa-scc__summary" aria-label="本轮决策">
+            <ul className="pa-scc__summary" aria-label={text.summaryAria}>
               <li className={decisions.inlineHashMix ? 'is-inline' : 'is-reject'}>
                 <code>hash ↔ mix</code>
-                <span>{decisions.inlineHashMix ? '内联 1 层' : '保留'}</span>
+                <span>{decisions.inlineHashMix ? text.inlineOneLayer : text.keep}</span>
               </li>
               <li className={decisions.inlineClamp ? 'is-inline' : 'is-reject'}>
                 <code>render → clamp</code>
-                <span>{decisions.inlineClamp ? '内联' : '保留'}</span>
+                <span>{decisions.inlineClamp ? text.inline : text.keep}</span>
               </li>
               <li className={decisions.inlineRenderHash ? 'is-inline' : 'is-reject'}>
                 <code>render → hash</code>
-                <span>{decisions.inlineRenderHash ? '内联' : '保留'}</span>
+                <span>{decisions.inlineRenderHash ? text.inline : text.keep}</span>
               </li>
               <li className={decisions.inlineMain ? 'is-inline' : 'is-reject'}>
                 <code>main → render</code>
-                <span>{decisions.inlineMain ? '内联' : '保留'}</span>
+                <span>{decisions.inlineMain ? text.inline : text.keep}</span>
               </li>
             </ul>
           ) : null}
         </aside>
       </div>
 
-      <ol className="pa-scc__timeline" aria-label="跳到指定帧">
-        {PHASE_LABELS.map((label, index) => (
+      <ol className="pa-scc__timeline" aria-label={text.timelineAria}>
+        {text.phaseLabels.map((label, index) => (
           <li key={label}>
             <button
               type="button"
               className="pa-scc__step"
               aria-current={index === phase ? 'step' : undefined}
-              aria-label={`第 ${index + 1} 帧：${label}`}
+              aria-label={text.timelineStep(index + 1, label)}
               onClick={() => {
                 setPlaying(false);
                 goTo(index);
@@ -712,20 +623,19 @@ export default function SCCInlinerLab() {
 
       <footer className="pa-scc__foot">
         <p>
-          <kbd>←</kbd> <kbd>→</kbd> 单步 · <kbd>空格</kbd> 播放 · 拖动阈值改变判定
+          <kbd>←</kbd> <kbd>→</kbd> {text.footerStep} · <kbd>{text.spaceKey}</kbd>{' '}
+          {text.footerPlay} · {text.footerThreshold}
         </p>
-        <p className="pa-scc__foot-note">
-          图固定为决策前的 call graph；接受/拒绝只体现在面板，实际改写见 inline-function。
-        </p>
+        <p className="pa-scc__foot-note">{text.footerNote}</p>
         <p className="pa-scc__legend" aria-hidden="true">
-          <span className="pa-scc__legend-dot" /> 当前 SCC
-          <span className="pa-scc__legend-line" /> call edge
-          <span className="pa-scc__legend-line pa-scc__legend-line--dash" /> SCC 回边
+          <span className="pa-scc__legend-dot" /> {text.legendCurrentScc}
+          <span className="pa-scc__legend-line" /> {text.legendCallEdge}
+          <span className="pa-scc__legend-line pa-scc__legend-line--dash" /> {text.legendBackEdge}
         </p>
       </footer>
 
       <p className="sr-only" role="status" aria-live="polite">
-        第 {phase + 1} 帧：{copy.title}
+        {text.status(phase + 1, copy.title)}
       </p>
     </div>
   );

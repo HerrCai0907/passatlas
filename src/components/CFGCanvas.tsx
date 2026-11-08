@@ -1,5 +1,7 @@
 import { useId } from 'react';
 import type { KeyboardEvent } from 'react';
+import { defaultLocale, type Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
 import { instructionKey } from '../lib/ir/diff';
 import type { InstructionMark } from '../lib/ir/diff';
 import type { CFGGraph, LaidOutBlock } from '../lib/ir/layout';
@@ -14,13 +16,8 @@ export interface CFGCanvasProps {
   interactive?: boolean;
   /** 指令级 diff 标记，键由 instructionKey() 生成；用于分步播放器的 CFG 视图 */
   marks?: ReadonlyMap<string, InstructionMark>;
+  locale?: Locale;
 }
-
-const MARK_LABEL: Record<InstructionMark, string> = {
-  add: '新增',
-  del: '删除',
-  focus: '关注',
-};
 
 function BlockNode({
   block,
@@ -28,12 +25,14 @@ function BlockNode({
   interactive,
   onSelect,
   marks,
+  locale,
 }: {
   block: LaidOutBlock;
   selected: boolean;
   interactive: boolean;
   onSelect?: (id: string) => void;
   marks?: ReadonlyMap<string, InstructionMark>;
+  locale: Locale;
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!interactive) return;
@@ -52,7 +51,14 @@ function BlockNode({
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
       aria-pressed={interactive ? selected : undefined}
-      aria-label={interactive ? `基本块 ${block.label}，${block.instructions.length} 条指令` : undefined}
+      aria-label={
+        interactive
+          ? t(locale, 'canvas.block', {
+              label: block.label,
+              count: block.instructions.length,
+            })
+          : undefined
+      }
       onClick={interactive ? () => onSelect?.(block.id) : undefined}
       onKeyDown={interactive ? handleKeyDown : undefined}
     >
@@ -70,7 +76,7 @@ function BlockNode({
             .join(' ');
           return (
             <li key={`${instruction.text}-${index}`} className={classes || undefined}>
-              {mark ? <span className="sr-only">{MARK_LABEL[mark]}：</span> : null}
+              {mark ? <span className="sr-only">{t(locale, `diff.${mark}`)}</span> : null}
               {instruction.text}
             </li>
           );
@@ -87,6 +93,7 @@ export default function CFGCanvas({
   onSelect,
   interactive = true,
   marks,
+  locale = defaultLocale,
 }: CFGCanvasProps) {
   const uid = useId().replace(/[:]/g, '');
 
@@ -166,6 +173,7 @@ export default function CFGCanvas({
             interactive={interactive}
             onSelect={onSelect}
             marks={marks}
+            locale={locale}
           />
         ))}
       </div>

@@ -1,20 +1,31 @@
 ---
 import { getCollection } from 'astro:content';
-import BaseLayout from '../../layouts/BaseLayout.astro';
-import PassRow from '../../components/PassRow.astro';
-import { categories, categoryOrder } from '../../lib/categories';
-import { roadmap } from '../../data/roadmap';
-import { url } from '../../lib/url';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import PassRow from '../../../components/PassRow.astro';
+import { roadmap } from '../../../data/roadmap';
+import { defaultLocale, locales, type Locale } from '../../../i18n/config';
+import { t } from '../../../i18n/ui';
+import { categories, categoryDescription, categoryName, categoryOrder } from '../../../lib/categories';
+import { passesForLocale } from '../../../lib/passes';
+import { url } from '../../../lib/url';
 
-const passes = (await getCollection('passes', ({ data }) => data.status === 'ready')).sort(
-  (a, b) => a.data.order - b.data.order,
-);
+export function getStaticPaths() {
+  return locales.map((locale) => ({
+    params: { locale: locale === defaultLocale ? undefined : locale },
+    props: { locale },
+  }));
+}
+
+const { locale } = Astro.props as { locale: Locale };
+
+const allPasses = await getCollection('passes', ({ data }) => data.status === 'ready');
+const passes = passesForLocale(allPasses, locale);
 
 let cursor = 0;
 const groups = categoryOrder
   .map((id) => {
     const items = passes.filter((p) => p.data.category === id);
-    const group = { id, meta: categories[id], items, start: cursor + 1 };
+    const group = { id, items, start: cursor + 1 };
     cursor += items.length;
     return group;
   })
@@ -23,21 +34,22 @@ const groups = categoryOrder
 const planned = roadmap;
 ---
 
-<BaseLayout title="图鉴" description="按算法族分类的 LLVM pass 目录，每篇都配一个可单步回放的 IR 动画。">
+<BaseLayout
+  title={t(locale, 'passes.metaTitle')}
+  description={t(locale, 'passes.metaDescription')}
+  locale={locale}
+>
   <header class="page-head">
     <div class="container">
-      <p class="eyebrow">Atlas · 目录</p>
-      <h1 class="page-head__title">全部 Pass</h1>
-      <p class="lead page-head__lead">
-        按算法族分组，从「值在哪里」到「指令怎么选」。每篇都有一张可交互的 IR 对照图，
-        以及一条能自己跑的命令。
-      </p>
+      <p class="eyebrow">{t(locale, 'passes.eyebrow')}</p>
+      <h1 class="page-head__title">{t(locale, 'passes.heading')}</h1>
+      <p class="lead page-head__lead">{t(locale, 'passes.lead')}</p>
 
-      <nav class="jump" aria-label="跳转到分类">
+      <nav class="jump" aria-label={t(locale, 'passes.jump')}>
         {
           groups.map((group) => (
             <a class="chip chip--cat" href={`#${group.id}`}>
-              {group.meta.zh}
+              {categoryName(group.id, locale)}
               <span class="jump__count">{group.items.length}</span>
             </a>
           ))
@@ -53,14 +65,16 @@ const planned = roadmap;
           <header class="group__head">
             <div class="group__label">
               <span class="group__dot" aria-hidden="true" />
-              <h2 id={`${group.id}-title`}>{group.meta.zh}</h2>
-              <span class="group__en">{group.meta.en}</span>
+              <h2 id={`${group.id}-title`}>{categoryName(group.id, locale)}</h2>
+              {locale === 'zh' ? (
+                <span class="group__en">{categories[group.id].en}</span>
+              ) : null}
             </div>
-            <p class="group__desc">{group.meta.description}</p>
+            <p class="group__desc">{categoryDescription(group.id, locale)}</p>
           </header>
           <div class="rows">
             {group.items.map((pass, i) => (
-              <PassRow pass={pass} index={group.start + i} />
+              <PassRow pass={pass} index={group.start + i} locale={locale} />
             ))}
           </div>
         </section>
@@ -69,11 +83,9 @@ const planned = roadmap;
 
     <section class="roadmap" id="roadmap" aria-labelledby="roadmap-title">
       <header class="roadmap__head">
-        <p class="eyebrow">Roadmap</p>
-        <h2 id="roadmap-title">正在绘制</h2>
-        <p class="muted">
-          下面这些 pass 已在排期里。想加速某一个？欢迎直接提 PR —— 新增一篇只需要一个 MDX 和一个分步演示。
-        </p>
+        <p class="eyebrow">{t(locale, 'passes.roadmap.eyebrow')}</p>
+        <h2 id="roadmap-title">{t(locale, 'passes.roadmap.title')}</h2>
+        <p class="muted">{t(locale, 'passes.roadmap.body')}</p>
       </header>
 
       <ol class="roadmap__list">
@@ -82,17 +94,17 @@ const planned = roadmap;
             <li class={`roadmap__item cat-${item.category}`}>
               <span class="roadmap__no">{String(index + 1).padStart(2, '0')}</span>
               <span class="roadmap__name">{item.name}</span>
-              <span class="roadmap__zh">{item.zh}</span>
-              <span class="roadmap__note">{item.note}</span>
-              <span class="chip roadmap__status">规划中</span>
+              <span class="roadmap__zh">{item.title[locale]}</span>
+              <span class="roadmap__note">{item.note[locale]}</span>
+              <span class="chip roadmap__status">{t(locale, 'passes.roadmap.status')}</span>
             </li>
           ))
         }
       </ol>
 
       <p class="roadmap__cta">
-        <a class="btn btn--ghost" href={url('/about/')}>
-          怎么贡献一篇 <span class="btn__arrow" aria-hidden="true">→</span>
+        <a class="btn btn--ghost" href={url('/about/', locale)}>
+          {t(locale, 'passes.roadmap.cta')} <span class="btn__arrow" aria-hidden="true">→</span>
         </a>
       </p>
     </section>
@@ -276,5 +288,4 @@ const planned = roadmap;
       display: none;
     }
   }
-
 </style>

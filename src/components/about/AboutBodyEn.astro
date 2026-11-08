@@ -1,0 +1,61 @@
+<div class="prose about__body">
+  <h2>How a pass should be explained</h2>
+  <p>
+    Most passes are not hard because of their code, but because of three questions: what problem they
+    solve, what preconditions they rely on, and what the IR looks like afterwards. Every page therefore
+    follows the same skeleton:
+  </p>
+  <ol>
+    <li><strong>Problem</strong>: what happens without it, and why it deserves its own page.</li>
+    <li><strong>Algorithm</strong>: the core dataflow and pseudocode, not a line-by-line translation of the source.</li>
+    <li><strong>Step-by-step animation</strong>: before/after IR, playable one step at a time, and reversible.</li>
+    <li><strong>Cost and pitfalls</strong>: complexity, conservatism, common misunderstandings.</li>
+    <li><strong>Run it yourself</strong>: an <code>opt</code> command you can copy and execute.</li>
+  </ol>
+
+  <h2>Fully static, on purpose</h2>
+  <p>
+    This site has no backend, no database and no runtime requests. Every page is prerendered to HTML at
+    build time; interaction lives in a small React island inside the browser. That gives three things:
+  </p>
+  <ul>
+    <li>Fast: the first paint is plain HTML; animations load on demand and activate when they enter the viewport.</li>
+    <li>Offline: the build output is just a pile of files that any static host can serve.</li>
+    <li>Durable: it depends on no service, and can still be rebuilt from git history ten years from now.</li>
+  </ul>
+  <p>
+    Having no backend also means no login, no progress sync and no comments — collaboration happens on GitHub.
+  </p>
+
+  <h2>Stack</h2>
+  <table>
+    <thead>
+      <tr><th>Layer</th><th>Choice</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Framework</td><td>Astro</td><td>Zero JS by default, MDX content, hydration only where needed</td></tr>
+      <tr><td>Interaction</td><td>React islands</td><td>Only the step player needs state; everything else is static HTML</td></tr>
+      <tr><td>Styling</td><td>Vanilla CSS + design tokens</td><td>No runtime cost, zero build configuration</td></tr>
+      <tr><td>Deployment</td><td>GitHub Pages</td><td>Push to main builds and publishes; free and sufficient</td></tr>
+    </tbody>
+  </table>
+
+  <h2>How to contribute</h2>
+  <p>
+    Content lives in the repository as MDX. A new pass needs two things: a
+    <code>src/demos/&lt;id&gt;.ts</code> file (before/after IR; the diff is generated), and one
+    <code>&lt;id&gt;.mdx</code> under both <code>src/content/passes/zh/</code> and
+    <code>src/content/passes/en/</code>. Details are in <code>AGENTS.md</code> and
+    <code>README.md</code> at the repository root.
+  </p>
+  <p>
+    If you find an error, use “Edit this page on GitHub” at the bottom of any page, or open an issue.
+  </p>
+
+  <h2>License</h2>
+  <p>
+    The content of this site is published under the MIT license. LLVM is a trademark of UIUC; this site
+    is not affiliated with the LLVM project. Source excerpts follow LLVM’s own
+    Apache-2.0 WITH LLVM-exception license.
+  </p>
+</div>

@@ -1,52 +1,58 @@
 ---
 import { getCollection } from 'astro:content';
-import BaseLayout from '../layouts/BaseLayout.astro';
-import PassCard from '../components/PassCard.astro';
-import StepPlayer from '../components/StepPlayer';
-import { getDemo } from '../demos/registry';
-import { roadmap } from '../data/roadmap';
-import { categories, categoryOrder } from '../lib/categories';
-import { url } from '../lib/url';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PassCard from '../../components/PassCard.astro';
+import StepPlayer from '../../components/StepPlayer';
+import { getDemo } from '../../demos/registry';
+import { roadmap } from '../../data/roadmap';
+import { defaultLocale, locales, type Locale } from '../../i18n/config';
+import { t } from '../../i18n/ui';
+import { categoryOrder, categoryName } from '../../lib/categories';
+import { passesForLocale } from '../../lib/passes';
+import { url } from '../../lib/url';
 
-const passes = (await getCollection('passes', ({ data }) => data.status === 'ready')).sort(
-  (a, b) => a.data.order - b.data.order,
-);
+export function getStaticPaths() {
+  return locales.map((locale) => ({
+    params: { locale: locale === defaultLocale ? undefined : locale },
+    props: { locale },
+  }));
+}
 
+const { locale } = Astro.props as { locale: Locale };
+
+const allPasses = await getCollection('passes', ({ data }) => data.status === 'ready');
+const passes = passesForLocale(allPasses, locale);
 const featured = passes.slice(0, 3);
-const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
-
+const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale);
 ---
 
-<BaseLayout>
+<BaseLayout locale={locale}>
   <section class="hero">
     <div class="container hero__grid">
       <div class="hero__copy">
-        <p class="eyebrow">PassAtlas · Vol. 1</p>
+        <p class="eyebrow">{t(locale, 'home.eyebrow')}</p>
         <h1 class="hero__title">
-          <span class="hero__title-en">LLVM</span>
-          <span class="hero__title-zh">Pass 图鉴</span>
+          <span class="hero__title-en">{t(locale, 'home.titleEn')}</span>
+          <span class="hero__title-zh">{t(locale, 'home.title')}</span>
         </h1>
-        <p class="lead hero__lead">
-          每一个 pass 都是一次变形。这里把输入 IR、判定逻辑、输出 IR 拆成可以单步回放的帧，
-          让你看清它<em>为什么</em>这么改。
-        </p>
+        <p class="lead hero__lead" set:html={t(locale, 'home.lead')} />
         <div class="hero__actions">
-          <a class="btn btn--primary" href={url('/passes/mem2reg/')}>
-            从 mem2reg 开始 <span class="btn__arrow" aria-hidden="true">→</span>
+          <a class="btn btn--primary" href={url('/passes/mem2reg/', locale)}>
+            {t(locale, 'home.start')} <span class="btn__arrow" aria-hidden="true">→</span>
           </a>
-          <a class="btn btn--ghost" href={url('/passes/')}>浏览图鉴</a>
+          <a class="btn btn--ghost" href={url('/passes/', locale)}>{t(locale, 'home.browse')}</a>
         </div>
         <dl class="hero__stats">
           <div>
-            <dt>已上线</dt>
+            <dt>{t(locale, 'home.stats.passes')}</dt>
             <dd>{String(passes.length).padStart(2, '0')}</dd>
           </div>
           <div>
-            <dt>分类</dt>
+            <dt>{t(locale, 'home.stats.categories')}</dt>
             <dd>{String(categoryOrder.length).padStart(2, '0')}</dd>
           </div>
           <div>
-            <dt>后端依赖</dt>
+            <dt>{t(locale, 'home.stats.backend')}</dt>
             <dd>00</dd>
           </div>
         </dl>
@@ -55,11 +61,19 @@ const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
       <div class="hero__demo">
         {
           heroDemo ? (
-            <StepPlayer demo={heroDemo} compact autoplay loop caption="自动播放" client:load />
+            <StepPlayer
+              demo={heroDemo}
+              locale={locale}
+              compact
+              autoplay
+              loop
+              caption={t(locale, 'home.caption')}
+              client:load
+            />
           ) : null
         }
         <p class="hero__hint">
-          <span aria-hidden="true">●</span> 这是真实的 mem2reg 改写过程，点按或用键盘 ← → 单步。
+          <span aria-hidden="true">●</span> {t(locale, 'home.hint')}
         </p>
       </div>
     </div>
@@ -68,26 +82,26 @@ const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
   <section class="section how">
     <div class="container">
       <header class="sec-head">
-        <p class="eyebrow">How to read</p>
-        <h2>一页图鉴，三步读完</h2>
-        <p class="lead">不做流水账式的 pass 列表，每页都按同一套骨架组织，方便横向对比。</p>
+        <p class="eyebrow">{t(locale, 'home.how.eyebrow')}</p>
+        <h2>{t(locale, 'home.how.title')}</h2>
+        <p class="lead">{t(locale, 'home.how.lead')}</p>
       </header>
 
       <ol class="how__steps">
         <li>
           <span class="how__no">01</span>
-          <h3>先读问题</h3>
-          <p>「它解决什么问题」永远排在最前。不知道优化目标，算法细节只会变成记忆负担。</p>
+          <h3>{t(locale, 'home.how.step1.title')}</h3>
+          <p>{t(locale, 'home.how.step1.body')}</p>
         </li>
         <li>
           <span class="how__no">02</span>
-          <h3>再单步走</h3>
-          <p>在分步动画里逐帧看 IR：新增的行是绿色，消失的行是红色，高亮的是这一步的关注点。</p>
+          <h3>{t(locale, 'home.how.step2.title')}</h3>
+          <p>{t(locale, 'home.how.step2.body')}</p>
         </li>
         <li>
           <span class="how__no">03</span>
-          <h3>最后自己跑</h3>
-          <p>每页都附了 <code>opt</code> 命令。复制下来换个输入，比读十遍伪代码更有用。</p>
+          <h3>{t(locale, 'home.how.step3.title')}</h3>
+          <p set:html={t(locale, 'home.how.step3.body')} />
         </li>
       </ol>
     </div>
@@ -97,35 +111,40 @@ const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
     <div class="container">
       <header class="sec-head sec-head--split">
         <div>
-          <p class="eyebrow">Atlas</p>
-          <h2>图鉴目录</h2>
+          <p class="eyebrow">{t(locale, 'home.atlas.eyebrow')}</p>
+          <h2>{t(locale, 'home.atlas.title')}</h2>
         </div>
-        <a class="btn btn--ghost" href={url('/passes/')}>
-          全部 {passes.length} 篇 <span class="btn__arrow" aria-hidden="true">→</span>
+        <a class="btn btn--ghost" href={url('/passes/', locale)}>
+          {t(locale, 'home.atlas.all', { count: passes.length })}
+          <span class="btn__arrow" aria-hidden="true">→</span>
         </a>
       </header>
 
-      <nav class="cats" aria-label="按分类浏览">
+      <nav class="cats" aria-label={t(locale, 'home.atlas.browse')}>
         {
           categoryOrder.map((id) => (
-            <a class={`chip chip--cat cat-${id}`} href={`${url('/passes/')}#${id}`}>
-              {categories[id].zh}
+            <a class={`chip chip--cat cat-${id}`} href={`${url('/passes/', locale)}#${id}`}>
+              {categoryName(id, locale)}
             </a>
           ))
         }
       </nav>
 
       <div class="grid">
-        {featured.map((pass) => <PassCard pass={pass} />)}
+        {featured.map((pass) => <PassCard pass={pass} locale={locale} />)}
       </div>
 
       <p class="atlas__more">
-        路线图上还有 {roadmap.length} 个 pass 正在绘制，
-        <a href={`${url('/passes/')}#roadmap`}>查看完整路线图 <span aria-hidden="true">→</span></a>
+        {t(locale, 'home.atlas.roadmap', { count: roadmap.length })}
+        <a href={`${url('/passes/', locale)}#roadmap`}>
+          {t(locale, 'home.atlas.roadmapLink')} <span aria-hidden="true">→</span>
+        </a>
       </p>
       <p class="atlas__more">
-        读图比读文本快：
-        <a href={url('/ir/')}>把任意 IR 摊成 CFG <span aria-hidden="true">→</span></a>
+        {t(locale, 'home.atlas.cfg')}
+        <a href={url('/ir/', locale)}>
+          {t(locale, 'home.atlas.cfgLink')} <span aria-hidden="true">→</span>
+        </a>
       </p>
     </div>
   </section>
@@ -173,7 +192,7 @@ const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
     max-width: 46ch;
   }
 
-  .hero__lead em {
+  .hero__lead :global(em) {
     font-style: normal;
     color: var(--accent-strong);
     box-shadow: inset 0 -0.42em 0 var(--accent-soft);
@@ -307,7 +326,7 @@ const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
     color: var(--muted);
   }
 
-  .how__steps code {
+  .how__steps :global(code) {
     padding: 1px 5px;
     border: 1px solid var(--line);
     border-radius: 4px;

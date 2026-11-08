@@ -1,19 +1,38 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import { localeMeta } from '../i18n/config';
+import { t } from '../i18n/ui';
 import { url } from '../lib/url';
+
+// 404 只有一个页面（GitHub Pages 只认根目录的 404.html），
+// 所以这里用默认语言呈现，并给英文读者一个明确的入口。
+const locale = 'zh' as const;
 ---
 
-<BaseLayout title="404" description="这一页不在图鉴里。" noindex>
+<BaseLayout
+  title="404"
+  description={t(locale, 'notFound.metaDescription')}
+  locale={locale}
+  noindex
+>
   <section class="nf">
     <div class="container nf__inner">
-      <p class="eyebrow">404 · Not in the atlas</p>
+      <p class="eyebrow">{t(locale, 'notFound.eyebrow')}</p>
       <h1 class="nf__code">404</h1>
-      <p class="lead nf__lead">
-        这条路径没有被任何 pass 处理过，或者它指向的页面还没画完。
-      </p>
+      <p class="lead nf__lead">{t(locale, 'notFound.lead')}</p>
       <div class="nf__actions">
-        <a class="btn btn--primary" href={url('/passes/')}>回到图鉴 <span class="btn__arrow" aria-hidden="true">→</span></a>
-        <a class="btn btn--ghost" href={url('/')}>首页</a>
+        <a class="btn btn--primary" href={url('/passes/', locale)}>
+          {t(locale, 'notFound.back')} <span class="btn__arrow" aria-hidden="true">→</span>
+        </a>
+        <a class="btn btn--ghost" href={url('/', locale)}>{t(locale, 'notFound.home')}</a>
+        <a
+          class="btn btn--ghost"
+          href={url('/', 'en')}
+          hreflang={localeMeta.en.htmlLang}
+          lang={localeMeta.en.htmlLang}
+        >
+          English
+        </a>
       </div>
     </div>
   </section>

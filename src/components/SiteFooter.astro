@@ -1,15 +1,22 @@
 ---
 import { site } from '../site';
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
 import { url } from '../lib/url';
 
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
 const year = new Date().getFullYear();
 
 const links = [
-  { href: url('/passes/'), label: '图鉴目录' },
-  { href: url('/ir/'), label: 'CFG 实验室' },
-  { href: url('/about/'), label: '关于本站' },
-  { href: site.llvmDocs, label: 'LLVM Pass 官方文档', external: true },
-  { href: site.llvmSource, label: 'LLVM 源码', external: true },
+  { href: url('/passes/', locale), label: t(locale, 'footer.passes') },
+  { href: url('/ir/', locale), label: t(locale, 'footer.lab') },
+  { href: url('/about/', locale), label: t(locale, 'footer.about') },
+  { href: site.llvmDocs, label: t(locale, 'footer.docs'), external: true },
+  { href: site.llvmSource, label: t(locale, 'footer.source'), external: true },
 ];
 ---
 
@@ -17,11 +24,11 @@ const links = [
   <div class="container foot__grid">
     <div class="foot__brand">
       <p class="foot__name">PassAtlas</p>
-      <p class="foot__tag">{site.tagline}</p>
-      <p class="foot__note">100% 静态 · 无后端 · 无跟踪脚本</p>
+      <p class="foot__tag">{site.tagline[locale]}</p>
+      <p class="foot__note">{t(locale, 'footer.note')}</p>
     </div>
 
-    <nav class="foot__links" aria-label="页脚导航">
+    <nav class="foot__links" aria-label={t(locale, 'footer.nav')}>
       {
         links.map((link) => (
           <a
@@ -38,15 +45,15 @@ const links = [
 
     <dl class="foot__meta">
       <div>
-        <dt>目标版本</dt>
+        <dt>{t(locale, 'footer.version')}</dt>
         <dd>{site.llvmVersion}</dd>
       </div>
       <div>
-        <dt>内容许可</dt>
+        <dt>{t(locale, 'footer.license')}</dt>
         <dd>{site.license}</dd>
       </div>
       <div>
-        <dt>构建</dt>
+        <dt>{t(locale, 'footer.build')}</dt>
         <dd>Astro · GitHub Pages</dd>
       </div>
     </dl>
@@ -54,7 +61,7 @@ const links = [
 
   <div class="container foot__bottom">
     <span>© {year} PassAtlas</span>
-    <span>写给想知道「IR 为什么变了」的人。</span>
+    <span>{t(locale, 'footer.bottom')}</span>
   </div>
 </footer>
 

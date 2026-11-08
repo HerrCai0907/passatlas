@@ -1,0 +1,44 @@
+---
+import { getCollection, render } from 'astro:content';
+import PassLayout from '../../../layouts/PassLayout.astro';
+import { defaultLocale, locales, type Locale } from '../../../i18n/config';
+import { passLocale, passSlug, passesForLocale, type PassEntry } from '../../../lib/passes';
+
+export async function getStaticPaths() {
+  const all = await getCollection('passes', ({ data }) => data.status === 'ready');
+
+  return locales.flatMap((locale) => {
+    const passes = passesForLocale(all, locale);
+    return passes.map((pass, index) => ({
+      params: {
+        locale: locale === defaultLocale ? undefined : locale,
+        slug: passSlug(pass),
+      },
+      props: {
+        locale,
+        pass,
+        prev: passes[index - 1],
+        next: passes[index + 1],
+      },
+    }));
+  });
+}
+
+const { pass, prev, next, locale } = Astro.props as {
+  pass: PassEntry;
+  prev?: PassEntry;
+  next?: PassEntry;
+  locale: Locale;
+};
+
+// 内容目录里的语言前缀和 URL 必须一致；不一致说明文件放错了目录
+if (passLocale(pass) !== locale) {
+  throw new Error(`Pass ${pass.id} is in the wrong locale folder for ${locale}`);
+}
+
+const { Content } = await render(pass);
+---
+
+<PassLayout pass={pass} prev={prev} next={next} locale={locale}>
+  <Content />
+</PassLayout>

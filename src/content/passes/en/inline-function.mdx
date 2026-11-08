@@ -1,0 +1,158 @@
+---
+title: inline-function
+subtitle: The inlining rewrite
+summary: Once the decision is made, InlineFunction clones the callee, splits the call site, merges every ret into a PHI, and stitches debug info and the call graph back together.
+category: interproc
+difficulty: 3
+status: ready
+order: 5
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Cloning', 'ValueMap', 'CFG']
+demo: inline-function
+source: llvm/lib/Transforms/Utils/InlineFunction.cpp
+updated: 2026-11-08
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+The decision layer only says "this call is worth inlining". Actually moving a callee with several basic blocks, several `ret`s and possibly exception edges into the caller is a different job.
+
+It is not copy and paste. Cloned SSA values need new names, arguments must replace parameters, the caller's block must be split at the call, every callee `ret` must jump to the same continuation block, several return values must be merged with a `phi`, `invoke` must bring its landingpad along, and debug info needs an `inlinedAt` chain. After all that, the call graph, worklist and dead-function list must be updated too.
+
+This page only covers "how the rewrite happens". Which call is worth inlining is covered by <I18nLink href="/passes/inliner/">inliner</I18nLink>.
+
+## Algorithm
+
+`InlineFunction` is a utility in `llvm/lib/Transforms/Utils/InlineFunction.cpp`, not a standalone pass. `InlinerPass` calls it after the advisor says yes; `AlwaysInlinerPass` reuses the same machinery.
+
+The step-by-step animation above walks through a callee with a branch: `@pick` returns once from `%pos` and once from `%neg`, so after inlining the caller has two extra branch targets and a `%cont` block.
+
+### Start with CanInlineCallSite
+
+Before any cloning, `CanInlineCallSite` re-checks the hard constraints:
+
+- the call must target a function with a definition; indirect calls and external declarations are not expanded;
+- `callbr` is not supported yet, and calls with illegal operand bundles are also rejected (a few bundles such as `deopt` and `funclet` are exceptions);
+- if the same callee already appears in `!inline_history`, reject — that is the brake for mutual recursion;
+- `musttail`, varargs, `blockaddress` and similar cases have their own constraints, and failure returns a reason rather than producing bad IR.
+
+`invoke` is supported: it is handled together with its unwind edge and landingpad, not simply demoted to a `call`.
+
+### ValueMap: arguments, return values and names
+
+At the core of inlining is a `ValueToValueMapTy`:
+
+```text
+VMap[callee.argument[i]] = call.argument[i]
+VMap[callee.instruction] = cloned.instruction
+```
+
+During cloning, the callee's local values are renamed with a `.i` suffix (`%c` → `%c.i`). That keeps existing caller values with the same name intact; from then on the caller and callee share one SSA namespace.
+
+Return values cannot be expressed by a single table: the callee may have several `ret`s. `CloneAndPruneFunctionInto` collects each `ret` into a `Returns` vector so they can be rewritten later.
+
+### Cloning: CloneAndPruneFunctionInto
+
+Cloning is not a blind instruction-by-instruction copy. `CloneAndPruneFunctionInto` folds constants and prunes dead blocks while copying:
+
+- when an argument is constant, cloned instructions may fold to constants directly;
+- when a branch condition is determined by an argument, unreachable blocks never enter the new function;
+- instructions that fold away do not take up space in the new function — the "cheap" seen by cost analysis is cashed in here.
+
+That is why inlined IR is often shorter than "the callee text plus the caller text".
+
+### Splitting and stitching: from call to PHI
+
+After cloning, the caller is split into two pieces at the call instruction:
+
+1. instructions before the call stay in the original block, whose terminator becomes a branch to the cloned callee entry;
+2. instructions after the call move into a continuation block;
+3. every `ret` in the cloned blocks becomes `br label %cont`, and its return value is recorded as a PHI incoming;
+4. the `phi` in `%cont` merges all return values, and uses of the original call result are replaced with it.
+
+A callee with branches therefore becomes a real CFG subgraph rather than a straight line:
+
+```text
+entry ──> callee.entry.i ──> pos.i ──┐
+                         └─> neg.i ──┴─> cont ──> code after the call
+```
+
+When there is only one `ret` and only one cloned block, LLVM takes a shortcut: the cloned body can be spliced directly into the caller's block, saving a continuation block. Multiple `ret`s, `invoke` unwind edges and landingpads require explicit blocks and PHIs.
+
+### Debug info, new call sites and graph updates
+
+Cloned instructions inherit the original `!dbg` and build an `inlinedAt` chain so the debugger can map inlined instructions back to callee source lines. Intrinsics such as `llvm.dbg.value` are remapped as well.
+
+`InlineFunction` returns an `InlineFunctionInfo`:
+
+- `InlinedCallSites`: the newly cloned calls, handed to `InlinerPass` for appending to the worklist;
+- return values, attributes and debug-info results, used by the pass for remarks;
+- the pass then calls `updateCGAndAnalysisManagerForCGSCC` to update the call graph, invalidate analyses and split SCCs when necessary.
+
+If the callee is internal, has zero live uses and is not a lib function, `InlinerPass` empties its body and queues it, eventually calling `CG.markDeadFunction`. That step is outside `InlineFunction` and belongs to the pass's cleanup.
+
+## Cost and pitfalls
+
+- **Multiple return values are CFG surgery.** Every `ret` needs an edge to `%cont`, and PHI incomings must match those edges one to one; missing one is a verifier error.
+- **Exception edges cannot be dropped.** `invoke`'s normal/unwind edges, landingpads and funclet parent chains all move together; treating an `invoke` as a plain `call` changes exception semantics.
+- **Operand bundles have limited support.** `deopt`, `funclet` and a few others are allowed; other bundles are rejected. Do not assume "it looks like a call, so it can be inlined".
+- **Names are not an interface.** The `.i` suffix, block names and whether the single-return shortcut is used can all change with the implementation; tests that depend on exact names are fragile.
+- **Debug info is explicit work.** Without `inlinedAt`, `dbg.value` and source locations, the debugger points inlined code at the wrong line.
+- **Code size still exists.** The mechanism only handles "copying correctly", not "whether copying is worth it"; the latter belongs to the inliner decision layer.
+
+## Where it sits in the pipeline
+
+`InlineFunction` stands after the decision:
+
+```text
+InlinerPass ──> advisor says yes ──> InlineFunction ──> update CFG / debug info
+                                        └─> InlinedCallSites ──> worklist
+```
+
+`AlwaysInlinerPass` also uses it for `alwaysinline`; `ModuleInlinerPass` is another decision path, but it lands on the same cloning and stitching logic.
+
+The real pass-level entry point is still <I18nLink href="/passes/inliner/">inliner</I18nLink>: SCC post-order, candidate queue and cost model live there; this page is only the operating table it calls.
+
+## Run it yourself
+
+```llvm
+define i32 @caller(i32 %x) {
+entry:
+  %r = call i32 @pick(i32 %x)
+  %s = add i32 %r, 10
+  ret i32 %s
+}
+
+define internal i32 @pick(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+
+pos:
+  %p = add i32 %x, 1
+  ret i32 %p
+
+neg:
+  %n = sub i32 %x, 1
+  ret i32 %n
+}
+```
+
+```bash
+opt -passes='cgscc(inline)' -S demo.ll -o -
+opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
+```
+
+The first command should show `@pick` expanded into `@caller`: `%c.i`, `%pos.i`, `%neg.i` and `%cont` appear, `%r` becomes a `phi`, and `@pick` is then deleted. The second writes the decision to stderr:
+
+```text
+inlined into ... with (cost=..., threshold=225)
+```
+
+Block names and whether an empty entry block remains may differ between versions; rely on the verifier and complete PHI incomings, not on exact names.
+
+If `opt` is an asserts build, add `-debug-only=inline` to watch each step; on a release build use `-pass-remarks=inline`.
+
+This machine has no compiled `opt`, so the pass names above were cross-checked against the current LLVM `PassRegistry.def` but not executed; use `opt -print-passes` as the source of truth for your version.

@@ -1,6 +1,6 @@
 ---
 title: inliner
-zh: SCC 内联决策
+subtitle: SCC 内联决策
 summary: 沿调用图的 SCC 后序自底向上，用 InlineCost 和 inline advisor 决定哪些 call 值得展开；真正的克隆与 CFG 改写在 inline-function。
 category: interproc
 difficulty: 3
@@ -12,8 +12,8 @@ source: llvm/lib/Transforms/IPO/Inliner.cpp
 updated: 2026-11-08
 ---
 
-import SCCInlinerLab from '../../components/SCCInlinerLab';
-import { url as passUrl } from '../../lib/url';
+import SCCInlinerLabIsland from '../../../components/SCCInlinerLabIsland.astro';
+import I18nLink from '../../../components/I18nLink.astro';
 
 ## 它解决什么问题
 
@@ -21,14 +21,14 @@ import { url as passUrl } from '../../lib/url';
 
 所以内联器真正要回答的不是「能不能展开」，而是：**这条 call edge 值不值得消失？**
 
-这个问题必须在正确的顺序里回答。内联会改写调用图本身，而 callee 的形态又会影响 caller 的代价。LLVM 因此把 `InlinerPass` 注册成 CGSCC pass：先处理 callee 所在的 SCC，再处理 caller；每次做决定时，callee 已经被优化过。这一页只讲「找哪些 call、怎么判定」；克隆、拆块和返回值合并属于 <a href={passUrl('/passes/inline-function/')}>inline-function</a>。
+这个问题必须在正确的顺序里回答。内联会改写调用图本身，而 callee 的形态又会影响 caller 的代价。LLVM 因此把 `InlinerPass` 注册成 CGSCC pass：先处理 callee 所在的 SCC，再处理 caller；每次做决定时，callee 已经被优化过。这一页只讲「找哪些 call、怎么判定」；克隆、拆块和返回值合并属于 <I18nLink href="/passes/inline-function/">inline-function</I18nLink>。
 
 ## 算法
 
 先记住一句话：**SCC 后序决定「什么时候看」，候选队列决定「看哪些 call」，代价模型与 advisor 决定「收不收」。**
 
 <div class="pa-scc-bleed">
-  <SCCInlinerLab client:visible />
+  <SCCInlinerLabIsland />
 </div>
 
 实验台的图固定为决策前的 call graph；8 帧只改变「当前检查哪个 SCC」与「这条 call 的判定」。拖动阈值会改变 `render → hash` 和 `main → render` 的结果；注意阈值调高时，callee 可能先吸收更多内联而变胖，caller 反而被拒绝。
@@ -114,7 +114,7 @@ return Cost < std::max(1, Threshold) ? success : failure("Cost over threshold");
 
 内联之后紧跟着 SROA、instcombine、GVN 等函数级清理。这也是内联器愿意接受「现在看起来略亏」的 call 的原因之一：后续 pass 会把克隆进来的代码化简掉。
 
-LLVM 还提供 `always-inline`、`module-inline`、`partial-inliner` 等变体；它们复用 `InlineCost`，但遍历和决策策略不同。决策通过后如何真正改写，见 <a href={passUrl('/passes/inline-function/')}>inline-function</a>。
+LLVM 还提供 `always-inline`、`module-inline`、`partial-inliner` 等变体；它们复用 `InlineCost`，但遍历和决策策略不同。决策通过后如何真正改写，见 <I18nLink href="/passes/inline-function/">inline-function</I18nLink>。
 
 ## 自己跑一遍
 

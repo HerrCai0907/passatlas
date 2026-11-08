@@ -1,4 +1,4 @@
-import { makeDemo } from './types';
+import { makeDemo } from './types.ts';
 
 const inputIR = `
 define i32 @pick(i1 %c) {
@@ -70,4 +70,23 @@ export const mem2regDemo = makeDemo('mem2reg', 'mem2reg', [
     before: withPhiIR,
     after: outputIR,
   },
-]);
+],
+  {
+    en: {
+      steps: [
+      {
+        title: 'Step 1 · Find promotable allocas (observe only)',
+        note: '%slot is only referenced directly by store and load; its address does not escape and it is not volatile — so it can be promoted. Once the address is passed to a function or stored into another pointer, it must stay in memory.',
+      },
+      {
+        title: 'Step 2 · Insert φ at the dominance frontier',
+        note: 'Both then and else define %slot and they meet at merge, so merge is on the dominance frontier. After inserting φ, each predecessor carries the value defined on its path.',
+      },
+      {
+        title: 'Step 3 · Rename along the dominator tree and clean up',
+        note: 'Walk the dominator tree with DFS and replace each load with the currently reaching definition; stores and the alloca then become dead and are deleted. The function is in SSA form.',
+      },
+      ],
+    },
+  },
+);

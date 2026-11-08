@@ -1,35 +1,38 @@
 ---
-import type { CollectionEntry } from 'astro:content';
-import { categories, difficultyLabels } from '../lib/categories';
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { categoryName, difficultyLabel } from '../lib/categories';
+import { passSlug, passSubtitle, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
 
 interface Props {
-  pass: CollectionEntry<'passes'>;
+  pass: PassEntry;
   index: number;
+  locale: Locale;
 }
 
-const { pass, index } = Astro.props;
-const { title, zh, summary, category, difficulty, stage } = pass.data;
-const categoryMeta = categories[category];
+const { pass, index, locale } = Astro.props;
+const { title, summary, category, difficulty, stage } = pass.data;
+const label = difficultyLabel(difficulty, locale);
 ---
 
-<a class={`row cat-${category}`} href={url(`/passes/${pass.id}/`)}>
+<a class={`row cat-${category}`} href={url(`/passes/${passSlug(pass)}/`, locale)}>
   <span class="row__no">{String(index).padStart(2, '0')}</span>
 
   <span class="row__main">
     <span class="row__head">
       <span class="row__name">{title}</span>
-      <span class="row__zh">{zh}</span>
-      <span class="row__cat">{categoryMeta.zh}</span>
+      <span class="row__zh">{passSubtitle(pass)}</span>
+      <span class="row__cat">{categoryName(category, locale)}</span>
     </span>
     <span class="row__summary">{summary}</span>
   </span>
 
   <span class="row__side">
     <span class="row__stage">{stage.length > 0 ? stage.join(' · ') : '—'}</span>
-    <span class="row__diff" title={`难度：${difficultyLabels[difficulty]}`}>
+    <span class="row__diff" title={t(locale, 'row.difficultyTitle', { level: label })}>
       <span aria-hidden="true">{'●'.repeat(difficulty)}{'○'.repeat(3 - difficulty)}</span>
-      <span class="sr-only">难度 {difficultyLabels[difficulty]}</span>
+      <span class="sr-only">{t(locale, 'row.difficultyTitle', { level: label })}</span>
     </span>
   </span>
 

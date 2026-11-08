@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { defaultLocale, type Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
 import { layoutCFG } from '../lib/ir/layout';
 import { functionToIR, parseIR } from '../lib/ir/parse';
 import type { IRFunction } from '../lib/ir/parse';
@@ -16,6 +18,7 @@ export interface CFGViewerProps {
   collapsedByDefault?: boolean;
   /** 默认展示模式；按产品约定默认是 CFG 图 */
   defaultMode?: ViewMode;
+  locale?: Locale;
 }
 
 const MIN_SCALE = 0.25;
@@ -48,8 +51,9 @@ export default function CFGViewer({
   height = 560,
   collapsedByDefault = false,
   defaultMode = 'cfg',
+  locale = defaultLocale,
 }: CFGViewerProps) {
-  const parsed = useMemo(() => parseIR(ir), [ir]);
+  const parsed = useMemo(() => parseIR(ir, locale), [ir, locale]);
   const [mode, setMode] = useState<ViewMode>(defaultMode);
   const [activeFunction, setActiveFunction] = useState(0);
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
@@ -105,9 +109,9 @@ export default function CFGViewer({
   };
 
   return (
-    <section className="cfg" aria-label={title ?? '控制流图'}>
+    <section className="cfg" aria-label={title ?? t(locale, 'cfg.group')}>
       <header className="cfg__bar">
-        <div className="cfg__tabs" role="group" aria-label="函数">
+        <div className="cfg__tabs" role="group" aria-label={t(locale, 'cfg.functions')}>
           {parsed.functions.map((item, index) => (
             <button
               key={item.name}
@@ -124,7 +128,7 @@ export default function CFGViewer({
           ))}
         </div>
 
-        <ViewModeSwitch value={mode} onChange={setMode} label="CFG 图或 IR 文本" />
+        <ViewModeSwitch value={mode} onChange={setMode} locale={locale} label={t(locale, 'cfg.mode')} />
 
         {mode === 'cfg' ? (
           <div className="cfg__actions">
@@ -134,16 +138,16 @@ export default function CFGViewer({
               aria-pressed={collapsed}
               onClick={() => setCollapsed((value) => !value)}
             >
-              {collapsed ? '显示指令' : '只看控制流'}
+              {t(locale, collapsed ? 'cfg.showInst' : 'cfg.hideInst')}
             </button>
-            <div className="cfg__zoom" role="group" aria-label="缩放">
+            <div className="cfg__zoom" role="group" aria-label={t(locale, 'cfg.zoom')}>
               <button
                 type="button"
                 onClick={() => {
                   setAutoFit(false);
                   setScale((value) => clamp(value - 0.1, MIN_SCALE, MAX_SCALE));
                 }}
-                aria-label="缩小"
+                aria-label={t(locale, 'cfg.zoomOut')}
               >
                 −
               </button>
@@ -156,7 +160,7 @@ export default function CFGViewer({
                   setAutoFit(false);
                   setScale((value) => clamp(value + 0.1, MIN_SCALE, MAX_SCALE));
                 }}
-                aria-label="放大"
+                aria-label={t(locale, 'cfg.zoomIn')}
               >
                 +
               </button>
@@ -164,17 +168,17 @@ export default function CFGViewer({
                 type="button"
                 className="cfg__fit"
                 onClick={() => setAutoFit(true)}
-                aria-label="适应宽度"
-                title="适应宽度"
+                aria-label={t(locale, 'cfg.fitWidth')}
+                title={t(locale, 'cfg.fitWidth')}
               >
-                适应
+                {t(locale, 'cfg.fit')}
               </button>
             </div>
           </div>
         ) : (
           <div className="cfg__actions">
             <button type="button" className="cfg__toggle" onClick={copyIR}>
-              {copied ? '已复制' : '复制 IR'}
+              {t(locale, copied ? 'cfg.copied' : 'cfg.copy')}
             </button>
           </div>
         )}
@@ -184,25 +188,33 @@ export default function CFGViewer({
         <ul className="cfg__issues">
           {issues.slice(0, 4).map((issue, index) => (
             <li key={`${issue.line}-${index}`}>
-              第 {issue.line} 行：{issue.message}
+              {t(locale, 'cfg.issueLine', { line: issue.line, message: issue.message })}
             </li>
           ))}
         </ul>
       ) : null}
 
       {!fn || !graph ? (
-        <p className="cfg__empty">没有可展示的函数。粘贴一个包含 define 的 LLVM IR 试试。</p>
+        <p className="cfg__empty">{t(locale, 'cfg.empty')}</p>
       ) : mode === 'cfg' ? (
         <>
           <div className="cfg__viewport" ref={viewportRef} style={{ maxHeight: `${height}px` }}>
-            <CFGCanvas graph={graph} scale={scale} selected={selected} onSelect={selectBlock} />
+            <CFGCanvas
+              graph={graph}
+              scale={scale}
+              selected={selected}
+              onSelect={selectBlock}
+              locale={locale}
+            />
           </div>
           <footer className="cfg__meta">
             <span>
-              {fn.blocks.length} 个基本块 · {fn.edges.length} 条控制流边
+              {t(locale, 'cfg.metaBlocks', { blocks: fn.blocks.length, edges: fn.edges.length })}
             </span>
             <span className="cfg__hint">
-              {selected ? `已选中 ${selected}，再次点击取消` : '点击基本块可高亮它相关的边'}
+              {selected
+                ? t(locale, 'cfg.selected', { block: selected })
+                : t(locale, 'cfg.selectHint')}
             </span>
           </footer>
         </>
@@ -212,7 +224,7 @@ export default function CFGViewer({
             className="cfg__ir"
             style={{ maxHeight: `${height}px` }}
             role="region"
-            aria-label={`@${fn.name} 的 IR 文本`}
+            aria-label={t(locale, 'cfg.irRegion', { name: fn.name })}
           >
             <ol>
               {rows.map((row, index) => (
@@ -227,9 +239,9 @@ export default function CFGViewer({
           </div>
           <footer className="cfg__meta">
             <span>
-              {fn.blocks.length} 个基本块 · {rows.length} 行 IR
+              {t(locale, 'cfg.metaLines', { blocks: fn.blocks.length, lines: rows.length })}
             </span>
-            <span className="cfg__hint">切回 CFG 可以看这些指令之间的跳转关系</span>
+            <span className="cfg__hint">{t(locale, 'cfg.irHint')}</span>
           </footer>
         </>
       )}

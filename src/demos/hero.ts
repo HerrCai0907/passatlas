@@ -1,4 +1,4 @@
-import { makeDemo } from './types';
+import { makeDemo } from './types.ts';
 
 /**
  * 首页 hero 用的短演示：去掉分支，只保留「栈上变量 → 常量 → 一条 ret」的骨架，
@@ -47,4 +47,23 @@ export const heroDemo = makeDemo('mem2reg', 'mem2reg', [
     before: step1,
     after: step2,
   },
-]);
+],
+  {
+    en: {
+      steps: [
+      {
+        title: 'Step 1 · Find the variable on the stack (observe only)',
+        note: '%x has one store and one load, and its address never escapes — mem2reg can promote it to a register value.',
+      },
+      {
+        title: 'Step 2 · Replace the load with its only reaching definition',
+        note: 'Rename along the dominator tree: this load can only read the constant 1, so every use is replaced with 1.',
+      },
+      {
+        title: 'Step 3 · Delete instructions that lost their users',
+        note: 'The alloca and the store are now unused and are removed as dead instructions. The function is in SSA form and only a ret remains.',
+      },
+      ],
+    },
+  },
+);

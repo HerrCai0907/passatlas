@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
+import { defaultLocale, type Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
 import type { Demo, DemoStep, IRLine } from '../demos/types';
 import { diffInstructions } from '../lib/ir/diff';
 import type { InstructionDiff, InstructionMark } from '../lib/ir/diff';
@@ -20,6 +22,8 @@ interface StepPlayerProps {
   caption?: string;
   /** 默认展示模式；按产品约定默认是 CFG 图 */
   defaultMode?: ViewMode;
+  /** 界面语言；演示标题与说明在传入前已由 getDemo() 本地化 */
+  locale?: Locale;
 }
 
 const SPEEDS = [0.75, 1, 1.5, 2];
@@ -49,9 +53,9 @@ interface StepGraph {
 }
 
 /** 解析这一步的两侧 IR，并按指令文本做 diff；注释变化不会把整块染红染绿 */
-function graphOfStep(step: DemoStep): StepGraph {
-  const beforeFn = parseIR(toIR(step.before)).functions[0] ?? null;
-  const afterFn = parseIR(toIR(step.after)).functions[0] ?? null;
+function graphOfStep(step: DemoStep, locale: Locale): StepGraph {
+  const beforeFn = parseIR(toIR(step.before), locale).functions[0] ?? null;
+  const afterFn = parseIR(toIR(step.after), locale).functions[0] ?? null;
   const focus = [...step.before, ...step.after]
     .filter((line) => line.mark === 'focus')
     .map((line) => line.text);
@@ -70,9 +74,11 @@ function CFGPanel({
   index,
   marks,
   delta,
+  locale,
 }: {
   label: string;
   side: 'before' | 'after';
+  locale: Locale;
   /** 这个面板在所有步骤里的图；用最大值预留高度，切步时尺寸保持不变 */
   graphs: ReadonlyArray<CFGGraph | null>;
   index: number;
@@ -117,16 +123,20 @@ function CFGPanel({
   return (
     <section
       className="pa-cfg"
-      aria-label={side === 'before' ? '改写前的控制流图' : '改写后的控制流图'}
+      aria-label={t(locale, side === 'before' ? 'player.cfgBefore' : 'player.cfgAfter')}
     >
       <header className="pa-cfg__head">
         <span className="pa-cfg__label">{label}</span>
         <span className="pa-cfg__count">
-          {graph ? `${graph.blocks.length} 块` : '—'}
+          {graph ? t(locale, 'player.blocks', { count: graph.blocks.length }) : '—'}
           {delta && delta.count > 0 ? (
             <em
               className={`pa-cfg__delta pa-cfg__delta--${delta.kind}`}
-              title={`本步${delta.kind === 'add' ? '新增' : '删除'} ${delta.count} 条指令`}
+              title={t(
+                locale,
+                delta.kind === 'add' ? 'player.deltaAddTitle' : 'player.deltaDelTitle',
+                { count: delta.count },
+              )}
             >
               {delta.kind === 'add' ? '+' : '−'}
               {delta.count}
@@ -140,30 +150,30 @@ function CFGPanel({
         style={viewportHeight ? { height: viewportHeight } : undefined}
       >
         {graph ? (
-          <CFGCanvas graph={graph} scale={scale} interactive={false} marks={marks} />
+          <CFGCanvas graph={graph} scale={scale} interactive={false} marks={marks} locale={locale} />
         ) : (
-          <p className="pa-cfg__empty">无法解析为基本块</p>
+          <p className="pa-cfg__empty">{t(locale, 'player.emptyCfg')}</p>
         )}
       </div>
     </section>
   );
 }
 
-function DiffLegend() {
+function DiffLegend({ locale }: { locale: Locale }) {
   return (
     <p className="pa-diffkey">
-      <span className="pa-diffkey__title">指令 diff</span>
+      <span className="pa-diffkey__title">{t(locale, 'player.diffTitle')}</span>
       <span className="pa-diffkey__item pa-diffkey__item--add">
         <i aria-hidden="true" />
-        新增
+        {t(locale, 'player.diffAdd')}
       </span>
       <span className="pa-diffkey__item pa-diffkey__item--del">
         <i aria-hidden="true" />
-        删除
+        {t(locale, 'player.diffDel')}
       </span>
       <span className="pa-diffkey__item pa-diffkey__item--focus">
         <i aria-hidden="true" />
-        关注
+        {t(locale, 'player.diffFocus')}
       </span>
     </p>
   );
@@ -174,20 +184,25 @@ function IRPane({
   lines,
   stepIndex,
   side,
+  locale,
 }: {
   label: string;
   lines: IRLine[];
   stepIndex: number;
   side: 'before' | 'after';
+  locale: Locale;
 }) {
   return (
-    <section className="pa-pane" aria-label={side === 'before' ? '改写前的 IR' : '改写后的 IR'}>
+    <section
+      className="pa-pane"
+      aria-label={t(locale, side === 'before' ? 'player.irBefore' : 'player.irAfter')}
+    >
       <header className="pa-pane__head">
         <span className="pa-pane__label">{label}</span>
-        <span className="pa-pane__count">{lines.length} 行</span>
+        <span className="pa-pane__count">{t(locale, 'player.lines', { count: lines.length })}</span>
       </header>
       {lines.length === 0 ? (
-        <p className="pa-pane__empty">（无指令）</p>
+        <p className="pa-pane__empty">{t(locale, 'player.emptyIr')}</p>
       ) : (
         <ol className="pa-ir" key={stepIndex}>
           {lines.map((line, i) => (
@@ -215,6 +230,7 @@ export default function StepPlayer({
   loop = false,
   caption,
   defaultMode = 'cfg',
+  locale = defaultLocale,
 }: StepPlayerProps) {
   const reducedMotion = usePrefersReducedMotion();
   const [mode, setMode] = useState<ViewMode>(defaultMode);
@@ -226,7 +242,7 @@ export default function StepPlayer({
   const total = steps.length;
   const step = steps[index];
 
-  const graphs = useMemo(() => steps.map(graphOfStep), [steps]);
+  const graphs = useMemo(() => steps.map((item) => graphOfStep(item, locale)), [steps, locale]);
   const cfgSides = useMemo(
     () => ({
       before: graphs.map((graph) => graph.before),
@@ -301,7 +317,7 @@ export default function StepPlayer({
       data-playing={playing ? 'true' : 'false'}
       data-mode={mode}
       role="group"
-      aria-label={`${demo.label} 分步演示`}
+      aria-label={t(locale, 'player.group', { name: demo.label })}
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
@@ -316,7 +332,7 @@ export default function StepPlayer({
           {caption ? <em className="pa-head__caption">{caption}</em> : null}
         </span>
         <span className="pa-head__right">
-          <ViewModeSwitch value={mode} onChange={setMode} label="分步演示的展示模式" />
+          <ViewModeSwitch value={mode} onChange={setMode} locale={locale} label={t(locale, 'player.mode')} />
           <span className="pa-head__counter">
             <strong>{String(index + 1).padStart(2, '0')}</strong>
             <span aria-hidden="true"> / </span>
@@ -336,7 +352,7 @@ export default function StepPlayer({
 
       {mode === 'cfg' ? (
         <>
-          <DiffLegend />
+          <DiffLegend locale={locale} />
           <div className="pa-panes pa-panes--cfg">
             <CFGPanel
               label="before"
@@ -345,6 +361,7 @@ export default function StepPlayer({
               index={index}
               marks={current?.diff?.before}
               delta={{ count: current?.diff?.removed ?? 0, kind: 'del' }}
+              locale={locale}
             />
             <CFGPanel
               label="after"
@@ -353,6 +370,7 @@ export default function StepPlayer({
               index={index}
               marks={current?.diff?.after}
               delta={{ count: current?.diff?.added ?? 0, kind: 'add' }}
+              locale={locale}
             />
           </div>
         </>
@@ -361,8 +379,8 @@ export default function StepPlayer({
           className="pa-panes"
           style={{ '--pa-ir-lines': demo.maxLines } as CSSProperties}
         >
-          <IRPane label="before" side="before" lines={step.before} stepIndex={index} />
-          <IRPane label="after" side="after" lines={step.after} stepIndex={index} />
+          <IRPane label="before" side="before" lines={step.before} stepIndex={index} locale={locale} />
+          <IRPane label="after" side="after" lines={step.after} stepIndex={index} locale={locale} />
         </div>
       )}
 
@@ -385,8 +403,8 @@ export default function StepPlayer({
             setPlaying(false);
             goTo(0);
           }}
-          aria-label="回到第一步"
-          title="回到第一步"
+          aria-label={t(locale, 'player.first')}
+          title={t(locale, 'player.first')}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M6 5v14M19 6l-9 6 9 6z" />
@@ -400,8 +418,8 @@ export default function StepPlayer({
             goTo(index - 1);
           }}
           disabled={index === 0}
-          aria-label="上一步"
-          title="上一步（←）"
+          aria-label={t(locale, 'player.prev')}
+          title={t(locale, 'player.prevTitle')}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M15 5l-7 7 7 7" />
@@ -411,8 +429,8 @@ export default function StepPlayer({
           type="button"
           className="pa-btn pa-btn--play"
           onClick={() => setPlaying((value) => !value)}
-          aria-label={playing ? '暂停' : '自动播放'}
-          title={playing ? '暂停（空格）' : '自动播放（空格）'}
+          aria-label={t(locale, playing ? 'player.pause' : 'player.play')}
+          title={t(locale, playing ? 'player.pauseTitle' : 'player.playTitle')}
         >
           {playing ? (
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -432,21 +450,21 @@ export default function StepPlayer({
             goTo(index + 1);
           }}
           disabled={index === total - 1}
-          aria-label="下一步"
-          title="下一步（→）"
+          aria-label={t(locale, 'player.next')}
+          title={t(locale, 'player.nextTitle')}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M9 5l7 7-7 7" />
           </svg>
         </button>
 
-        <ol className="pa-steps" aria-label="跳到指定步骤">
+        <ol className="pa-steps" aria-label={t(locale, 'player.steps')}>
           {steps.map((item, i) => (
             <li key={item.title}>
               <button
                 type="button"
                 className="pa-step"
-                aria-label={`第 ${i + 1} 步：${item.title}`}
+                aria-label={t(locale, 'player.step', { n: i + 1, title: item.title })}
                 aria-current={i === index ? 'step' : undefined}
                 onClick={() => {
                   setPlaying(false);
@@ -458,7 +476,7 @@ export default function StepPlayer({
         </ol>
 
         <label className="pa-speed">
-          <span className="sr-only">播放速度</span>
+          <span className="sr-only">{t(locale, 'player.speed')}</span>
           <select value={speed} onChange={(event) => setSpeed(Number(event.target.value))}>
             {SPEEDS.map((value) => (
               <option key={value} value={value}>

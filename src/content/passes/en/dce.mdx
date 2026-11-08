@@ -1,0 +1,76 @@
+---
+title: dce
+subtitle: Dead code elimination
+summary: Start from instructions with side effects and mark liveness backwards, deleting every instruction whose result is unused and whose execution is unobservable; ADCE also removes unreachable blocks.
+category: scalar
+difficulty: 1
+status: ready
+order: 3
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Liveness', 'ADCE', 'CFG']
+demo: dce
+source: llvm/lib/Transforms/Scalar/DCE.cpp
+updated: 2026-11-05
+---
+
+## What problem does it solve
+
+Every rewrite can leave instructions behind that nobody uses: inlined arguments, folded computations, branches produced by template instantiation. They do not change program behaviour, but they occupy compile time and register pressure.
+
+DCE has a single rule: **if the result is unused and executing it has no observable side effect, delete it.**
+
+## The hard part is not deleting, but knowing what else can go
+
+The intuitive approach is a single pass that deletes any instruction with no users. But deletion changes user counts — once an instruction is gone, its operands may become dead too. The real algorithm therefore **iterates to a fixed point**.
+
+The harder part is deciding whether an instruction has side effects:
+
+- `store`, `call` (unless `readnone`), `fence` and atomics are observable and must stay;
+- pure computation (`add`, `icmp`, `getelementptr`) has no side effects and can go;
+- `load` is assumed to be able to trap by default and may only be removed when it is proven safe.
+
+## Two implementations
+
+**DCE (the fast one)** does a single linear scan: call `isInstructionTriviallyDead` on each instruction and, if it matches, recursively delete its operands when they become dead too. It is a routine cleanup after other passes.
+
+**ADCE (Aggressive DCE)** works in the other direction, marking liveness from the roots:
+
+```text
+roots = all terminators + instructions with side effects
+worklist = roots
+while worklist is not empty:
+  I = pop(worklist)
+  if I is not marked:
+    mark(I)                       // mark as live
+    push all operands of I        // the values it depends on are live too
+sweep: delete every unmarked instruction
+```
+
+Because it starts from instructions that always execute and always matter, ADCE catches chains that plain DCE cannot: a value only needs to stay if it eventually reaches a root.
+
+ADCE also does a CFG simplification step: unreachable blocks are cut out, empty forwarding blocks are merged, and a `br` whose condition is always true or false is rewritten.
+
+## Why liveness runs backwards
+
+Dataflow direction is determined by dependencies: `ret %x` uses `%x`, so the definition of `%x` must stay; `%dead` has no users, so its definition can disappear. Following the use-def chain from results back to sources is exactly backwards propagation.
+
+This also explains why DCE feels so natural on SSA: the use-def chains are explicit, so no additional reaching-definitions analysis is needed.
+
+## Cost and caveats
+
+- Time complexity is roughly linear; ADCE adds one more CFG walk.
+- Deleting instructions must invalidate analyses in sync (`DominatorTree`, `AssumptionCache`, `MemorySSA`, …), or later passes will read stale data.
+- Conservatism is deliberate: deleting one instruction with a side effect changes program semantics. It is better to delete too little than to delete the wrong thing.
+
+## Where it sits in the pipeline
+
+DCE shows up repeatedly after `-O1`: after instcombine simplifies, after loop optimisation, and after inlining. ADCE is more common near the end of the pipeline because it can clean up control flow at the same time.
+
+## Run it yourself
+
+```bash
+opt -passes=dce -S demo.ll -o -
+opt -passes=adce -S demo.ll -o -
+```
+
+Build an example where the dead code sits inside a branch and compare the two outputs: ADCE also removes the unreachable CFG.

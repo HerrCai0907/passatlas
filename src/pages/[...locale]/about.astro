@@ -1,0 +1,95 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import AboutBodyZh from '../../components/about/AboutBodyZh.astro';
+import AboutBodyEn from '../../components/about/AboutBodyEn.astro';
+import { defaultLocale, locales, type Locale } from '../../i18n/config';
+import { t } from '../../i18n/ui';
+import { site } from '../../site';
+import { url } from '../../lib/url';
+
+export function getStaticPaths() {
+  return locales.map((locale) => ({
+    params: { locale: locale === defaultLocale ? undefined : locale },
+    props: { locale },
+  }));
+}
+
+const { locale } = Astro.props as { locale: Locale };
+---
+
+<BaseLayout
+  title={t(locale, 'about.metaTitle')}
+  description={t(locale, 'about.metaDescription')}
+  locale={locale}
+>
+  <article class="about">
+    <div class="container">
+      <header class="about__head">
+        <p class="eyebrow">{t(locale, 'about.eyebrow')}</p>
+        <h1>{t(locale, 'about.heading')}</h1>
+        <p class="lead" set:html={t(locale, 'about.lead')} />
+      </header>
+
+      {locale === 'zh' ? <AboutBodyZh /> : <AboutBodyEn />}
+
+      <div class="about__cta">
+        <a class="btn btn--primary" href={url('/passes/', locale)}>
+          {t(locale, 'about.ctaPasses')} <span class="btn__arrow" aria-hidden="true">→</span>
+        </a>
+        <a class="btn btn--ghost" href={site.github} target="_blank" rel="noopener noreferrer">
+          {t(locale, 'about.ctaGithub')}
+        </a>
+      </div>
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+  .about {
+    padding-block: clamp(40px, 6vw, 72px);
+  }
+
+  .about__head {
+    max-width: 760px;
+    padding-bottom: clamp(8px, 2vw, 16px);
+  }
+
+  .about__head h1 {
+    margin-top: 10px;
+    font-size: clamp(36px, 5.4vw, 56px);
+    letter-spacing: -0.03em;
+  }
+
+  .about__head .lead {
+    margin-top: 16px;
+  }
+
+  .about__head :global(strong) {
+    color: var(--ink);
+  }
+
+  :global(.about__body) {
+    max-width: var(--wrap-narrow);
+    margin-top: 28px;
+  }
+
+  :global(.about__body h2:first-child) {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  :global(.about__body ol li),
+  :global(.about__body ul li) {
+    margin-top: 0.4em;
+  }
+
+  .about__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 40px;
+    padding-top: 28px;
+    border-top: 1px solid var(--line);
+  }
+</style>

@@ -1,65 +1,69 @@
 ---
-import type { CollectionEntry } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
 import StepPlayer from '../components/StepPlayer';
 import CFGViewer from '../components/CFGViewer';
 import PipelineStrip from '../components/PipelineStrip.astro';
 import { cfgSamples } from '../data/cfg-samples';
 import { getDemo } from '../demos/registry';
-import { categories, difficultyLabels } from '../lib/categories';
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { categories, categoryName, difficultyLabel } from '../lib/categories';
+import { passSlug, passSubtitle, type PassEntry } from '../lib/passes';
 import { site } from '../site';
 import { url } from '../lib/url';
 
 interface Props {
-  pass: CollectionEntry<'passes'>;
-  prev?: CollectionEntry<'passes'>;
-  next?: CollectionEntry<'passes'>;
+  pass: PassEntry;
+  locale: Locale;
+  prev?: PassEntry;
+  next?: PassEntry;
 }
 
-const { pass, prev, next } = Astro.props;
-const { title, zh, summary, category, difficulty, stage, tags, demo, cfg, source } = pass.data;
+const { pass, locale, prev, next } = Astro.props;
+const { title, summary, category, stage, tags, demo, cfg, source } = pass.data;
 const categoryMeta = categories[category];
-const demoData = getDemo(demo);
+const difficulty = pass.data.difficulty;
+const demoData = getDemo(demo, locale);
 const cfgSample = cfg ? cfgSamples.find((sample) => sample.id === cfg) : undefined;
 const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
+const categoryLine =
+  locale === 'zh' ? `${categoryMeta.zh} · ${categoryMeta.en}` : categoryMeta.en;
 ---
 
-<BaseLayout title={title} description={summary}>
+<BaseLayout title={title} description={summary} locale={locale}>
   <article class={`pass cat-${category}`}>
     <div class="container">
-      <nav class="crumbs" aria-label="面包屑">
-        <a href={url('/')}>PassAtlas</a>
+      <nav class="crumbs" aria-label={t(locale, 'pass.crumbs')}>
+        <a href={url('/', locale)}>PassAtlas</a>
         <span aria-hidden="true">/</span>
-        <a href={url('/passes/')}>图鉴</a>
+        <a href={url('/passes/', locale)}>{t(locale, 'pass.atlas')}</a>
         <span aria-hidden="true">/</span>
         <span aria-current="page">{title}</span>
       </nav>
 
       <header class="pass__head">
-        <p class="eyebrow">{categoryMeta.zh} · {categoryMeta.en}</p>
+        <p class="eyebrow">{categoryLine}</p>
         <h1 class="pass__title">{title}</h1>
-        <p class="pass__zh">{zh}</p>
+        <p class="pass__zh">{passSubtitle(pass)}</p>
         <p class="lead pass__summary">{summary}</p>
 
         <div class="pass__meta">
-          <span class="chip chip--cat">{categoryMeta.zh}</span>
-          <span class="chip">难度 {difficultyLabels[difficulty]}</span>
+          <span class="chip chip--cat">{categoryName(category, locale)}</span>
+          <span class="chip">{t(locale, 'pass.difficulty', { level: difficultyLabel(difficulty, locale) })}</span>
           {tags.map((tag) => <span class="chip">{tag}</span>)}
         </div>
 
-        <PipelineStrip stage={stage} />
+        <PipelineStrip stage={stage} locale={locale} />
       </header>
 
       {
         demoData && (
           <section class="pass__demo" aria-labelledby="demo-heading">
             <div class="pass__demo-head">
-              <h2 id="demo-heading">分步动画</h2>
-              <p class="muted">
-                点按「下一步」，或用键盘 <kbd>←</kbd> <kbd>→</kbd> 单步，<kbd>空格</kbd> 播放。
-              </p>
+              <h2 id="demo-heading">{t(locale, 'pass.demoHeading')}</h2>
+              <p class="muted" set:html={t(locale, 'pass.demoHint')} />
             </div>
-            <StepPlayer demo={demoData} client:visible />
+            <StepPlayer demo={demoData} locale={locale} client:visible />
           </section>
         )
       }
@@ -68,12 +72,13 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
         cfgSample && !demoData && (
           <section class="pass__cfg" aria-labelledby="cfg-heading">
             <div class="pass__demo-head">
-              <h2 id="cfg-heading">控制流图</h2>
-              <p class="muted">基本块、跳转与分支条件的一张地图。</p>
+              <h2 id="cfg-heading">{t(locale, 'pass.cfgHeading')}</h2>
+              <p class="muted">{t(locale, 'pass.cfgHint')}</p>
             </div>
             <CFGViewer
               ir={cfgSample.ir}
-              title={`${title} 的控制流图`}
+              locale={locale}
+              title={t(locale, 'pass.cfgTitle', { title })}
               height={520}
               client:visible
             />
@@ -88,7 +93,7 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
       {
         source && (
           <p class="pass__source">
-            在 LLVM 源码中：
+            {t(locale, 'pass.sourcePrefix')}
             <a href={`${site.llvmSource}/tree/main/${source}`} target="_blank" rel="noopener noreferrer">
               <code>{source}</code> ↗
             </a>
@@ -96,11 +101,11 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
         )
       }
 
-      <nav class="pager" aria-label="上一篇 / 下一篇">
+      <nav class="pager" aria-label={t(locale, 'pass.pager')}>
         {
           prev ? (
-            <a class="pager__item pager__item--prev" href={url(`/passes/${prev.id}/`)}>
-              <span class="pager__dir">← 上一篇</span>
+            <a class="pager__item pager__item--prev" href={url(`/passes/${passSlug(prev)}/`, locale)}>
+              <span class="pager__dir">{t(locale, 'pass.prev')}</span>
               <span class="pager__name">{prev.data.title}</span>
             </a>
           ) : (
@@ -109,8 +114,8 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
         }
         {
           next ? (
-            <a class="pager__item pager__item--next" href={url(`/passes/${next.id}/`)}>
-              <span class="pager__dir">下一篇 →</span>
+            <a class="pager__item pager__item--next" href={url(`/passes/${passSlug(next)}/`, locale)}>
+              <span class="pager__dir">{t(locale, 'pass.next')}</span>
               <span class="pager__name">{next.data.title}</span>
             </a>
           ) : (
@@ -120,7 +125,7 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
       </nav>
 
       <p class="pass__edit">
-        <a href={editUrl} target="_blank" rel="noopener noreferrer">发现错误？在 GitHub 上编辑这一页 ↗</a>
+        <a href={editUrl} target="_blank" rel="noopener noreferrer">{t(locale, 'pass.edit')}</a>
       </p>
     </div>
   </article>

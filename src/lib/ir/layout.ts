@@ -4,7 +4,7 @@
  * 输出坐标供 CFGViewer 用 HTML 绝对定位渲染节点、SVG 渲染边。
  * 尺寸常量必须和 CFGViewer.css 里的节点样式保持一致。
  */
-import type { IRBlock, IRFunction, IREdge } from './parse';
+import type { IRBlock, IRFunction, IREdge } from './parse.ts';
 
 export const NODE_WIDTH = 320;
 export const NODE_MIN_WIDTH = 176;

@@ -1,4 +1,4 @@
-import { makeDemo } from './types';
+import { makeDemo } from './types.ts';
 
 const step0 = `
 define i32 @scale(i32 %x) {
@@ -53,4 +53,23 @@ export const instcombineDemo = makeDemo('instcombine', 'instcombine', [
     after: step3,
     focus: ['%b = shl i32 %x, 3'],
   },
-]);
+],
+  {
+    en: {
+      steps: [
+      {
+        title: 'Step 1 · Remove identity operations',
+        note: 'add x, 0 and or x, 0 do not change the value, so every use is replaced with the operand and the instruction disappears. This needs no analysis — pure pattern matching.',
+      },
+      {
+        title: 'Step 2 · Turn multiply-by-power-of-two into a shift',
+        note: 'The constant 8 is a power of two, so the multiply becomes a shift. It is cheaper, and gives instruction selection a clearer shape.',
+      },
+      {
+        title: 'Step 3 · Fold x - x to 0',
+        note: 'sub %b, %b is always 0, so ret returns a constant. Note that %b is now unused, but instcombine only does local simplification; this dead code is left to DCE.',
+      },
+      ],
+    },
+  },
+);
