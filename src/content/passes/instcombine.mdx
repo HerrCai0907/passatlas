@@ -1,0 +1,83 @@
+---
+title: instcombine
+zh: 指令合并与化简
+summary: 一个由 worklist 驱动的模式匹配引擎，把恒等运算、可强度削减的乘除、可折叠的比较逐条改写掉，直到函数不再变化。
+category: scalar
+difficulty: 2
+status: ready
+order: 2
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Peephole', 'Worklist', 'Canonicalization']
+demo: instcombine
+source: llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+updated: 2026-11-03
+---
+
+## 它解决什么问题
+
+前端生成的 IR 是「直译」出来的，充满局部可化简的指令：
+
+- 恒等运算：`add x, 0`、`mul x, 1`、`or x, 0`
+- 昂贵但等价的写法：`mul x, 8` 可以变成 `shl x, 3`
+- 恒为常量的比较：`icmp eq x, x` 恒为真
+- 多余的转换：`sext` 之后马上 `trunc` 回原宽度
+
+这些改写单个看都很小，但它们是后续优化的地基：IR 越规范，GVN、SCCP、指令选择就越容易做。instcombine 就是承担「规范化」这件事的 pass。
+
+## 为什么是 worklist，而不是一次遍历
+
+一次线性遍历会漏掉连锁反应：化简 `a` 可能让 `b` 变得可折叠，而 `b` 在 `a` 之前已经被访问过。
+
+instcombine 的解法是把指令放进工作队列，反复取出、尝试匹配、改写，并把受影响的使用者重新入队，直到队列为空——也就是到达不动点。
+
+```text
+worklist = 函数内所有指令
+while worklist 非空:
+  I = pop(worklist)
+  if I 已被删除: continue
+  if R = visit(I):          // 命中某个化简模式
+    replaceInstUsesWith(I, R)
+    push I 的所有使用者     // 连锁反应
+    erase I
+```
+
+「已删除就跳过」这一行很关键：一次改写可能顺带删掉队列里的其它指令，必须防御性地检查。
+
+## 它到底做了哪几类事
+
+按源码拆开看，`InstCombine*.cpp` 覆盖的模式大致有这么几族：
+
+| 族 | 例子 | 依赖 |
+| --- | --- | --- |
+| 代数恒等 | `x + 0`、`x * 1`、`x - x` | 无需分析 |
+| 强度削减 | `mul x, 2^k` → `shl`；`urem x, 2^k` → `and` | 常量已知 |
+| 常量折叠 | `add 3, 4` → `7` | 常量折叠器 |
+| 比较与 select | `icmp eq x, x` → `true`；min/max 识别 | 谓词分析 |
+| cast 规范化 | `sext` + `trunc` 合并、GEP 常量下标拆分 | 类型信息 |
+| 死代码清理 | 结果无人使用的纯指令直接删除 | 副作用判断 |
+
+其中不少判断要靠 `KnownBits`（哪些位一定是 0/1）、`DemandedBits`（哪些位真正被使用）和 `SimplifyQuery` 提供的事实，这也是 instcombine 比「纯模式匹配」更强的原因。
+
+## 正确性的红线
+
+LLVM IR 有 `poison` 与 `undef`，还有 `nsw` / `nuw` / `exact` 这类承诺。化简必须保持**精化**关系：新程序的行为只能是原程序行为的子集，不能凭空造出原来没有的确定值。
+
+- `add nsw x, 1` 溢出时是 `poison`，不能当作普通加法折叠；
+- 浮点默认不允许结合律重排，除非有 `fast` 标志；
+- 删指令前必须确认它没有副作用，`store`、`call`、`fence` 都不行。
+
+这也是为什么本页的演示里，`sub %b, %b` 折叠成 `0` 之后，那条已经没人使用的 `shl` 要留给 DCE——instcombine 只做**局部**化简，不负责全局的死代码消除。
+
+## 代价
+
+- 实践上近似线性，但一次改写会引发多次重新入队，大函数上的开销不可忽略；
+- 它是管线里被调用次数最多的 pass 之一：内联前后、循环优化后都会再跑一遍；
+- 化简强度与编译时间直接冲突，`-O3` 会启用更激进的模式。
+
+## 自己跑一遍
+
+```bash
+opt -passes=instcombine -S demo.ll -o -
+```
+
+写几行「故意笨」的 IR，例如 `add i32 %x, 0` 再 `mul i32 %a, 8`，观察输出如何一步步收敛。

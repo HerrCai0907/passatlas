@@ -1,0 +1,118 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import { categories, difficultyLabels } from '../lib/categories';
+import { url } from '../lib/url';
+
+interface Props {
+  pass: CollectionEntry<'passes'>;
+}
+
+const { pass } = Astro.props;
+const { title, zh, summary, category, difficulty, stage } = pass.data;
+const categoryMeta = categories[category];
+---
+
+<a class={`card cat-${category}`} href={url(`/passes/${pass.id}/`)}>
+  <div class="card__top">
+    <span class="chip chip--cat">{categoryMeta.zh}</span>
+    <span class="card__difficulty" title={`难度：${difficultyLabels[difficulty]}`}>
+      <span aria-hidden="true">{'●'.repeat(difficulty)}{'○'.repeat(3 - difficulty)}</span>
+      <span class="sr-only">难度 {difficultyLabels[difficulty]}</span>
+    </span>
+  </div>
+
+  <h3 class="card__title">{title}</h3>
+  <p class="card__zh">{zh}</p>
+  <p class="card__summary">{summary}</p>
+
+  <div class="card__foot">
+    <span class="card__stage">{stage.length > 0 ? stage.join(' · ') : '—'}</span>
+    <span class="card__go" aria-hidden="true">阅读 →</span>
+  </div>
+</a>
+
+<style>
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 18px 20px 16px;
+    border: 1px solid var(--line);
+    border-top: 2px solid var(--cat);
+    border-radius: var(--radius);
+    background: var(--surface);
+    text-decoration: none;
+    color: var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition:
+      transform 0.2s var(--ease),
+      box-shadow 0.2s var(--ease),
+      border-color 0.2s var(--ease);
+  }
+
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--cat) 40%, var(--line));
+    box-shadow: var(--shadow-md);
+  }
+
+  .card__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+
+  .card__difficulty {
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: color-mix(in srgb, var(--cat) 65%, var(--faint));
+  }
+
+  .card__title {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .card__zh {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .card__summary {
+    margin: 6px 0 0;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--ink-soft);
+  }
+
+  .card__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: auto;
+    padding-top: 14px;
+    border-top: 1px dashed var(--line);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  .card__go {
+    color: var(--cat);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    opacity: 0.75;
+    transition: opacity 0.2s var(--ease);
+  }
+
+  .card:hover .card__go {
+    opacity: 1;
+  }
+</style>

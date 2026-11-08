@@ -1,0 +1,74 @@
+---
+interface Props {
+  stage?: string[];
+}
+
+const { stage = [] } = Astro.props;
+const levels = ['-O0', '-O1', '-O2', '-O3', '-Os'];
+---
+
+<div class="strip">
+  <span class="strip__label">启用级别</span>
+  <ol class="strip__list">
+    {
+      levels.map((level) => (
+        <li class:list={['strip__item', { 'is-on': stage.includes(level) }]}>
+          <span>{level}</span>
+        </li>
+      ))
+    }
+  </ol>
+</div>
+
+<style>
+  .strip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .strip__label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    flex: none;
+  }
+
+  .strip__list {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 3px;
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+  }
+
+  .strip__item {
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--faint);
+    transition:
+      background-color 0.2s var(--ease),
+      color 0.2s var(--ease);
+  }
+
+  .strip__item.is-on {
+    background: var(--cat, var(--accent));
+    color: #fffdf8;
+  }
+
+  @media (max-width: 520px) {
+    .strip {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 6px;
+    }
+  }
+</style>

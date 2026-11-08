@@ -1,0 +1,76 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { url } from '../lib/url';
+---
+
+<BaseLayout title="404" description="这一页不在图鉴里。" noindex>
+  <section class="nf">
+    <div class="container nf__inner">
+      <p class="eyebrow">404 · Not in the atlas</p>
+      <h1 class="nf__code">404</h1>
+      <p class="lead nf__lead">
+        这条路径没有被任何 pass 处理过，或者它指向的页面还没画完。
+      </p>
+      <div class="nf__actions">
+        <a class="btn btn--primary" href={url('/passes/')}>回到图鉴 <span class="btn__arrow" aria-hidden="true">→</span></a>
+        <a class="btn btn--ghost" href={url('/')}>首页</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .nf {
+    display: grid;
+    place-items: center;
+    min-height: 62vh;
+    padding-block: 60px;
+  }
+
+  .nf__inner {
+    max-width: 560px;
+  }
+
+  .nf__code {
+    font-family: var(--font-mono);
+    font-size: clamp(80px, 16vw, 148px);
+    font-weight: 500;
+    letter-spacing: -0.06em;
+    line-height: 1;
+    color: var(--ink);
+    margin-top: 8px;
+  }
+
+  .nf__code::after {
+    content: ' ';
+    display: inline-block;
+    width: 0.12em;
+    height: 0.72em;
+    margin-left: 0.06em;
+    background: var(--accent);
+    animation: caret 1.1s steps(2) infinite;
+  }
+
+  .nf__lead {
+    margin-top: 14px;
+  }
+
+  .nf__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 28px;
+  }
+
+  @keyframes caret {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nf__code::after {
+      animation: none;
+    }
+  }
+</style>

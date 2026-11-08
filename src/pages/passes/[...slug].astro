@@ -1,0 +1,26 @@
+---
+import { getCollection, render } from 'astro:content';
+import PassLayout from '../../layouts/PassLayout.astro';
+
+export async function getStaticPaths() {
+  const passes = (await getCollection('passes', ({ data }) => data.status === 'ready')).sort(
+    (a, b) => a.data.order - b.data.order,
+  );
+
+  return passes.map((pass, index) => ({
+    params: { slug: pass.id },
+    props: {
+      pass,
+      prev: passes[index - 1],
+      next: passes[index + 1],
+    },
+  }));
+}
+
+const { pass, prev, next } = Astro.props;
+const { Content } = await render(pass);
+---
+
+<PassLayout pass={pass} prev={prev} next={next}>
+  <Content />
+</PassLayout>

@@ -1,0 +1,170 @@
+---
+import { site } from '../site';
+import { url } from '../lib/url';
+
+const year = new Date().getFullYear();
+
+const links = [
+  { href: url('/passes/'), label: '图鉴目录' },
+  { href: url('/about/'), label: '关于本站' },
+  { href: site.llvmDocs, label: 'LLVM Pass 官方文档', external: true },
+  { href: site.llvmSource, label: 'LLVM 源码', external: true },
+];
+---
+
+<footer class="foot">
+  <div class="container foot__grid">
+    <div class="foot__brand">
+      <p class="foot__name">PassAtlas</p>
+      <p class="foot__tag">{site.tagline}</p>
+      <p class="foot__note">100% 静态 · 无后端 · 无跟踪脚本</p>
+    </div>
+
+    <nav class="foot__links" aria-label="页脚导航">
+      {
+        links.map((link) => (
+          <a
+            href={link.href}
+            target={link.external ? '_blank' : undefined}
+            rel={link.external ? 'noopener noreferrer' : undefined}
+          >
+            {link.label}
+            {link.external ? <span aria-hidden="true"> ↗</span> : null}
+          </a>
+        ))
+      }
+    </nav>
+
+    <dl class="foot__meta">
+      <div>
+        <dt>目标版本</dt>
+        <dd>{site.llvmVersion}</dd>
+      </div>
+      <div>
+        <dt>内容许可</dt>
+        <dd>{site.license}</dd>
+      </div>
+      <div>
+        <dt>构建</dt>
+        <dd>Astro · GitHub Pages</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="container foot__bottom">
+    <span>© {year} PassAtlas</span>
+    <span>写给想知道「IR 为什么变了」的人。</span>
+  </div>
+</footer>
+
+<style>
+  .foot {
+    margin-top: clamp(56px, 8vw, 104px);
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--paper-deep) 55%, var(--paper));
+    padding-block: clamp(36px, 5vw, 56px) 28px;
+  }
+
+  .foot__grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(180px, 1fr);
+    gap: 32px;
+  }
+
+  .foot__name {
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin: 0;
+  }
+
+  .foot__tag {
+    margin-top: 6px;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+
+  .foot__note {
+    margin-top: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    color: var(--faint);
+  }
+
+  .foot__links {
+    display: grid;
+    align-content: start;
+    gap: 9px;
+    padding-top: 4px;
+  }
+
+  .foot__links a {
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  .foot__links a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+  }
+
+  .foot__meta {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    margin: 0;
+    padding-top: 4px;
+  }
+
+  .foot__meta div {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 12.5px;
+    border-bottom: 1px dashed var(--line);
+    padding-bottom: 8px;
+  }
+
+  .foot__meta dt {
+    color: var(--faint);
+  }
+
+  .foot__meta dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--muted);
+    text-align: right;
+  }
+
+  .foot__bottom {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 36px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  @media (max-width: 800px) {
+    .foot__grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .foot__brand {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .foot__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

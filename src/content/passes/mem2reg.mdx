@@ -1,0 +1,99 @@
+---
+title: mem2reg
+zh: 内存到寄存器提升
+summary: 前端在 -O0 下把局部变量放进栈里；mem2reg 把它们提升成 SSA 值，让后续优化第一次「看见」数据流。
+category: dataflow
+difficulty: 1
+status: ready
+order: 1
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['SSA', 'Promotion', 'Dominance']
+demo: mem2reg
+source: llvm/lib/Transforms/Utils/Mem2Reg.cpp
+updated: 2026-11-01
+---
+
+## 它解决什么问题
+
+`clang -O0` 生成的 IR 几乎长一个样：每个局部变量一次 `alloca`，每次赋值 `store`，每次读取 `load`。
+
+```llvm
+%x = alloca i32
+store i32 1, ptr %x
+%v = load i32, ptr %x
+```
+
+这种「内存里的变量」对机器很友好，对优化器却很不友好：值之间的依赖被藏进了内存，读到的是哪一次写入，必须做别名分析才能回答。
+
+LLVM 的绝大多数优化都建立在 **SSA** 之上——每个值只被定义一次，use-def 链是显式的。mem2reg 就是那道门：把可提升的 `alloca` 换成寄存器里的值，函数进入 SSA 形式。
+
+## 什么样的 alloca 才能提升
+
+mem2reg 并不处理所有 `alloca`。一个 `alloca` 必须同时满足：
+
+- 只被 `load` / `store` 直接使用，地址从未被传递给别的指令；
+- 访问都是非 `volatile` 的，且类型一致；
+- 地址没有逃逸：没有传给函数调用、没有存进别的指针、没有 `ptrtoint`。
+
+只要地址逃逸一次，编译器就无法再追踪所有读写，这个 `alloca` 只能留在内存里。数组和多字段结构体通常也先交给 SROA 拆成标量，再由 mem2reg 接手。
+
+## 三步算法
+
+LLVM 的实现（`PromoteMemoryToRegister.cpp`）可以拆成三个阶段。
+
+**第一步：判定可提升性。** 遍历 `alloca` 的使用者，确认全是直接 `load` / `store`，且没有 `volatile`。不满足就跳过。
+
+**第二步：在支配边界插入 φ。** 对每个定义过该变量的基本块，沿支配边界（dominance frontier）向外扩散，在汇合点插入 φ 节点，直到不再产生新的定义。
+
+```text
+for each promotable alloca A:
+  worklist = { B | B 中对 A 有 store }
+  while worklist 非空:
+    X = pop(worklist)
+    for Y in DF(X):
+      if Y 还没有 A 的 φ:
+        insert φ(A) at Y
+        push Y        // φ 也是定义，要继续向外扩散
+```
+
+**第三步：沿支配树重命名。** 从入口块做一次支配树 DFS，维护「当前到达定义」的栈：遇到 `store` 就压栈，遇到 `load` 就用栈顶替换；进入后继块前，把栈顶填进对应的 φ 入边。
+
+```text
+rename(B):
+  for inst in B:
+    if store A, v:  stack.push(v)
+    if load A:      rauw(stack.top())
+  for S in successors(B):
+    for φ in S:     φ.addIncoming(stack.top(), B)
+  for C in dom-children(B): rename(C)
+  pop 本块压入的定义
+```
+
+重命名结束后，`store` 与 `alloca` 都不再被使用，作为死指令被删除。
+
+## 为什么是「支配边界」
+
+一个基本块只有在多条前驱路径带来不同定义时，才需要 φ 来汇合。支配边界 `DF(X)` 恰好是「X 的定义能到达、但 X 并不支配」的块集合——这些地方必须把不同路径的值合并。
+
+上面的演示里，`then` 和 `else` 都写了 `%slot`，而它们在 `merge` 汇合，所以 `merge` 处插入 φ；`entry` 的定义不会到达 `merge`（`entry` 支配 `merge`，路径上必然经过某个重新定义的块），因此 `entry` 不需要 φ。
+
+## 代价与坑
+
+- **开销**：插入 φ 的迭代次数与支配边界大小相关，实际接近线性；超大函数（数万基本块）上仍是可感知的成本。
+- **循环**：循环头部的 φ 会成为新的定义，worklist 必须继续传播直到闭包，否则会漏掉嵌套 φ。
+- **trivial φ**：所有入边都相同的 φ 是冗余的，mem2reg 自己会做一次清理，但后续 pass 仍可能制造新的。
+- **名字不是语义**：`%slot.0` 这类带序号的名字只是临时的，别在阅读时把它当成某个具体的存储位置。
+
+## 在管线里的位置
+
+mem2reg 是 `-O1` 之后最早运行的 function pass 之一。它依赖 `DominatorTree`，产出的是「SSA 化的函数」，之后 GVN、SCCP、instcombine 才真正开始工作。
+
+## 自己跑一遍
+
+```bash
+# -O0 会加 optnone，需要显式关掉
+clang -O0 -S -emit-llvm -Xclang -disable-O0-optnone demo.c -o demo.ll
+opt -passes=mem2reg -S demo.ll -o -
+```
+
+把 `demo.c` 换成一个带 `if/else` 的小函数，对比 `mem2reg` 前后的输出，再看一遍上面的动画，会非常直观。

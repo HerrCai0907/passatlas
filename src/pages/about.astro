@@ -1,0 +1,129 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { site } from '../site';
+import { url } from '../lib/url';
+---
+
+<BaseLayout title="关于" description="PassAtlas 的做法：用可单步的 IR 动画讲清 LLVM pass 的算法，全站静态，可离线阅读。">
+  <article class="about">
+    <div class="container">
+      <header class="about__head">
+        <p class="eyebrow">About</p>
+        <h1>为什么做图鉴</h1>
+        <p class="lead">
+          LLVM 的 pass 文档能告诉你「有什么」，源码能告诉你「怎么写的」，
+          但很少有一个地方能让你<strong>看见</strong>一条 IR 被改写的那一瞬间。
+        </p>
+      </header>
+
+      <div class="prose about__body">
+        <h2>一个 pass 应该怎么讲</h2>
+        <p>
+          大多数 pass 的难点不是代码，而是三个问题：它想解决什么、它依赖什么前提、它做完之后 IR 变成了什么样。
+          所以每一页都按同一个骨架组织：
+        </p>
+        <ol>
+          <li><strong>问题</strong>：没有这个 pass 会怎样，为什么值得单独做一遍。</li>
+          <li><strong>算法</strong>：核心数据流与伪代码，而不是逐行翻译源码。</li>
+          <li><strong>分步动画</strong>：前后 IR 对照，单步播放，可回退。</li>
+          <li><strong>代价与坑</strong>：复杂度、保守性、常见误解。</li>
+          <li><strong>自己跑</strong>：一条能复制执行的 <code>opt</code> 命令。</li>
+        </ol>
+
+        <h2>全静态，是刻意的</h2>
+        <p>
+          这个站没有后端、没有数据库、没有运行期请求。所有页面在构建时预渲染成 HTML，
+          交互只发生在浏览器里的一小段 React 岛上。这样带来三个好处：
+        </p>
+        <ul>
+          <li>打开快：首屏是纯 HTML，动画按需加载、进入视口才激活。</li>
+          <li>可离线：构建产物就是一摞文件，扔进任何静态托管都能跑。</li>
+          <li>可长存：不依赖任何服务，十年后还能从 git 历史里重新构建出来。</li>
+        </ul>
+        <p>
+          也因为没有后端，这里不做登录、不做进度同步、不做评论——需要协作的部分交给 GitHub。
+        </p>
+
+        <h2>技术栈</h2>
+        <table>
+          <thead>
+            <tr><th>层</th><th>选择</th><th>原因</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>框架</td><td>Astro</td><td>默认零 JS，内容用 MDX 写，交互按需 hydration</td></tr>
+            <tr><td>交互</td><td>React 岛</td><td>只有分步播放器需要状态，其余是静态 HTML</td></tr>
+            <tr><td>样式</td><td>原生 CSS + 设计令牌</td><td>没有运行时开销，构建零配置</td></tr>
+            <tr><td>部署</td><td>GitHub Pages</td><td>push 到 main 自动构建发布，免费且够用</td></tr>
+          </tbody>
+        </table>
+
+        <h2>怎么贡献</h2>
+        <p>
+          内容以 MDX 形式存在仓库里，新增一篇 pass 只需要两步：写一个 <code>src/demos/&lt;id&gt;.ts</code>
+          （前后 IR 片段，diff 自动生成），再写一个 <code>src/content/passes/&lt;id&gt;.mdx</code>。
+          细节见仓库根目录的 <code>AGENTS.md</code> 与 <code>README.md</code>。
+        </p>
+        <p>
+          发现错误可以直接点每页底部的「在 GitHub 上编辑这一页」，或者提 issue。
+        </p>
+
+        <h2>许可</h2>
+        <p>
+          本站内容以 {site.license} 许可发布。LLVM 是 UIUC 的商标，本站与 LLVM 项目无隶属关系，
+          文中引用的源码片段遵循 LLVM 自身的 Apache-2.0 WITH LLVM-exception 许可。
+        </p>
+      </div>
+
+      <div class="about__cta">
+        <a class="btn btn--primary" href={url('/passes/')}>去看图鉴 <span class="btn__arrow" aria-hidden="true">→</span></a>
+        <a class="btn btn--ghost" href={site.github} target="_blank" rel="noopener noreferrer">GitHub 仓库 ↗</a>
+      </div>
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+  .about {
+    padding-block: clamp(40px, 6vw, 72px);
+  }
+
+  .about__head {
+    max-width: 760px;
+    padding-bottom: clamp(8px, 2vw, 16px);
+  }
+
+  .about__head h1 {
+    margin-top: 10px;
+    font-size: clamp(36px, 5.4vw, 56px);
+    letter-spacing: -0.03em;
+  }
+
+  .about__head .lead {
+    margin-top: 16px;
+  }
+
+  .about__body {
+    max-width: var(--wrap-narrow);
+    margin-top: 28px;
+  }
+
+  .about__body h2:first-child {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .about__body ol li,
+  .about__body ul li {
+    margin-top: 0.4em;
+  }
+
+  .about__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 40px;
+    padding-top: 28px;
+    border-top: 1px solid var(--line);
+  }
+</style>

@@ -1,0 +1,76 @@
+---
+title: dce
+zh: 死代码消除
+summary: 从有副作用的指令出发反向标记活跃性，把结果无人使用、又不影响行为的指令全部删掉；ADCE 还会顺手清理不可达的基本块。
+category: scalar
+difficulty: 1
+status: ready
+order: 3
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Liveness', 'ADCE', 'CFG']
+demo: dce
+source: llvm/lib/Transforms/Scalar/DCE.cpp
+updated: 2026-11-05
+---
+
+## 它解决什么问题
+
+任何一次改写都可能留下「没人再用」的指令：内联后的参数、被折叠掉的运算、模板实例化产生的分支。它们不影响程序行为，却占用编译时间和寄存器压力。
+
+DCE 的规则只有一句：**结果无人使用，且执行它没有可观察的副作用，就删掉。**
+
+## 难点不在「删」，在「谁还能删」
+
+直觉的做法是遍历一遍，发现使用者为空就删。但删除会改变使用者数量——一条指令被删后，它的操作数可能也变成死代码。所以真正的算法是**迭代到不动点**。
+
+更麻烦的是判断「有没有副作用」：
+
+- `store`、`call`（非 readnone）、`fence`、原子操作都是可观察的，必须保留；
+- 纯计算（`add`、`icmp`、`getelementptr`）没有副作用，可以被删；
+- `load` 默认被认为可能触发 trap，只有证明安全时才允许删。
+
+## 两种实现
+
+**DCE（快速版）** 只用一次线性扫描：对每条指令调用 `isInstructionTriviallyDead`，命中就递归删除它的操作数（如果操作数也因此变死）。适合在其它 pass 之后做例行清理。
+
+**ADCE（Aggressive DCE）** 换了个方向，从「根」出发标记活跃：
+
+```text
+roots = 所有 terminator + 有副作用的指令
+worklist = roots
+while worklist 非空:
+  I = pop(worklist)
+  if I 未标记:
+    mark(I)                       // 标记为 live
+    push I 的所有操作数           // 它依赖的值也 live
+sweep: 删除所有未标记的指令
+```
+
+因为是从「一定会执行、一定有影响」的指令反推，ADCE 能处理普通 DCE 处理不了的连锁：一个值只有在最终流向根时才需要保留。
+
+ADCE 还会多做一步 CFG 简化：不可达的基本块直接摘掉，空的跳转块合并，`br` 的条件若恒定为真/假则改写边。
+
+## 活跃性为什么是「反向」的
+
+数据流方向由依赖决定：`ret %x` 使用 `%x`，所以 `%x` 的定义必须保留；而 `%dead` 没人使用，它的定义就可以消失。沿着 use-def 链从结果往源头走，就是反向传播。
+
+这也解释了为什么 DCE 对 SSA 形式特别自然：use-def 链显式存在，不需要额外的到达定值分析。
+
+## 代价与注意点
+
+- 时间复杂度近似线性，ADCE 多一遍 CFG 遍历；
+- 删指令必须同步更新分析结果（`DominatorTree`、`AssumptionCache`、`MemorySSA` 等），否则后续 pass 会读到脏数据；
+- 保守性是刻意的：删错一条有副作用的指令，程序语义就变了。宁可少删，不可错删。
+
+## 在管线里的位置
+
+DCE 会在 `-O1` 之后反复出现：instcombine 化简完、循环优化结束、内联之后都会清理一次。ADCE 更常出现在管线末端，因为它能同时收拾控制流。
+
+## 自己跑一遍
+
+```bash
+opt -passes=dce -S demo.ll -o -
+opt -passes=adce -S demo.ll -o -
+```
+
+构造一个「死代码在分支里」的例子，对比两者输出：你会看到 ADCE 把整块不可达的 CFG 也一起删掉。

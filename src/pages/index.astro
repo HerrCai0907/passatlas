@@ -1,0 +1,382 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import PassCard from '../components/PassCard.astro';
+import StepPlayer from '../components/StepPlayer';
+import { getDemo } from '../demos/registry';
+import { roadmap } from '../data/roadmap';
+import { categories, categoryOrder } from '../lib/categories';
+import { url } from '../lib/url';
+
+const passes = (await getCollection('passes', ({ data }) => data.status === 'ready')).sort(
+  (a, b) => a.data.order - b.data.order,
+);
+
+const featured = passes.slice(0, 3);
+const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
+
+---
+
+<BaseLayout>
+  <section class="hero">
+    <div class="container hero__grid">
+      <div class="hero__copy">
+        <p class="eyebrow">PassAtlas · Vol. 1</p>
+        <h1 class="hero__title">
+          <span class="hero__title-en">LLVM</span>
+          <span class="hero__title-zh">Pass 图鉴</span>
+        </h1>
+        <p class="lead hero__lead">
+          每一个 pass 都是一次变形。这里把输入 IR、判定逻辑、输出 IR 拆成可以单步回放的帧，
+          让你看清它<em>为什么</em>这么改。
+        </p>
+        <div class="hero__actions">
+          <a class="btn btn--primary" href={url('/passes/mem2reg/')}>
+            从 mem2reg 开始 <span class="btn__arrow" aria-hidden="true">→</span>
+          </a>
+          <a class="btn btn--ghost" href={url('/passes/')}>浏览图鉴</a>
+        </div>
+        <dl class="hero__stats">
+          <div>
+            <dt>已上线</dt>
+            <dd>{String(passes.length).padStart(2, '0')}</dd>
+          </div>
+          <div>
+            <dt>分类</dt>
+            <dd>{String(categoryOrder.length).padStart(2, '0')}</dd>
+          </div>
+          <div>
+            <dt>后端依赖</dt>
+            <dd>00</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="hero__demo">
+        {
+          heroDemo ? (
+            <StepPlayer demo={heroDemo} compact autoplay loop caption="自动播放" client:load />
+          ) : null
+        }
+        <p class="hero__hint">
+          <span aria-hidden="true">●</span> 这是真实的 mem2reg 改写过程，点按或用键盘 ← → 单步。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section how">
+    <div class="container">
+      <header class="sec-head">
+        <p class="eyebrow">How to read</p>
+        <h2>一页图鉴，三步读完</h2>
+        <p class="lead">不做流水账式的 pass 列表，每页都按同一套骨架组织，方便横向对比。</p>
+      </header>
+
+      <ol class="how__steps">
+        <li>
+          <span class="how__no">01</span>
+          <h3>先读问题</h3>
+          <p>「它解决什么问题」永远排在最前。不知道优化目标，算法细节只会变成记忆负担。</p>
+        </li>
+        <li>
+          <span class="how__no">02</span>
+          <h3>再单步走</h3>
+          <p>在分步动画里逐帧看 IR：新增的行是绿色，消失的行是红色，高亮的是这一步的关注点。</p>
+        </li>
+        <li>
+          <span class="how__no">03</span>
+          <h3>最后自己跑</h3>
+          <p>每页都附了 <code>opt</code> 命令。复制下来换个输入，比读十遍伪代码更有用。</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section atlas">
+    <div class="container">
+      <header class="sec-head sec-head--split">
+        <div>
+          <p class="eyebrow">Atlas</p>
+          <h2>图鉴目录</h2>
+        </div>
+        <a class="btn btn--ghost" href={url('/passes/')}>
+          全部 {passes.length} 篇 <span class="btn__arrow" aria-hidden="true">→</span>
+        </a>
+      </header>
+
+      <nav class="cats" aria-label="按分类浏览">
+        {
+          categoryOrder.map((id) => (
+            <a class={`chip chip--cat cat-${id}`} href={`${url('/passes/')}#${id}`}>
+              {categories[id].zh}
+            </a>
+          ))
+        }
+      </nav>
+
+      <div class="grid">
+        {featured.map((pass) => <PassCard pass={pass} />)}
+      </div>
+
+      <p class="atlas__more">
+        路线图上还有 {roadmap.length} 个 pass 正在绘制，
+        <a href={`${url('/passes/')}#roadmap`}>查看完整路线图 <span aria-hidden="true">→</span></a>
+      </p>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  /* ---------- hero ---------- */
+  .hero {
+    position: relative;
+    padding-block: clamp(44px, 7vw, 92px) clamp(40px, 6vw, 72px);
+    overflow: hidden;
+  }
+
+  .hero__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
+    align-items: center;
+    gap: clamp(32px, 5vw, 64px);
+  }
+
+  .hero__title {
+    margin-top: 14px;
+    display: grid;
+    gap: 2px;
+    font-size: clamp(46px, 7.4vw, 88px);
+    line-height: 0.96;
+    letter-spacing: -0.035em;
+  }
+
+  .hero__title-en {
+    font-family: var(--font-mono);
+    font-size: 0.42em;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    color: var(--muted);
+  }
+
+  .hero__title-zh {
+    font-family: var(--font-display);
+    font-weight: 600;
+  }
+
+  .hero__lead {
+    margin-top: 22px;
+    max-width: 46ch;
+  }
+
+  .hero__lead em {
+    font-style: normal;
+    color: var(--accent-strong);
+    box-shadow: inset 0 -0.42em 0 var(--accent-soft);
+  }
+
+  .hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 28px;
+  }
+
+  .hero__stats {
+    display: flex;
+    gap: 36px;
+    margin: 36px 0 0;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+
+  .hero__stats div {
+    display: grid;
+    gap: 2px;
+  }
+
+  .hero__stats dt {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .hero__stats dd {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 26px;
+    line-height: 1.1;
+    color: var(--ink);
+  }
+
+  .hero__demo {
+    position: relative;
+    min-width: 0;
+  }
+
+  .hero__demo::before {
+    content: '';
+    position: absolute;
+    inset: -14px;
+    z-index: -1;
+    border: 1px dashed var(--line-strong);
+    border-radius: calc(var(--radius-lg) + 8px);
+    opacity: 0.7;
+  }
+
+  .hero__hint {
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  .hero__hint span {
+    color: var(--ok);
+    margin-right: 4px;
+    font-size: 9px;
+  }
+
+  /* ---------- 通用 section 头 ---------- */
+  .sec-head {
+    max-width: 680px;
+    margin-bottom: clamp(26px, 4vw, 40px);
+  }
+
+  .sec-head h2 {
+    margin-top: 8px;
+    font-size: clamp(28px, 3.4vw, 38px);
+  }
+
+  .sec-head .lead {
+    margin-top: 12px;
+    font-size: 16px;
+  }
+
+  .sec-head--split {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 20px;
+    max-width: none;
+  }
+
+  /* ---------- 三步 ---------- */
+  .how__steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+  }
+
+  .how__steps li {
+    padding: 26px 28px 0 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .how__steps li:last-child {
+    border-right: 0;
+  }
+
+  .how__steps li + li {
+    padding-left: 28px;
+  }
+
+  .how__no {
+    font-family: var(--font-display);
+    font-size: 15px;
+    color: var(--accent);
+  }
+
+  .how__steps h3 {
+    margin-top: 10px;
+    font-size: 21px;
+  }
+
+  .how__steps p {
+    margin-top: 8px;
+    font-size: 14.5px;
+    color: var(--muted);
+  }
+
+  .how__steps code {
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    font-size: 0.86em;
+  }
+
+  /* ---------- 目录 ---------- */
+  .cats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 26px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .atlas__more {
+    margin-top: 22px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .atlas__more a {
+    color: var(--accent-strong);
+    text-decoration: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    padding-bottom: 1px;
+  }
+
+  .atlas__more a:hover {
+    border-bottom-color: var(--accent);
+  }
+
+  @media (max-width: 980px) {
+    .hero__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 760px) {
+    .how__steps {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .how__steps li,
+    .how__steps li + li {
+      padding: 22px 0;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .sec-head--split {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .hero__stats {
+      gap: 24px;
+    }
+  }
+</style>
