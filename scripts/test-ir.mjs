@@ -3,7 +3,7 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
-import { makeStep } from '../src/demos/types.ts';
+import { makeDemo, makeStep } from '../src/demos/types.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
@@ -257,6 +257,25 @@ entry:
   assert.equal(commented.functions[0].blocks.length, 1);
   assert.equal(commented.functions[0].blocks[0].instructions.length, 1);
   assert.equal(commented.functions[0].blocks[0].instructions[0].text, 'ret void');
+}
+
+// ---- 播放器高度预留：maxLines 取所有步骤、两侧的最大行数 ----
+{
+  const demo = makeDemo('height', 'height', [
+    {
+      title: '短',
+      note: '',
+      before: 'define void @f() {\nentry:\n  ret void\n}',
+      after: 'define void @f() {\nentry:\n  ret void\n}',
+    },
+    {
+      title: '长',
+      note: '',
+      before: 'define void @f() {\nentry:\n  %x = add i32 1, 2\n  ret void\n}',
+      after: 'define void @f() {\nentry:\n  ret void\n}',
+    },
+  ]);
+  assert.equal(demo.maxLines, 5);
 }
 
 console.log('IR parser & CFG layout: all assertions passed');

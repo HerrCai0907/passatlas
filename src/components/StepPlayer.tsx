@@ -66,34 +66,53 @@ function graphOfStep(step: DemoStep): StepGraph {
 function CFGPanel({
   label,
   side,
-  graph,
+  graphs,
+  index,
   marks,
   delta,
 }: {
   label: string;
   side: 'before' | 'after';
-  graph: CFGGraph | null;
+  /** 这个面板在所有步骤里的图；用最大值预留高度，切步时尺寸保持不变 */
+  graphs: ReadonlyArray<CFGGraph | null>;
+  index: number;
   marks?: ReadonlyMap<string, InstructionMark>;
   delta?: { count: number; kind: 'add' | 'del' };
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const [scale, setScale] = useState(1);
+  const [width, setWidth] = useState(0);
 
   useEffect(() => {
     const element = ref.current;
-    if (!element || !graph) return;
+    if (!element) return;
 
-    const fit = () => {
-      const available = element.clientWidth - 16;
-      if (available <= 0) return;
-      setScale(Math.min(1, Math.max(0.25, available / graph.width)));
-    };
-
+    const fit = () => setWidth(element.clientWidth);
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [graph]);
+  }, []);
+
+  // 一次性算出所有步骤的缩放比例与画布高度：取其中最高的一步固定视口，
+  // 这样即使某一步的指令更长、图更高，面板也不会把下方按钮顶下去。
+  const layout = useMemo(() => {
+    const available = width - 16;
+    const scales = graphs.map((graph) => {
+      if (!graph || available <= 0) return 1;
+      return Math.min(1, Math.max(0.25, available / graph.width));
+    });
+    const height = graphs.reduce(
+      (max, graph, i) => (graph ? Math.max(max, graph.height * (scales[i] ?? 1)) : max),
+      0,
+    );
+    return { scales, height };
+  }, [graphs, width]);
+
+  const graph = graphs[index] ?? null;
+  const scale = layout.scales[index] ?? 1;
+  // 视口是 border-box，padding 为 10px；高度取画布最大值，绝不随步骤收缩。
+  // width 为 0 时还没测量出真实宽度，交给 CSS 的 min-height，避免 SSR 用未缩放高度撑爆面板。
+  const viewportHeight = width > 0 && layout.height > 0 ? layout.height + 20 : undefined;
 
   return (
     <section
@@ -115,7 +134,11 @@ function CFGPanel({
           ) : null}
         </span>
       </header>
-      <div className="pa-cfg__viewport" ref={ref}>
+      <div
+        className="pa-cfg__viewport"
+        ref={ref}
+        style={viewportHeight ? { height: viewportHeight } : undefined}
+      >
         {graph ? (
           <CFGCanvas graph={graph} scale={scale} interactive={false} marks={marks} />
         ) : (
@@ -204,6 +227,13 @@ export default function StepPlayer({
   const step = steps[index];
 
   const graphs = useMemo(() => steps.map(graphOfStep), [steps]);
+  const cfgSides = useMemo(
+    () => ({
+      before: graphs.map((graph) => graph.before),
+      after: graphs.map((graph) => graph.after),
+    }),
+    [graphs],
+  );
 
   const goTo = useCallback(
     (next: number) => {
@@ -295,7 +325,14 @@ export default function StepPlayer({
         </span>
       </header>
 
-      <p className="pa-title">{step.title}</p>
+      <p className="pa-title">
+        <span className="pa-title__text">{step.title}</span>
+        <span className="pa-title__ghost" aria-hidden="true">
+          {steps.map((item, i) => (
+            <span key={i}>{item.title}</span>
+          ))}
+        </span>
+      </p>
 
       {mode === 'cfg' ? (
         <>
@@ -304,29 +341,41 @@ export default function StepPlayer({
             <CFGPanel
               label="before"
               side="before"
-              graph={current?.before ?? null}
+              graphs={cfgSides.before}
+              index={index}
               marks={current?.diff?.before}
               delta={{ count: current?.diff?.removed ?? 0, kind: 'del' }}
             />
             <CFGPanel
               label="after"
               side="after"
-              graph={current?.after ?? null}
+              graphs={cfgSides.after}
+              index={index}
               marks={current?.diff?.after}
               delta={{ count: current?.diff?.added ?? 0, kind: 'add' }}
             />
           </div>
         </>
       ) : (
-        <div className="pa-panes">
+        <div
+          className="pa-panes"
+          style={{ '--pa-ir-lines': demo.maxLines } as CSSProperties}
+        >
           <IRPane label="before" side="before" lines={step.before} stepIndex={index} />
           <IRPane label="after" side="after" lines={step.after} stepIndex={index} />
         </div>
       )}
 
-      <p className="pa-note" aria-live="polite">
-        {step.note}
-      </p>
+      <div className="pa-note">
+        <p className="pa-note__live" aria-live="polite">
+          {step.note}
+        </p>
+        <span className="pa-note__ghost" aria-hidden="true">
+          {steps.map((item, i) => (
+            <span key={i}>{item.note}</span>
+          ))}
+        </span>
+      </div>
 
       <div className="pa-controls">
         <button

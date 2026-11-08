@@ -24,6 +24,11 @@ export interface Demo {
   id: string;
   label: string;
   steps: DemoStep[];
+  /**
+   * 所有步骤、前后两侧 IR 的最大行数，构建期算好。
+   * 播放器据此为 IR 面板预留固定高度，切步时按钮不会上下跳动。
+   */
+  maxLines: number;
 }
 
 export interface StepSource {
@@ -123,7 +128,13 @@ export function makeStep(source: StepSource): DemoStep {
 export function makeDemo(
   id: string,
   label: string,
-  steps: StepSource[],
+  sources: StepSource[],
 ): Demo {
-  return { id, label, steps: steps.map(makeStep) };
+  const steps = sources.map(makeStep);
+  const maxLines = steps.reduce(
+    (max, step) => Math.max(max, step.before.length, step.after.length),
+    0,
+  );
+
+  return { id, label, steps, maxLines };
 }

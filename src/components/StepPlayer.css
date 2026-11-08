@@ -98,12 +98,30 @@
 }
 
 .pa-title {
+  display: grid;
   margin: 0;
   padding: 12px 16px;
   font-size: 13.5px;
   font-weight: 550;
   line-height: 1.5;
   color: #eef1f7;
+}
+
+/* 所有步骤的标题叠在同一个网格单元里，容器高度取最高的一步，切步不再伸缩 */
+.pa-title__text,
+.pa-title__ghost {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.pa-title__ghost {
+  display: grid;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pa-title__ghost > span {
+  grid-area: 1 / 1;
 }
 
 /* ---------- CFG 模式 ---------- */
@@ -286,7 +304,8 @@
   padding: 8px 0;
   list-style: none;
   overflow-x: auto;
-  min-height: 232px;
+  /* --pa-ir-lines 由构建期算出的 Demo.maxLines 注入；1.72em 与 .pa-line 的行高保持同步 */
+  min-height: max(232px, calc(var(--pa-ir-lines, 8) * 1.72em + 16px));
 }
 
 .pa-line {
@@ -347,6 +366,7 @@
 }
 
 .pa-note {
+  display: grid;
   margin: 0;
   padding: 12px 16px;
   border-top: 1px solid var(--console-line);
@@ -354,6 +374,24 @@
   line-height: 1.7;
   color: #9aa4b8;
   background: rgba(0, 0, 0, 0.16);
+}
+
+/* 说明文字也按所有步骤里最长的一段占位，避免换行数变化推动下方控制条 */
+.pa-note__live,
+.pa-note__ghost {
+  grid-area: 1 / 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.pa-note__ghost {
+  display: grid;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pa-note__ghost > span {
+  grid-area: 1 / 1;
 }
 
 .pa-controls {
@@ -475,7 +513,7 @@
 }
 
 .pa-player--compact .pa-ir {
-  min-height: 146px;
+  min-height: max(146px, calc(var(--pa-ir-lines, 8) * 1.72em + 12px));
   padding-block: 6px;
 }
 
@@ -491,10 +529,6 @@
 .pa-player--compact .pa-note {
   padding: 10px 14px;
   font-size: 12px;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 @media (max-width: 900px) {
@@ -508,9 +542,12 @@
     grid-template-columns: 1fr;
   }
 
-  .pa-ir {
+  /* 窄屏两个面板纵向排列：每块用同一个最大行数固定高度，超出部分在块内滚动 */
+  .pa-ir,
+  .pa-player--compact .pa-ir {
+    height: min(calc(var(--pa-ir-lines, 8) * 1.72em + 16px), 260px);
     min-height: 0;
-    max-height: 260px;
+    max-height: none;
     overflow-y: auto;
   }
 
