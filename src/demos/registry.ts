@@ -6,6 +6,7 @@ import { heroDemo } from './hero.ts';
 import { inlineFunctionDemo } from './inline-function.ts';
 import { instcombineDemo } from './instcombine.ts';
 import { mem2regDemo } from './mem2reg.ts';
+import { sampleProfileInlineDemo } from './sample-profile-inline.ts';
 
 /**
  * pass 内容里的 frontmatter `demo: <id>` 通过这里找到对应的分步演示。
@@ -17,6 +18,7 @@ export const demos: Record<string, Demo> = {
   'inline-function': inlineFunctionDemo,
   instcombine: instcombineDemo,
   mem2reg: mem2regDemo,
+  'sample-profile-inline': sampleProfileInlineDemo,
 };
 
 export function getDemo(id?: string, locale: Locale = defaultLocale): Demo | undefined {

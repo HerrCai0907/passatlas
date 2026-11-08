@@ -1,0 +1,173 @@
+---
+title: sample-profile-inline
+subtitle: Context-driven inlining
+summary: Walk the profiled call graph top-down and queue call sites by sample count; hot call sites are expanded immediately and the call sites they expose queue again with a longer context. The pass itself is sample-profile.
+category: interproc
+difficulty: 3
+status: ready
+order: 6
+stage: ['-O2', '-O3']
+tags: ['CSSPGO', 'SamplePGO', 'PseudoProbe', 'Context']
+demo: sample-profile-inline
+source: llvm/lib/Transforms/IPO/SampleProfile.cpp
+updated: 2026-11-08
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+The payoff of inlining depends on how often the edge actually runs. `InlineCost` knows what the IR looks like; it does not know whether `foo` is called from a loop that runs a hundred thousand times or from an error path that runs three times.
+
+AutoFDO supplies "how hot" but not "hot in which context". The same `foo`, called from `main` and from `parse`, can differ in hotness by three orders of magnitude. With only per-function counts the inliner has to pick one answer for both.
+
+CSSPGO lets samples carry their call stack. Pseudo probes, or the inline stack in DILocations, record who inlined whom, so the profile becomes a context tree: `foo@main` and `foo@parse` are two nodes with their own counts. Once context exists, inlining has to expand the caller first. Otherwise the callee's call site never lands inside the `main:foo` prefix.
+
+That is exactly what the SCC inliner cannot do: it walks bottom-up (see <I18nLink href="/passes/inliner/">inliner</I18nLink>), while context is a prefix and can only be materialised top-down. So LLVM moved inlining into `SampleProfileLoader`.
+
+The naming needs a sentence. In the pipeline this is `-passes=sample-profile` (`SampleProfileLoaderPass`, a ModulePass); the name LLVM gives the inline driver itself is `sample-profile-inline` (`InlinePass::SampleProfileInliner`), and that is what remarks and `-debug-only` use. This page covers the decision; cloning and CFG stitching after acceptance still belong to <I18nLink href="/passes/inline-function/">inline-function</I18nLink>.
+
+## Algorithm
+
+In one sentence: **the profiled call graph fixes the order, call-site sample counts order the queue, hotness plus legality decides, and the context tree keeps the books.**
+
+### Input: a context tree
+
+In probe mode every probe carries a function GUID, a probe id, and a `Factor`. The first two identify "which line in which function"; `Factor` records duplicated call sites. When LTO prelink copies one call site into two, each copy gets a share of the samples instead of both counting the full amount.
+
+The profile text is a trie. Each node is `(call site location, callee)`, and the path from the root is the context. `main:foo:bar` means "`bar` is called by `foo`, and `foo` sits in the context of `main`". An inlining decision is a pruning decision on this tree.
+
+### Order: SCCs of the profiled graph, reversed
+
+`buildFunctionOrder` builds a `ProfiledCallGraph` from **profile call edges only, deliberately ignoring static ones**. The source comment lists four reasons; the short version is that after LTO prelink the static graph no longer matches execution order — inlined callees disappear from it, and header functions defined in several TUs leave misleading edges.
+
+It then runs `scc_iterator` over the profiled graph, orders members inside an SCC by edge weight (`-sort-profiled-scc-member`, on by default), and finally reverses the whole list to get a top-down order with callers first.
+
+Note that these SCCs are only a **sorting device**, not the CGSCC pass manager: there is no `ModuleToPostOrderCGSCCPassAdaptor`, no "finish the whole SCC before moving on" rule, and functions are processed one at a time.
+
+### Candidates: a priority queue with BFS
+
+For one function, every call becomes an `InlineCandidate`:
+
+A candidate is a four-tuple:
+
+- `CallInstr`: the call itself;
+- `CalleeSamples`: the callee's profile node in the **current context**;
+- `CallsiteCount`: callee head samples × probe `Factor`;
+- `CallsiteDistribution`: the prorated share for a duplicated call site, 1.0 by default.
+
+The maximum heap is keyed on `CallsiteCount`. An accepted candidate is inlined right away, and the new call sites in `IFI.InlinedCallSites` are pushed back — so this is a **priority-guided BFS**, not a single sweep over the function.
+
+Ties go to the candidate with fewer sample lines (the smaller function), and finally to GUID order, which keeps the sequence stable across builds.
+
+```text
+queue = all call sites, ordered by CallsiteCount
+while queue not empty and instructions(function) < budget:
+  c = queue.pop_max()
+  if c cannot be inlined: continue
+  if c.CallsiteCount > hot threshold: cost limit = 3000
+  elif cold call sites allowed:       cost limit = 45
+  else:                               continue
+  if InlineFunction(c):
+    markContextSamplesInlined(c.CalleeSamples)
+    queue.push(newly exposed call sites)   // one level longer context
+```
+
+### The decision: four gates
+
+The order inside `shouldInlineCandidate` is worth memorising:
+
+1. **Replay advisor**: with `-sample-profile-inline-replay`, the replay file wins and returns `Always` or `Never` outright.
+2. **Hotness split**: only `CallsiteCount > PSI->getHotCountThreshold()` counts as a hot call site, and that raises the cost limit to 3000. Otherwise it is a cold call site with a limit of 45 — and under CSSPGO `-sample-profile-inline-size` is on by default, so a cold but tiny call site is still taken.
+3. **Cost only checks legality**: `getInlineCost` runs with `ComputeFullInlineCost = true` so the whole callee is scanned, but only `isNever()` and `isAlways()` are honoured — hard rejects such as `noinline`, `optnone`, varargs or `blockaddress` stop here. The number itself is only compared against 3000 / 45, to keep a huge function out.
+4. **Preinliner replay**: `llvm-profgen --csspgo-preinliner` (on by default) already made a global decision from machine-code byte sizes when the profile was generated, and stored it as `ContextShouldBeInlined`. At compile time `-sample-profile-use-preinliner` turns that into `Always`.
+
+Stacked in order, that is the whole priority list:
+
+- **`alwaysinline` / `noinline` / `optnone`**: `InlineCost` returns `isAlways()` / `isNever()` and hotness is irrelevant.
+- **Hot call site** (above the PSI hot threshold): cost limit 3000.
+- **Cold call site**: limit 45; skipped entirely when `-sample-profile-inline-size` is off.
+- **Preinliner marked `ContextShouldBeInlined`**: `Always`, cost ignored.
+- **Function exceeds its budget**: every remaining candidate is dropped.
+
+### Budget: one total per function
+
+Top-down inlining expands many levels in a row; each individual call looks fine and together they blow up the caller. So each function gets a budget before processing starts:
+
+```text
+SizeLimit = clamp(instructions × 12, 100, 10000)
+```
+
+`12` comes from `-sample-profile-inline-growth-limit`, the bounds from `-sample-profile-inline-limit-min` / `-sample-profile-inline-limit-max`. The loop checks `F.getInstructionCount() < SizeLimit` and stops when it is hit, bumping `NumCSInlinedHitGrowthLimit`. Under `-sample-profile-inline-replay` the budget is unlimited, because a replay has to match the recorded decisions.
+
+### Bookkeeping: the context tree has to follow
+
+The first thing a successful inline does is not rewrite IR, it updates the profile:
+
+- `markContextSamplesInlined` marks the context node as `InlinedContext`; it will no longer be merged into the base profile;
+- duplicated call sites multiply their `Factor` down the stack and write it back to the new instructions' `PseudoProbe` (`setProbeDistributionFactor`);
+- call sites that were not inlined stay in the tree. When the callee itself is processed, `getBaseSamplesFor(F, MergeContext=true)` calls `promoteMergeContextSamplesTree`, promoting leftover contexts such as `main:foo` to the root and merging them into `foo`'s base profile.
+
+Non-CS profiles have no context tree; the equivalent is `-sample-profile-merge-inlinee` (on by default): samples of a call site the loader gave up on are merged back into the outlined copy. Both paths serve one purpose — **every function still present in the IR keeps a profile that matches it**.
+
+### Afterwards: weights come from the inline stack
+
+Weights are annotated only after inlining (`computeAndPropagateWeights` → `generateMDProfMetadata`). Nothing needs to be copied into the inlined body: `findFunctionSamples` walks the instruction's DILocation inline stack up the profile tree to the right node, and probe mode is more direct still — `FS->findSamplesAt(Probe->Id, Probe->Discriminator)`.
+
+That is the real difference from line-number AutoFDO: **the context is the key, and inlining merely makes the key longer**.
+
+## Cost and pitfalls
+
+- **Top-down inlining easily blows up the caller.** Every single call looks profitable and together they are a disaster; the `× 12` budget is the hard brake, and once it trips the rest of the function's candidates are dropped with no partial repair.
+- **The thresholds are empirical.** 3000 / 45 / 12 all move between versions and targets; the actual output of `-pass-remarks=sample-profile-inline` is more reliable than memorising numbers.
+- **Recursion is allowed by default.** Under CSSPGO `-sample-profile-recursive-inline` is on, and `AllowRecursiveCall` reaches the cost analysis; direct self-recursion (callee == caller) is still skipped in the queue.
+- **The outlined copy suddenly goes cold.** Once its only call site is inlined, `main:foo` is marked inlined, the outlined `foo` has no samples left and may be optimised as a cold function. This is why `-sample-profile-merge-inlinee` exists, and it is a common source of "the function was not deleted but it went cold".
+- **Functions without samples do not participate at all.** `runOnFunction` returns immediately when the base profile is empty — not "conservatively inline by cost", but no inlining at all.
+- **A stale profile is worse than none.** When probe validation fails, `SalvageStaleProfile` tries to repair by default; if that fails the whole module is rejected (`rejectHighStalenessProfile`) instead of being force-fed.
+- **It coexists with the SCC inliner.** Sample PGO in prelink sets the SCC inliner's `HotCallSiteThreshold` to 0 so backend profile annotation stays accurate; otherwise the SCC inliner keeps handling the medium call sites the profile did not select. To hand everything back, use `-disable-sample-loader-inlining`.
+
+## Where it sits in the pipeline
+
+On the generation side, `-fprofile-sample-generate` inserts `pseudo-probe` (`SampleProfileProbePass`) at the very front of the pipeline to put probes into the IR; after one run, `llvm-profgen`'s `CSPreInliner` makes a global pre-inlining pass and writes its decisions back into the profile.
+
+On the consumption side, `SampleProfileLoaderPass` sits in the front of the simplification pipeline, right after the early FPM. The source comment is blunt about why: annotation has to happen while debug info is still fresh, or the inline stacks no longer line up. It is followed by ICP, OpenMPOpt, the attributor and IPSCCP, and only later by `ModuleInlinerWrapperPass` (`cgscc-inline`) in the optimisation pipeline.
+
+ThinLTO splits this in two: prelink can only *record* external inline candidates (`findExternalInlineCandidate`), while the real profile load and inlining happen post-link; with a flattened profile, post-link does not re-read it.
+
+The other LLVM inlining variants (`always-inline`, `module-inline`, `partial-inliner`) all reuse `InlineCost`, but only this one decides with context plus hotness. For the contrast with the SCC inliner, go back to <I18nLink href="/passes/inliner/">inliner</I18nLink>.
+
+## Run it yourself
+
+```llvm
+; profile: main 100000 / foo@main 98000 / bar@main:foo 95000
+define i32 @main() {
+entry:
+  %a = call i32 @foo(i32 7)
+  ret i32 %a
+}
+
+define i32 @foo(i32 %v) {
+entry:
+  %r = call i32 @bar(i32 %v)
+  ret i32 %r
+}
+```
+
+```bash
+# A plain AutoFDO text profile does not use the priority queue; opt in explicitly
+opt -passes=sample-profile -sample-profile-file=main.prof \
+    -sample-profile-prioritized-inline \
+    -pass-remarks=sample-profile-inline \
+    -pass-remarks-missed=sample-profile-inline \
+    -S demo.ll -o /dev/null
+```
+
+The remark pass name is the title of this page: accepted inlines show up under `-pass-remarks`, rejections under `-pass-remarks-missed`, in a form like:
+
+```text
+sample-profile-inline: inlined into ... with (cost=..., threshold=3000)
+```
+
+To get comparable numbers, use a profile with context (a CS profile from `llvm-profgen`, or a pseudo-probe build) and drop `-sample-profile-prioritized-inline` — such a profile enables the priority queue automatically and also replays the preinliner's decisions. `NumCSInlined` in `-stats` is the total for the run.
+
+This machine has no compiled `opt`, so the pass names and flags above were cross-checked against the current `PassRegistry.def` and `SampleProfile.cpp` but not executed; the text profile format changes between versions, so nothing is invented here — use `opt -print-passes` and `llvm-profgen --help` for your build.
