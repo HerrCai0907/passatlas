@@ -194,7 +194,9 @@ Rules:
   (`focus`). CFG mode shows the same steps as before/after graphs; do not drop either mode.
 - CFG mode reuses `CFGCanvas` (non-interactive) so node geometry stays identical to `CFGViewer`.
 - Do not add new semantic colours without changing `tokens.css` and this file.
-- No layout shift between steps: panes have a `min-height`; keep IR snippets within it.
+- No layout shift between steps: IR mode reserves `Demo.maxLines` (computed at build time),
+  CFG mode reserves the tallest step's scaled graph, and title/note reserve the tallest copy.
+  Never let a step shrink the player — the controls must not move under the pointer.
 - Respect `prefers-reduced-motion`: autoplay must stop, and line-in animations are disabled in CSS.
 - Never require a mouse: every control has a keyboard path and an `aria-label`.
 
