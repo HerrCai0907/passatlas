@@ -306,6 +306,14 @@ export function parseIR(source: string, locale: Locale = defaultLocale): IRParse
   return { functions, issues };
 }
 
+/**
+ * CFG 一次只画一个函数。包含多个函数的 IR（例如内联改写的前后对比）
+ * 不能切到 CFG 模式，否则除了第一个函数之外的内容都会被静默丢掉。
+ */
+export function canRenderCFG(result: IRParseResult): boolean {
+  return result.functions.length <= 1;
+}
+
 /** 把解析结果还原成可读的 IR 文本（用于 CFG 视图的 IR 模式） */
 export function functionToIR(fn: IRFunction): string {
   const lines: string[] = [fn.header];

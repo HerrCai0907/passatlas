@@ -26,8 +26,13 @@
     background-color 0.15s var(--ease);
 }
 
-.vm button:hover {
+.vm button:hover:not(:disabled) {
   color: var(--ink);
+}
+
+.vm button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .vm button[aria-pressed='true'] {
