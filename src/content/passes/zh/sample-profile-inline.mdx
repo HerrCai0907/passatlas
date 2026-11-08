@@ -10,7 +10,7 @@ stage: ['-O2', '-O3']
 tags: ['CSSPGO', 'SamplePGO', 'PseudoProbe', 'Context']
 demo: sample-profile-inline
 source: llvm/lib/Transforms/IPO/SampleProfile.cpp
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -145,36 +145,52 @@ LLVM 的其它内联变体（`always-inline`、`module-inline`、`partial-inline
 
 ## 自己跑一遍
 
-```llvm
-; profile: main 100000 / foo@main 98000 / bar@main:foo 95000
-define i32 @main() {
-entry:
-  %a = call i32 @foo(i32 7)
-  ret i32 %a
+```c
+// demo.c
+__attribute__((noinline)) int bar(int v) {
+  return v * 2;
 }
 
-define i32 @foo(i32 %v) {
-entry:
-  %r = call i32 @bar(i32 %v)
-  ret i32 %r
+int foo(int v) {
+  return bar(v) + 1;
+}
+
+int main(void) {
+  return foo(7);
 }
 ```
 
+profile 的行号不是源码行号，而是 `line - 函数起始行` 的偏移：`main` 从第 9 行开始、第 10 行调用 `foo`，所以记的是 `1`。
+
+```text
+# demo.prof
+main:3000000:0
+ 1: 98000
+ 1: foo:98000
+  1: 95000
+  1: bar:95000
+```
+
 ```bash
-# 普通 AutoFDO 文本 profile 默认不走优先队列，显式打开这条路径
-opt -passes=sample-profile -sample-profile-file=main.prof \
-    -sample-profile-prioritized-inline \
+# 用 -disable-llvm-passes 留住调用点，否则 clang 自己的内联会先吃掉 foo
+clang -O1 -g -fprofile-sample-use=demo.prof -Xclang -disable-llvm-passes \
+      -S -emit-llvm demo.c -o demo.ll
+
+opt -passes=sample-profile -sample-profile-file=demo.prof \
     -pass-remarks=sample-profile-inline \
     -pass-remarks-missed=sample-profile-inline \
     -S demo.ll -o /dev/null
 ```
 
-remarks 的 pass 名就是本文标题：成功内联打到 `-pass-remarks`，被拒打到 `-pass-remarks-missed`，格式类似：
+第二条命令在 LLVM 23.1.4 上的输出：
 
 ```text
-sample-profile-inline: inlined into ... with (cost=..., threshold=3000)
+remark: demo.c:10:10: 'foo' inlined into 'main' to match profiling context with (cost=20, threshold=3000) at callsite main:1:10;
 ```
 
-想让数值一致，用带上下文的 profile（`llvm-profgen` 生成的 CS profile，或 pseudo-probe 版本）并去掉 `-sample-profile-prioritized-inline`——那种 profile 会自动打开优先队列，还会重放 preinliner 的决策。`-stats` 里的 `NumCSInlined` 是这次内联的总数。
+`bar` 不会跟进来：它带 `noinline`，`getInlineCost` 直接返回 `isNever()`。想看冷调用点那一档，把 `foo` 的样本改成 40 左右，加上 `-sample-profile-prioritized-inline -sample-profile-inline-size`，阈值会从 3000 变成 45；去掉 `-sample-profile-inline-size` 则直接拒绝。
 
-本机环境没有编译好的 `opt`，上面的 pass 名与 flag 按 LLVM 当前 `PassRegistry.def` 与 `SampleProfile.cpp` 校对，未实际执行；profile 的文本格式随版本变化，这里不虚构内容，以你手头 `opt -print-passes` 和 `llvm-profgen --help` 为准。
+手工写 IR 时还有两个坑：
+
+- 函数上没有 `"use-sample-profile"` 属性时，`skipProfileForFunction` 会把它整个跳过，表现是「profile 读进来了，但一条 `!prof` 都没有」。clang 的 `-fprofile-sample-use` 会自动加这个属性。
+- `getInlineCost` 返回 `isNever()` 时打的是 analysis remark，要加 `-pass-remarks-analysis=sample-profile-inline` 才看得到 `incompatible inlining`；`-pass-remarks-missed` 只覆盖 `NotInline` 那一路。

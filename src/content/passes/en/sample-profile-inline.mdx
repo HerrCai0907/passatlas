@@ -10,7 +10,7 @@ stage: ['-O2', '-O3']
 tags: ['CSSPGO', 'SamplePGO', 'PseudoProbe', 'Context']
 demo: sample-profile-inline
 source: llvm/lib/Transforms/IPO/SampleProfile.cpp
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -145,36 +145,52 @@ The other LLVM inlining variants (`always-inline`, `module-inline`, `partial-inl
 
 ## Run it yourself
 
-```llvm
-; profile: main 100000 / foo@main 98000 / bar@main:foo 95000
-define i32 @main() {
-entry:
-  %a = call i32 @foo(i32 7)
-  ret i32 %a
+```c
+// demo.c
+__attribute__((noinline)) int bar(int v) {
+  return v * 2;
 }
 
-define i32 @foo(i32 %v) {
-entry:
-  %r = call i32 @bar(i32 %v)
-  ret i32 %r
+int foo(int v) {
+  return bar(v) + 1;
+}
+
+int main(void) {
+  return foo(7);
 }
 ```
 
+Profile line numbers are not source lines; they are `line - function start line`. `main` starts at line 9 and calls `foo` on line 10, so the entry is `1`.
+
+```text
+# demo.prof
+main:3000000:0
+ 1: 98000
+ 1: foo:98000
+  1: 95000
+  1: bar:95000
+```
+
 ```bash
-# A plain AutoFDO text profile does not use the priority queue; opt in explicitly
-opt -passes=sample-profile -sample-profile-file=main.prof \
-    -sample-profile-prioritized-inline \
+# -disable-llvm-passes keeps the call site; otherwise clang's own inliner eats foo first
+clang -O1 -g -fprofile-sample-use=demo.prof -Xclang -disable-llvm-passes \
+      -S -emit-llvm demo.c -o demo.ll
+
+opt -passes=sample-profile -sample-profile-file=demo.prof \
     -pass-remarks=sample-profile-inline \
     -pass-remarks-missed=sample-profile-inline \
     -S demo.ll -o /dev/null
 ```
 
-The remark pass name is the title of this page: accepted inlines show up under `-pass-remarks`, rejections under `-pass-remarks-missed`, in a form like:
+The second command prints this on LLVM 23.1.4:
 
 ```text
-sample-profile-inline: inlined into ... with (cost=..., threshold=3000)
+remark: demo.c:10:10: 'foo' inlined into 'main' to match profiling context with (cost=20, threshold=3000) at callsite main:1:10;
 ```
 
-To get comparable numbers, use a profile with context (a CS profile from `llvm-profgen`, or a pseudo-probe build) and drop `-sample-profile-prioritized-inline` — such a profile enables the priority queue automatically and also replays the preinliner's decisions. `NumCSInlined` in `-stats` is the total for the run.
+`bar` does not follow: it carries `noinline`, so `getInlineCost` returns `isNever()`. To see the cold bucket, drop `foo`'s samples to about 40 and add `-sample-profile-prioritized-inline -sample-profile-inline-size`; the threshold becomes 45 instead of 3000. Without `-sample-profile-inline-size` the call site is rejected outright.
 
-This machine has no compiled `opt`, so the pass names and flags above were cross-checked against the current `PassRegistry.def` and `SampleProfile.cpp` but not executed; the text profile format changes between versions, so nothing is invented here — use `opt -print-passes` and `llvm-profgen --help` for your build.
+Two traps when writing IR by hand:
+
+- Without the `"use-sample-profile"` function attribute, `skipProfileForFunction` skips the function entirely: the profile loads but not a single `!prof` appears. clang's `-fprofile-sample-use` adds the attribute for you.
+- When `getInlineCost` returns `isNever()`, the remark is an analysis remark: only `-pass-remarks-analysis=sample-profile-inline` shows `incompatible inlining`. `-pass-remarks-missed` covers the `NotInline` path alone.
