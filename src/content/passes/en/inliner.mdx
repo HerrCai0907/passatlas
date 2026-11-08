@@ -9,7 +9,7 @@ order: 4
 stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['CGSCC', 'InlineCost', 'Threshold']
 source: llvm/lib/Transforms/IPO/Inliner.cpp
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 import SCCInlinerLabIsland from '../../../components/SCCInlinerLabIsland.astro';
@@ -138,14 +138,12 @@ opt -passes='print<inline-cost>' -disable-output demo.ll 2>&1
 opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
 ```
 
-The first command prints the cost analysis call by call, which pairs well with the "5 units per instruction" rule above. The second writes decisions to stderr in a form like:
+The first command prints the cost analysis call by call, which pairs well with the "5 units per instruction" rule above. The second writes decisions to stderr in a form like this (the sample callee is a single block, so the threshold is 225 plus the 50% single-block bonus):
 
 ```text
-inlined into ... with (cost=..., threshold=225)
+remark: <unknown>:0:0: 'scale' inlined into 'total' with (cost=..., threshold=337)
 ```
 
 The exact numbers vary with version and target. To see the rewrite as well, drop `-o /dev/null` and add `-S`; the result goes to stdout.
 
 If `opt` is a release build, `-debug-only=inline` is unavailable; `-pass-remarks=inline` is enough.
-
-This machine has no compiled `opt`, so the pass names above were cross-checked against the current LLVM `PassRegistry.def` but not executed; use `opt -print-passes` as the source of truth for your version.

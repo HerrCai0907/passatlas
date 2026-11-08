@@ -9,7 +9,7 @@ import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import { categories, categoryName, difficultyLabel } from '../lib/categories';
 import { passSlug, passSubtitle, type PassEntry } from '../lib/passes';
-import { site } from '../site';
+import { site, llvmSourceUrl } from '../site';
 import { url } from '../lib/url';
 
 interface Props {
@@ -94,7 +94,7 @@ const categoryLine =
         source && (
           <p class="pass__source">
             {t(locale, 'pass.sourcePrefix')}
-            <a href={`${site.llvmSource}/tree/main/${source}`} target="_blank" rel="noopener noreferrer">
+            <a href={llvmSourceUrl(source)} target="_blank" rel="noopener noreferrer">
               <code>{source}</code> ↗
             </a>
           </p>

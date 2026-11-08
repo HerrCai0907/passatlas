@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Cloning', 'ValueMap', 'CFG']
 demo: inline-function
 source: llvm/lib/Transforms/Utils/InlineFunction.cpp
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -89,7 +89,7 @@ entry ──> callee.entry.i ──> pos.i ──┐
 
 - `InlinedCallSites`：克隆进来的新 call，交给 `InlinerPass` 追加到 worklist；
 - 返回值 / 属性 / 调试信息的结果，供 pass 记录 remark；
-- pass 随后调用 `updateCGAndAnalysisManagerForCGSCC` 更新调用图、失效分析、必要时拆分 SCC。
+- pass 随后调用 `updateCGAndAnalysisManagerForCGSCCPass` 更新调用图、失效分析、必要时拆分 SCC。
 
 callee 如果 internal、零 live use、又不是 lib function，`InlinerPass` 会把函数体掏空并排队，最后统一 `CG.markDeadFunction`。这一步在 `InlineFunction` 之外，属于 pass 的收尾。
 
@@ -145,14 +145,12 @@ opt -passes='cgscc(inline)' -S demo.ll -o -
 opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
 ```
 
-第一条命令应当看到 `@pick` 被展开进 `@caller`：caller 里出现 `%c.i`、`%pos.i`、`%neg.i` 和 `%cont`，`%r` 变成 `phi`，随后 `@pick` 被删除。第二条把决策打到 stderr：
+第一条命令应当看到 `@pick` 被展开进 `@caller`：caller 里出现 `%c.i`、`%pos.i`、`%neg.i`，两个 `ret` 汇入 `%pick.exit`，call 的结果换成一个 `phi`（LLVM 23 里叫 `%r1`），随后 `@pick` 被删除。第二条把决策打到 stderr：
 
 ```text
-inlined into ... with (cost=..., threshold=225)
+remark: <unknown>:0:0: 'pick' inlined into 'caller' with (cost=..., threshold=225)
 ```
 
-块名和是否保留空 entry 块可能因版本而异；以 verifier 通过和 `phi` incoming 完整为准，不要依赖具体名字。
+continuation 块名（`%pick.exit`）、PHI 结果名（`%r1`）和是否保留空 entry 块都可能因版本而异；以 verifier 通过和 `phi` incoming 完整为准，不要依赖具体名字。
 
 如果 `opt` 是 asserts build，可以加 `-debug-only=inline` 看每一步；release build 用 `-pass-remarks=inline`。
-
-本机环境没有编译好的 `opt`，上面的 pass 名按 LLVM 当前 `PassRegistry.def` 校对，未实际执行；不同版本以 `opt -print-passes` 为准。

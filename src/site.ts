@@ -7,6 +7,9 @@ import type { Locale } from './i18n/config';
  */
 const repoFromEnv = import.meta.env.PUBLIC_REPO_URL as string | undefined;
 
+/** LLVM 23.1.4 release commit (llvmorg-23.1.4^{}). Pin every source link to it. */
+const llvmCommit = '7a941dfb2877a0b8cf30323fefa85ad019e0b0f5';
+
 export const site = {
   name: 'PassAtlas',
   nameZh: 'LLVM Pass 图鉴',
@@ -19,12 +22,19 @@ export const site = {
     zh: '用可单步、可回退的动画拆解 LLVM 优化管线中的各个 pass：输入 IR、判定逻辑、输出 IR，以及它在 -O2 里的位置。全站静态，无需登录。',
     en: 'Step-by-step, reversible animations break down the passes in the LLVM optimisation pipeline: input IR, decision logic, output IR, and where the pass sits in -O2. Fully static, no sign-in.',
   },
-  llvmVersion: 'LLVM 21',
+  llvmVersion: 'LLVM 23.1.4',
+  llvmCommit,
   github: repoFromEnv || 'https://github.com/passatlas/passatlas',
   llvmDocs: 'https://llvm.org/docs/Passes.html',
   llvmSource: 'https://github.com/llvm/llvm-project',
+  llvmTree: `https://github.com/llvm/llvm-project/tree/${llvmCommit}`,
   license: 'MIT',
 } as const;
+
+/** Permanent link to one LLVM source file: a commit hash, never a moving branch. */
+export function llvmSourceUrl(path: string): string {
+  return `${site.llvmSource}/blob/${site.llvmCommit}/${path}`;
+}
 
 export function siteTitle(locale: Locale): string {
   return locale === 'zh' ? `${site.name} · ${site.nameZh}` : `${site.name} · ${site.nameEn}`;
