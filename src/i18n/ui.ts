@@ -98,6 +98,7 @@ const zh = {
 
   'player.group': '{name} 分步演示',
   'player.mode': '分步演示的展示模式',
+  'player.cfgUnavailable': '多函数 IR 不支持 CFG 视图，已固定使用 IR 文本',
   'player.cfgBefore': '改写前的控制流图',
   'player.cfgAfter': '改写后的控制流图',
   'player.irBefore': '改写前的 IR',
@@ -300,6 +301,7 @@ const en: Messages = {
 
   'player.group': '{name} step-by-step demo',
   'player.mode': 'Step player display mode',
+  'player.cfgUnavailable': 'CFG view is unavailable for multi-function IR; showing IR text',
   'player.cfgBefore': 'Control-flow graph before the rewrite',
   'player.cfgAfter': 'Control-flow graph after the rewrite',
   'player.irBefore': 'IR before the rewrite',
