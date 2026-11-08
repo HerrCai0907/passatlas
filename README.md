@@ -11,6 +11,7 @@
 ## 特性
 
 - **分步动画**：before / after 双栏对照，构建期自动做行级 diff；绿线是新增、红线是删除、琥珀色是「看这里」。支持 `←` `→` 单步、`空格` 播放、速度调节与跳步。
+- **CFG 视图**：把任意 IR 按基本块切成有向图，节点里直接放指令。循环回边用虚线、条件分支的 `true` / `false` 分开着色，点击基本块高亮相关边。
 - **100% 静态**：构建产物是纯 HTML / CSS / JS，无后端、无数据库、无追踪脚本，扔进任何静态托管都能跑，也可以完全离线阅读。
 - **内容即代码**：每篇 pass 是一个 MDX 文件，frontmatter 由 Zod 校验；写错字段、写错分类，构建直接失败。
 - **零配置部署**：push 到 `main` 自动构建并发布到 GitHub Pages，项目站点子路径（`/repo-name/`）自动处理。
@@ -24,6 +25,7 @@ npm run dev       # http://localhost:4321
 npm run build     # 静态产物输出到 dist/
 npm run preview   # 本地预览 dist/
 npm run check     # TypeScript / Astro 模板类型检查
+npm run test:ir   # IR 解析器与 CFG 布局的断言测试（Node 直接跑 TS）
 ```
 
 要求 Node `>= 22.23.4`，版本见 `.nvmrc`。
@@ -36,18 +38,23 @@ src/
 │   ├── index.astro        首页：hero 动画 + 精选图鉴
 │   ├── passes/index.astro 图鉴目录（分类 + 路线图）
 │   ├── passes/[...slug].astro  pass 详情（构建期生成）
+│   ├── ir/index.astro     CFG 实验室：贴 IR 看控制流
 │   ├── about.astro        方法论与贡献说明
 │   └── 404.astro / robots.txt.ts
 ├── layouts/               BaseLayout（head / meta / 页头页脚）
 │                          PassLayout（详情页骨架 + 上一篇/下一篇）
 ├── components/
-│   ├── StepPlayer.tsx     唯一交互岛：分步 IR 播放器
+│   ├── StepPlayer.tsx     分步 IR 播放器
+│   ├── CFGViewer.tsx      IR → 基本块有向图（纯前端解析 + 分层布局）
+│   ├── CFGLab.tsx         实验室：可编辑 IR + 实时重绘
 │   ├── PassCard/PassRow   卡片（首页）与行（目录）
 │   └── ...                页头、页脚、管线标记
 ├── content/passes/        每篇一个 .mdx
 ├── demos/                 演示数据：types.ts（diff 引擎）+ 每个 pass 一份
-├── lib/                   url() 助手、分类定义
-├── data/roadmap.ts        尚未上线的 pass 清单
+├── lib/
+│   ├── url.ts             base path 安全的链接助手
+│   └── ir/                parse.ts（IR → 基本块）· layout.ts（分层布局）
+├── data/                  roadmap.ts · cfg-samples.ts（实验室示例）
 └── styles/                tokens.css（设计令牌）· global.css（基础 + prose）
 ```
 
@@ -95,6 +102,24 @@ source: llvm/lib/Transforms/.../X.cpp
 ```
 
 正文固定五个 `##` 小节（编号由 CSS 自动生成）：它解决什么问题 / 算法 / 代价与坑 / 在管线里的位置 / 自己跑一遍。
+
+## CFG 视图与实验室
+
+`CFGViewer` 把一段 LLVM IR 切成基本块并画成有向图：解析和布局都是无依赖的纯函数，构建期就能渲染出 HTML，浏览器里只负责交互。
+
+![CFG 实验室](docs/preview-cfg.png)
+
+- **实验室**：打开 [`/ir/`](https://herrcai0907.github.io/passatlas/ir/)，左边改 IR，右边实时重绘；也能用 `/ir/?sample=loop`、`/ir/?sample=switch` 直达示例。
+- **pass 页里嵌图**：在 frontmatter 里写 `cfg: diamond`（对应 `src/data/cfg-samples.ts` 的 id），页面会自动多出一节「控制流图」。
+- **任意位置调用**：
+
+  ```mdx
+  import CFGViewer from '../../components/CFGViewer';
+
+  <CFGViewer ir={someIR} client:visible height={520} />
+  ```
+
+- **测试**：`npm run test:ir`，覆盖菱形分支、循环回边、switch 多路、不可达块、跨行指令与错误提示。
 
 ## 部署到 GitHub Pages
 

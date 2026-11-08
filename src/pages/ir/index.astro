@@ -1,0 +1,109 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import CFGLab from '../../components/CFGLab';
+import { cfgSamples } from '../../data/cfg-samples';
+---
+
+<BaseLayout
+  title="CFG 实验室"
+  description="把任意 LLVM IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。全静态、纯前端解析。"
+>
+  <section class="lab-page">
+    <div class="container">
+      <header class="lab-page__head">
+        <p class="eyebrow">Lab · CFG</p>
+        <h1>把 IR 摊开看</h1>
+        <p class="lead">
+          一段 IR 读起来是线性的，跑起来却是跳来跳去的。把函数切成基本块、连成有向图，
+          分支、汇合、循环和不可达代码就一眼可辨了。改左边的 IR，右边的图会跟着变。
+        </p>
+        <ul class="lab-page__tips">
+          <li><span aria-hidden="true">→</span> 实线是顺序跳转，虚线是回边（循环）</li>
+          <li><span aria-hidden="true">→</span> 绿色 <code>true</code> / 红色 <code>false</code> 是条件分支的两条出边</li>
+          <li><span aria-hidden="true">→</span> 点击基本块，可以高亮与它相关的边</li>
+        </ul>
+      </header>
+
+      <CFGLab samples={cfgSamples} client:load />
+
+      <section class="lab-page__note">
+        <h2>它不是编译器</h2>
+        <p>
+          这里只做语法层面的切分：找函数、找标签、读终结指令，然后把跳转关系画出来。
+          它不会验证这段 IR 是否真的合法，也不会执行任何优化——真正的检查交给 <code>opt -verify</code>。
+        </p>
+      </section>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .lab-page {
+    padding-block: clamp(36px, 5vw, 64px);
+  }
+
+  .lab-page__head {
+    max-width: 760px;
+    margin-bottom: clamp(24px, 4vw, 36px);
+  }
+
+  .lab-page__head h1 {
+    margin-top: 10px;
+    font-size: clamp(36px, 5.2vw, 56px);
+    letter-spacing: -0.03em;
+  }
+
+  .lab-page__head .lead {
+    margin-top: 14px;
+  }
+
+  .lab-page__tips {
+    display: grid;
+    gap: 4px;
+    margin: 20px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .lab-page__tips span {
+    color: var(--accent);
+    margin-right: 6px;
+  }
+
+  .lab-page__tips code {
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    font-size: 0.9em;
+  }
+
+  .lab-page__note {
+    max-width: var(--wrap-narrow);
+    margin-top: clamp(36px, 5vw, 56px);
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  .lab-page__note h2 {
+    font-size: 22px;
+  }
+
+  .lab-page__note p {
+    margin-top: 8px;
+    font-size: 14.5px;
+    line-height: 1.8;
+    color: var(--muted);
+  }
+
+  .lab-page__note code {
+    padding: 1px 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    font-size: 0.88em;
+    color: var(--accent-strong);
+  }
+</style>

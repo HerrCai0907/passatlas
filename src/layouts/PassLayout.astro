@@ -2,7 +2,9 @@
 import type { CollectionEntry } from 'astro:content';
 import BaseLayout from './BaseLayout.astro';
 import StepPlayer from '../components/StepPlayer';
+import CFGViewer from '../components/CFGViewer';
 import PipelineStrip from '../components/PipelineStrip.astro';
+import { cfgSamples } from '../data/cfg-samples';
 import { getDemo } from '../demos/registry';
 import { categories, difficultyLabels } from '../lib/categories';
 import { site } from '../site';
@@ -15,9 +17,10 @@ interface Props {
 }
 
 const { pass, prev, next } = Astro.props;
-const { title, zh, summary, category, difficulty, stage, tags, demo, source } = pass.data;
+const { title, zh, summary, category, difficulty, stage, tags, demo, cfg, source } = pass.data;
 const categoryMeta = categories[category];
 const demoData = getDemo(demo);
+const cfgSample = cfg ? cfgSamples.find((sample) => sample.id === cfg) : undefined;
 const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
 ---
 
@@ -57,6 +60,23 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
               </p>
             </div>
             <StepPlayer demo={demoData} client:visible />
+          </section>
+        )
+      }
+
+      {
+        cfgSample && (
+          <section class="pass__cfg" aria-labelledby="cfg-heading">
+            <div class="pass__demo-head">
+              <h2 id="cfg-heading">控制流图</h2>
+              <p class="muted">基本块、跳转与分支条件的一张地图。</p>
+            </div>
+            <CFGViewer
+              ir={cfgSample.ir}
+              title={`${title} 的控制流图`}
+              height={520}
+              client:visible
+            />
           </section>
         )
       }
@@ -196,6 +216,10 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
     background: var(--surface);
     font-size: 11px;
     color: var(--ink-soft);
+  }
+
+  .pass__cfg {
+    margin-top: clamp(32px, 5vw, 48px);
   }
 
   .pass__body {

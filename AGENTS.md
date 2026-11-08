@@ -33,6 +33,7 @@ npm run dev        # http://localhost:4321
 npm run build      # static output in dist/
 npm run preview    # serve dist/ locally
 npm run check      # astro check (TypeScript + templates)
+npm run test:ir    # IR parser + CFG layout assertions (Node runs the .ts directly)
 ```
 
 Always run `npm run build` before handing work back. Run `npm run check` when you touched
@@ -46,13 +47,18 @@ src/
     index.astro         首页：hero + 分步演示 + 精选卡片
     passes/index.astro  图鉴目录（按 category 分组 + 路线图）
     passes/[...slug].astro  pass 详情（getStaticPaths）
+    ir/index.astro      CFG 实验室（可编辑 IR + 实时图）
     about.astro / 404.astro / robots.txt.ts
   layouts/              BaseLayout（head/meta）· PassLayout（详情页骨架）
   components/           SiteHeader · SiteFooter · PassCard · PassRow · PipelineStrip
-    StepPlayer.tsx      唯一的交互岛：分步 IR 播放器
+    StepPlayer.tsx      分步 IR 播放器（唯一的播放器）
+    CFGViewer.tsx       IR → 基本块有向图
+    CFGLab.tsx          实验室：textarea + CFGViewer，实时解析
   content/passes/       每篇一个 .mdx（frontmatter 由 content.config.ts 校验）
   demos/                分步演示数据：types.ts + 每个 pass 一个文件 + registry.ts
   lib/                  url() / categories / 站点常量
+    ir/parse.ts         IR → 函数 / 基本块 / 边（纯函数，无依赖）
+    ir/layout.ts        分层布局 + 回边识别（纯函数，输出坐标）
   data/roadmap.ts       尚未上线的 pass（不生成页面）
   styles/               tokens.css（设计令牌）· global.css（基础与 prose）
 ```
@@ -108,6 +114,7 @@ order: 10                 # 目录排序
 stage: ['-O1', '-O2']
 tags: ['Worklist', 'SSA']
 demo: example             # 对应 demos/registry.ts 的 key
+cfg: diamond              # 可选，对应 data/cfg-samples.ts 的 id
 source: llvm/lib/Transforms/.../X.cpp
 updated: 2026-11-01
 ---
@@ -135,8 +142,29 @@ updated: 2026-11-01
 - [ ] prev/next navigation works (automatic via `order`)
 - [ ] page renders at 390px, 768px and 1440px without horizontal scroll
 - [ ] keyboard: `←` `→` step, `Space` play/pause, focus ring visible
+- [ ] if `cfg` is set: no node overlap, no edge crossing a node, 4+ blocks still readable
 
-## 5. Animation rules
+## 5. CFG viewer & IR parser
+
+`CFGViewer` turns IR text into a layered directed graph. The pipeline is
+**parse → layout → render**, and the first two stages are pure and run at build time too.
+
+- `src/lib/ir/parse.ts`: functions → blocks → instructions → edges (`br`, `br i1`, `switch`,
+  `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via `issues`.
+- `src/lib/ir/layout.ts`: DFS back-edge detection, longest-path ranks, barycentre ordering,
+  content-based node widths. Returns plain coordinates; no DOM.
+- Multi-line instructions (e.g. `switch` label arrays) are joined with a literal newline and rendered with `white-space: pre-wrap`; height estimation must use the same per-line counting.
+- Geometry constants (`NODE_LINE`, `NODE_CHAR`, paddings) must stay in sync with
+  `CFGViewer.css`, otherwise text gets clipped. If you change one, change both.
+- Edges: solid = forward, dashed accent = back edge, teal/red labels = true/false branch.
+- Interactive requirements: nodes are keyboard focusable (`role="button"`, Enter/Space),
+  fit-to-width on first render, zoom range 0.25–1.5.
+- `npm run test:ir` must pass. Add a case when you teach the parser new syntax.
+
+When embedding a graph in a pass page, prefer the frontmatter field (`cfg: <sample-id>`) over
+importing the component into MDX: it keeps full-width layout and one implementation.
+
+## 6. Animation rules
 
 `StepPlayer` (`src/components/StepPlayer.tsx`) is the only client-side component. Its contract:
 
@@ -156,7 +184,7 @@ Rules:
 - Respect `prefers-reduced-motion`: autoplay must stop, and line-in animations are disabled in CSS.
 - Never require a mouse: every control has a keyboard path and an `aria-label`.
 
-## 6. Styling rules
+## 7. Styling rules
 
 - Use tokens from `src/styles/tokens.css` (`--ink`, `--paper`, `--accent`, `--cat-*`).
   Hardcoded hex values in components are a review error, except inside the `tokens.css` file.
@@ -168,7 +196,7 @@ Rules:
   pass names, IR and metadata labels.
 - Cards are for the home page; the atlas index uses rows (`PassRow`). Keep that distinction.
 
-## 7. Deployment
+## 8. Deployment
 
 - `.github/workflows/deploy.yml` builds on push to `main` and publishes `dist/` with
   `actions/deploy-pages`.
@@ -178,13 +206,13 @@ Rules:
   GitHub Actions**. Without it the deploy job fails by design.
 - Do not add `astro.config` values that hardcode one owner or one repo name.
 
-## 8. Git
+## 9. Git
 
 - Conventional commits: `feat: add licm page`, `fix: correct phi incoming edge`, `docs: …`.
 - One pass page per commit. Do not reformat unrelated files in the same commit.
 - Never commit `dist/`, `.astro/`, `node_modules/`, or editor state.
 
-## 9. Things this project deliberately does not do
+## 10. Things this project deliberately does not do
 
 - No dark mode yet (the paper/ink identity is the brand). If added, do it via tokens, not
   per-component overrides.

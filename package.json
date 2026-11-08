@@ -12,7 +12,8 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "test:ir": "node scripts/test-ir.mjs"
   },
   "dependencies": {
     "@astrojs/mdx": "^8.1.3",

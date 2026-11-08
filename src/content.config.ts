@@ -21,6 +21,8 @@ const passes = defineCollection({
     tags: z.array(z.string()).default([]),
     /** src/demos/registry.ts 里的演示 id */
     demo: z.string().optional(),
+    /** src/data/cfg-samples.ts 里的示例 id，用于在页面上画控制流图 */
+    cfg: z.string().optional(),
     /** LLVM 源码路径，如 llvm/lib/Transforms/Utils/Mem2Reg.cpp */
     source: z.string().optional(),
     updated: z.coerce.date().optional(),

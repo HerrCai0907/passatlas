@@ -20,5 +20,6 @@ export const site = {
 
 export const nav = [
   { href: '/passes/', label: '图鉴' },
+  { href: '/ir/', label: '实验室' },
   { href: '/about/', label: '关于' },
 ] as const;

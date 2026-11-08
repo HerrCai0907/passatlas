@@ -123,6 +123,10 @@ const heroDemo = getDemo('hero') ?? getDemo(passes[0]?.data.demo);
         路线图上还有 {roadmap.length} 个 pass 正在绘制，
         <a href={`${url('/passes/')}#roadmap`}>查看完整路线图 <span aria-hidden="true">→</span></a>
       </p>
+      <p class="atlas__more">
+        读图比读文本快：
+        <a href={url('/ir/')}>把任意 IR 摊成 CFG <span aria-hidden="true">→</span></a>
+      </p>
     </div>
   </section>
 </BaseLayout>

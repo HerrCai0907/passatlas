@@ -28,6 +28,9 @@ jobs:
       - name: Astro check
         run: npm run check
 
+      - name: IR parser tests
+        run: npm run test:ir
+
       - name: Build
         env:
           PUBLIC_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
