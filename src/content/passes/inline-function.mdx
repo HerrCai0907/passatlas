@@ -1,0 +1,158 @@
+---
+title: inline-function
+zh: 内联改写
+summary: 决策通过后，InlineFunction 克隆 callee、拆分 call site、把每个 ret 汇进 PHI，并补齐调试信息与调用图更新。
+category: interproc
+difficulty: 3
+status: ready
+order: 5
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Cloning', 'ValueMap', 'CFG']
+demo: inline-function
+source: llvm/lib/Transforms/Utils/InlineFunction.cpp
+updated: 2026-11-08
+---
+
+import { url as passUrl } from '../../lib/url';
+
+## 它解决什么问题
+
+决策层只说「这条 call 值得内联」。真正把一个有多个基本块、多个 `ret`、可能还带异常边的 callee 搬进 caller，是另一件事。
+
+它不是复制粘贴。克隆出来的 SSA 值要改名，实参要替换形参，caller 的基本块要在 call 处拆开，callee 的每个 `ret` 都要接到同一个 continuation 块，多个返回值要用 `phi` 合并；`invoke` 还要带着 landingpad 一起搬，调试信息要补 `inlinedAt` 链。做完这些，调用图、worklist 和死函数列表也要更新。
+
+这一页只看「怎么改」。哪条 call 值得内联，见 <a href={passUrl('/passes/inliner/')}>inliner</a>。
+
+## 算法
+
+`InlineFunction` 是 `llvm/lib/Transforms/Utils/InlineFunction.cpp` 里的一个 utility，不是独立 pass。`InlinerPass` 在 advisor 说 yes 之后调用它；`AlwaysInlinerPass` 也会复用同一套机制。
+
+上面的分步动画走了一遍带分支的 callee：`@pick` 从 `%pos` 和 `%neg` 各返回一次，内联后 caller 多出两个分支目标和一个 `%cont` 块。
+
+### 先过 CanInlineCallSite
+
+真正的克隆开始前，`CanInlineCallSite` 再确认一次硬约束：
+
+- call 必须指向一个有定义的函数；间接调用、外部声明不展开；
+- `callbr` 目前不支持，带非法 operand bundle 的 call 也不行（`deopt`、`funclet` 等少数 bundle 例外）；
+- 同一个 callee 已经出现在 `!inline_history` 里，拒绝——这是互递归的刹车；
+- `musttail`、可变参数、`blockaddress` 等场景另有约束，失败时返回原因，而不是产出坏 IR。
+
+`invoke` 是支持的：它会连同 unwind 边和 landingpad 一起处理，不是简单降级成 `call`。
+
+### ValueMap：实参、返回值和名字
+
+内联的核心是一张 `ValueToValueMapTy`：
+
+```text
+VMap[callee.argument[i]] = call.argument[i]
+VMap[callee.instruction] = cloned.instruction
+```
+
+克隆时，callee 的局部值被重命名，统一加 `.i` 后缀（`%c` → `%c.i`）。这样 caller 里原有的同名值不会被覆盖；caller 和 callee 的 SSA 命名空间从此合并成一个。
+
+返回值不是一张表能直接表达的：callee 可能有多个 `ret`。`CloneAndPruneFunctionInto` 把每个 `ret` 收集到 `Returns` 向量里，稍后统一改写。
+
+### 克隆：CloneAndPruneFunctionInto
+
+克隆不是逐条无脑复制。`CloneAndPruneFunctionInto` 在复制的同时做常量折叠和死块裁剪：
+
+- 实参是常量时，克隆出的指令可能直接折叠成常量；
+- 分支条件如果被实参确定，不可达的块不会进入新函数；
+- 被折叠掉的指令不占新函数的位置，代价分析里看到的「便宜」在这里兑现。
+
+这就是为什么内联后的 IR 往往比「callee 原文 + caller 原文」短。
+
+### 拆分与缝合：从 call 到 PHI
+
+克隆完成后，caller 在 call 指令处被拆成两段：
+
+1. call 之前的指令留在原块，末尾改成跳到克隆出的 callee entry；
+2. call 之后的指令进入 continuation 块；
+3. 克隆块里的每个 `ret` 改成 `br label %cont`，并把返回值记进 PHI 的 incoming；
+4. `%cont` 里的 `phi` 合并所有返回值，原来使用 call 结果的地方改用它。
+
+带分支的 callee 因此变成一个真正的 CFG 子图，而不是一条直线：
+
+```text
+entry ──> callee.entry.i ──> pos.i ──┐
+                         └─> neg.i ──┴─> cont ──> 原 call 之后的代码
+```
+
+只有一个 `ret`、且只克隆出一个基本块时，LLVM 会走捷径：克隆体可以直接拼进 caller 的块，省掉一个 continuation 块。多个 `ret`、`invoke` 的 unwind 边、landingpad 则必须保留显式的块和 PHI。
+
+### 调试信息、新 call site 与图更新
+
+克隆出来的指令要继承原指令的 `!dbg`，并组出 `inlinedAt` 链：调试器才能把内联后的指令映射回 callee 的源码行。`llvm.dbg.value` 等 intrinsic 也要跟着重映射。
+
+`InlineFunction` 返回一个 `InlineFunctionInfo`：
+
+- `InlinedCallSites`：克隆进来的新 call，交给 `InlinerPass` 追加到 worklist；
+- 返回值 / 属性 / 调试信息的结果，供 pass 记录 remark；
+- pass 随后调用 `updateCGAndAnalysisManagerForCGSCC` 更新调用图、失效分析、必要时拆分 SCC。
+
+callee 如果 internal、零 live use、又不是 lib function，`InlinerPass` 会把函数体掏空并排队，最后统一 `CG.markDeadFunction`。这一步在 `InlineFunction` 之外，属于 pass 的收尾。
+
+## 代价与坑
+
+- **多返回值是 CFG 手术。** 每个 `ret` 都要有一条到 `%cont` 的边，PHI 的 incoming 必须和边一一对应；漏一条就是 verifier 错误。
+- **异常边不能丢。** `invoke` 的 normal/unwind 两条边、landingpad、funclet 的父链都要一起搬；把 `invoke` 当普通 `call` 处理会改变异常语义。
+- **operand bundle 有限支持。** `deopt`、`funclet` 等可以带，其他 bundle 直接拒绝；不要假设「看起来是 call 就能内联」。
+- **名字不是接口。** `.i` 后缀、块名、是否走单返回捷径，都可能随实现变化；依赖具体名字的测试很脆。
+- **调试信息是显式工作。** `inlinedAt`、`dbg.value` 和源码位置不补，调试器会把内联代码指到错误的行。
+- **代码体积仍然存在。** 机制只负责「正确地复制」，不负责「复制得值不值」；后者是 inliner 决策层的事。
+
+## 在管线里的位置
+
+`InlineFunction` 站在决策之后：
+
+```text
+InlinerPass ──> advisor 说 yes ──> InlineFunction ──> 更新 CFG / 调试信息
+                                      └─> InlinedCallSites ──> worklist
+```
+
+`AlwaysInlinerPass` 也会用它处理 `alwaysinline`；`ModuleInlinerPass` 是另一条决策路径，但底层同样落到这套克隆与缝合逻辑。
+
+真正的 pass 级入口仍然是 <a href={passUrl('/passes/inliner/')}>inliner</a>：SCC 后序、候选队列、代价模型都在那里；这一页只是它调用的「手术台」。
+
+## 自己跑一遍
+
+```llvm
+define i32 @caller(i32 %x) {
+entry:
+  %r = call i32 @pick(i32 %x)
+  %s = add i32 %r, 10
+  ret i32 %s
+}
+
+define internal i32 @pick(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+
+pos:
+  %p = add i32 %x, 1
+  ret i32 %p
+
+neg:
+  %n = sub i32 %x, 1
+  ret i32 %n
+}
+```
+
+```bash
+opt -passes='cgscc(inline)' -S demo.ll -o -
+opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
+```
+
+第一条命令应当看到 `@pick` 被展开进 `@caller`：caller 里出现 `%c.i`、`%pos.i`、`%neg.i` 和 `%cont`，`%r` 变成 `phi`，随后 `@pick` 被删除。第二条把决策打到 stderr：
+
+```text
+inlined into ... with (cost=..., threshold=225)
+```
+
+块名和是否保留空 entry 块可能因版本而异；以 verifier 通过和 `phi` incoming 完整为准，不要依赖具体名字。
+
+如果 `opt` 是 asserts build，可以加 `-debug-only=inline` 看每一步；release build 用 `-pass-remarks=inline`。
+
+本机环境没有编译好的 `opt`，上面的 pass 名按 LLVM 当前 `PassRegistry.def` 校对，未实际执行；不同版本以 `opt -print-passes` 为准。

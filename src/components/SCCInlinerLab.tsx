@@ -49,13 +49,13 @@ const PSEUDO = [
   '  for call in worklist:',
   '    ic = getInlineCost(call)',
   '    if ic.cost >= ic.threshold: continue',
-  '    inline(call)',
+  '    accept(call)',
   '    worklist += newly_exposed_calls(call)',
-  '    update_call_graph_and_scc()',
-  '  delete_trivially_dead_functions()',
+  '    refresh_cost_context()',
+  '  summary = current_scc_decisions()',
 ];
 
-const PHASE_LABELS = ['建图', '缩点', '后序', 'clamp', 'hash / mix', 'render', 'main', '收尾'];
+const PHASE_LABELS = ['建图', '缩点', '后序', 'clamp', 'hash / mix', 'render', 'main', '结论'];
 
 const PHASE_CODE: Record<number, number[]> = {
   0: [0],
@@ -229,20 +229,6 @@ export default function SCCInlinerLab() {
     return done;
   }, [phase]);
 
-  const dead = useMemo(() => {
-    const nodes = new Set<NodeId>();
-    if (phase >= 5 && decisions.inlineClamp) nodes.add('clamp');
-    if (phase >= 6 && decisions.inlineMain) nodes.add('render');
-    return nodes;
-  }, [phase, decisions]);
-
-  const renderGone = dead.has('render');
-  const showRenderClamp =
-    !(phase >= 5 && decisions.inlineClamp) && !renderGone && !dead.has('clamp');
-  const showRenderHash = !(phase >= 5 && decisions.inlineRenderHash) && !renderGone;
-  const showMainRender = !(phase >= 6 && decisions.inlineMain);
-  const showMainHash = phase >= 6 && decisions.inlineMain && !decisions.inlineRenderHash;
-
   const candidates = useMemo<Candidate[]>(() => {
     if (phase === 4) {
       return [
@@ -307,7 +293,7 @@ export default function SCCInlinerLab() {
       case 0:
         return {
           title: '建图：每条边都是一个 call site',
-          note: '5 个函数、6 条 call edge。main 是入口；hash 与 mix 互相调用，形成唯一的环。内联器不看函数列表，它看这张图。',
+          note: '5 个函数、6 条 call edge。main 是入口；hash 与 mix 互相调用，形成唯一的环。这一页只回答「哪条边值得内联」；真正的改写见另一页 inline-function。',
         };
       case 1:
         return {
@@ -333,24 +319,22 @@ export default function SCCInlinerLab() {
         };
       case 5:
         return {
-          title: 'SCC 3 · render：先处理 clamp',
+          title: 'SCC 3 · render：两个候选',
           note: decisions.inlineRenderHash
-            ? `worklist：render → clamp（30）、render → hash（${decisions.renderHashCost}）。阈值 ${threshold} 下两个都通过：clamp 把 render 撑大，hash 又把它的调用拖进来，render 继续膨胀。`
-            : `worklist：render → clamp（30）、render → hash（${decisions.renderHashCost}）。阈值 ${threshold}：clamp 内联，hash 拒绝。clamp 变死函数，render 保留对 hash 的调用。`,
+            ? `worklist：render → clamp（30）、render → hash（${decisions.renderHashCost}）。阈值 ${threshold} 下两个都接受。注意：图始终是决策前的 call graph，高亮只表示当前 SCC 与候选；克隆、拆块在 inline-function 里。`
+            : `worklist：render → clamp（30）、render → hash（${decisions.renderHashCost}）。阈值 ${threshold}：接受 clamp，拒绝 hash。图仍是决策前的 call graph；删除与拆分不属于这一页。`,
         };
       case 6:
         return {
-          title: 'SCC 4 · main：render 已经不一样了',
+          title: 'SCC 4 · main：callee 变胖之后',
           note: decisions.inlineMain
-            ? `main 只有一个 call：main → render。此时 render 的代价是 ${decisions.mainCost}，低于阈值 ${threshold}，内联成立；render 的唯一 caller 已经吸收它，随后会被删除。`
-            : `main 只有一个 call：main → render。render 的代价已经变成 ${decisions.mainCost}，不低于阈值 ${threshold}，拒绝。后序的代价就在这里：callee 先变胖，caller 必须接受。`,
+            ? `假设上一步的决策已经生效：render 吸收了 clamp（以及可能的 hash），代价变成 ${decisions.mainCost}。main → render 低于阈值 ${threshold}，接受。这里只记录决定，不改写 IR。`
+            : `假设上一步的决策已经生效：render 吸收了 clamp（以及可能的 hash），代价变成 ${decisions.mainCost}。main → render 不低于阈值 ${threshold}，拒绝。后序的代价就在这里：callee 先变胖，caller 必须接受。`,
         };
       default:
         return {
-          title: '收尾：删除死函数，回到 worklist',
-          note: decisions.inlineMain
-            ? '本轮内联结束：clamp 与 render 都变成死函数并被删除，main 吸收了整条链。真实实现还会把新暴露的 call 继续追加到 worklist，直到不再变化。'
-            : '本轮内联结束：clamp 被删除，render 仍是独立函数。真实实现还会把新暴露的 call 继续追加到 worklist，直到不再变化。',
+          title: '结论：留下决定，改写交给 InlineFunction',
+          note: '本轮只产出决策：哪些 call 接受、哪些保留。真正的克隆、CFG 拆分、返回值 PHI 和死函数删除，见 inline-function。图从头到尾都是决策前的 call graph。',
         };
     }
   }, [phase, decisions, threshold]);
@@ -365,15 +349,9 @@ export default function SCCInlinerLab() {
   };
 
   const renderNode = (node: NodeDef) => {
-    const isDead = dead.has(node.id);
     const isActive = activeScc === node.scc && phase >= 3;
     const isDone = processed.includes(node.scc);
-    const classes = [
-      'pa-scc__node',
-      isActive ? 'is-active' : '',
-      isDone ? 'is-done' : '',
-      isDead ? 'is-dead' : '',
-    ]
+    const classes = ['pa-scc__node', isActive ? 'is-active' : '', isDone ? 'is-done' : '']
       .filter(Boolean)
       .join(' ');
     const targetPhase = SCCS.find((scc) => scc.id === node.scc)?.phase ?? 0;
@@ -384,7 +362,7 @@ export default function SCCInlinerLab() {
         className={classes}
         role="button"
         tabIndex={0}
-        aria-label={`${node.label}，${node.sub}${isDead ? '，已删除' : ''}；跳到第 ${targetPhase + 1} 帧`}
+        aria-label={`${node.label}，${node.sub}；跳到第 ${targetPhase + 1} 帧`}
         onClick={() => {
           setPlaying(false);
           goTo(targetPhase);
@@ -398,11 +376,6 @@ export default function SCCInlinerLab() {
         <text className="pa-scc__node-sub" x={node.x - NODE_W / 2 + 12} y={node.y + 15}>
           {node.sub}
         </text>
-        {isDead ? (
-          <text className="pa-scc__node-x" x={node.x + NODE_W / 2 - 14} y={node.y - 6}>
-            ✕
-          </text>
-        ) : null}
       </g>
     );
   };
@@ -414,7 +387,7 @@ export default function SCCInlinerLab() {
     <div
       className="pa-scc"
       role="group"
-      aria-label="SCC 内联算法实验台"
+      aria-label="SCC 内联决策实验台"
       tabIndex={0}
       data-playing={playing ? 'true' : 'false'}
       onKeyDown={handleKeyDown}
@@ -422,7 +395,7 @@ export default function SCCInlinerLab() {
       <header className="pa-scc__head">
         <div className="pa-scc__heading">
           <p className="pa-scc__kicker">Interactive · CGSCC · InlineCost</p>
-          <h3 className="pa-scc__title">SCC 内联调度器</h3>
+          <h3 className="pa-scc__title">SCC 内联决策台</h3>
         </div>
         <div className="pa-scc__actions">
           <button
@@ -541,35 +514,29 @@ export default function SCCInlinerLab() {
               互递归 SCC · 2 个函数
             </text>
 
-            {showMainRender ? (
-              <g className={edgeClass(phase === 6, false)}>
-                <path
-                  className="pa-scc__edge-line"
-                  d="M260 72 L260 118"
-                  markerEnd={`url(#${uid}-${phase === 6 ? 'arrow-active' : 'arrow'})`}
-                />
-              </g>
-            ) : null}
+            <g className={edgeClass(phase === 6, false)}>
+              <path
+                className="pa-scc__edge-line"
+                d="M260 72 L260 118"
+                markerEnd={`url(#${uid}-${phase === 6 ? 'arrow-active' : 'arrow'})`}
+              />
+            </g>
 
-            {showRenderHash ? (
-              <g className={edgeClass(phase === 5, false)}>
-                <path
-                  className="pa-scc__edge-line"
-                  d="M222 166 L130 228"
-                  markerEnd={`url(#${uid}-${phase === 5 ? 'arrow-active' : 'arrow'})`}
-                />
-              </g>
-            ) : null}
+            <g className={edgeClass(phase === 5, false)}>
+              <path
+                className="pa-scc__edge-line"
+                d="M222 166 L130 228"
+                markerEnd={`url(#${uid}-${phase === 5 ? 'arrow-active' : 'arrow'})`}
+              />
+            </g>
 
-            {showRenderClamp ? (
-              <g className={edgeClass(phase === 5, false)}>
-                <path
-                  className="pa-scc__edge-line"
-                  d="M304 166 C 420 190, 480 260, 438 330"
-                  markerEnd={`url(#${uid}-${phase === 5 ? 'arrow-active' : 'arrow'})`}
-                />
-              </g>
-            ) : null}
+            <g className={edgeClass(phase === 5, false)}>
+              <path
+                className="pa-scc__edge-line"
+                d="M304 166 C 420 190, 480 260, 438 330"
+                markerEnd={`url(#${uid}-${phase === 5 ? 'arrow-active' : 'arrow'})`}
+              />
+            </g>
 
             <g className={edgeClass(phase === 4, false)}>
               <path
@@ -586,50 +553,28 @@ export default function SCCInlinerLab() {
               />
             </g>
 
-            {showMainHash ? (
-              <g className="pa-scc__edge is-active is-added">
-                <path
-                  className="pa-scc__edge-line"
-                  d="M222 72 C 150 120, 100 180, 112 228"
-                  markerEnd={`url(#${uid}-arrow-active)`}
-                />
-              </g>
-            ) : null}
-
-            {phase >= 3 && showMainRender ? (
-              <text className="pa-scc__edge-cost" x={270} y={99}>
-                {decisions.mainCost}
-              </text>
-            ) : null}
-            {phase >= 3 && showRenderHash ? (
-              <text className="pa-scc__edge-cost" x={176} y={202}>
-                {decisions.renderHashCost}
-              </text>
-            ) : null}
-            {phase >= 3 && showRenderClamp ? (
-              <text className="pa-scc__edge-cost" x={424} y={254}>
-                30
-              </text>
-            ) : null}
             {phase >= 3 ? (
-              <text className="pa-scc__edge-cost" x={226} y={245}>
-                240
-              </text>
+              <>
+                <text className="pa-scc__edge-cost" x={270} y={99}>
+                  {decisions.mainCost}
+                </text>
+                <text className="pa-scc__edge-cost" x={176} y={202}>
+                  {decisions.renderHashCost}
+                </text>
+                <text className="pa-scc__edge-cost" x={424} y={254}>
+                  30
+                </text>
+                <text className="pa-scc__edge-cost" x={226} y={245}>
+                  240
+                </text>
+              </>
             ) : null}
 
             {SCCS.map((scc) => {
               const pos = SCC_TAG_POS[scc.id];
               const isActive = activeScc === scc.id;
               const isDone = processed.includes(scc.id);
-              const isDeadScc =
-                scc.id !== 'main' &&
-                NODES.filter((node) => node.scc === scc.id).every((node) => dead.has(node.id));
-              const orderClass = [
-                'pa-scc__order',
-                isActive ? 'is-active' : '',
-                isDone ? 'is-done' : '',
-                isDeadScc ? 'is-dead' : '',
-              ]
+              const orderClass = ['pa-scc__order', isActive ? 'is-active' : '', isDone ? 'is-done' : '']
                 .filter(Boolean)
                 .join(' ');
               return (
@@ -721,6 +666,27 @@ export default function SCCInlinerLab() {
               ))}
             </div>
           ) : null}
+
+          {phase === 7 ? (
+            <ul className="pa-scc__summary" aria-label="本轮决策">
+              <li className={decisions.inlineHashMix ? 'is-inline' : 'is-reject'}>
+                <code>hash ↔ mix</code>
+                <span>{decisions.inlineHashMix ? '内联 1 层' : '保留'}</span>
+              </li>
+              <li className={decisions.inlineClamp ? 'is-inline' : 'is-reject'}>
+                <code>render → clamp</code>
+                <span>{decisions.inlineClamp ? '内联' : '保留'}</span>
+              </li>
+              <li className={decisions.inlineRenderHash ? 'is-inline' : 'is-reject'}>
+                <code>render → hash</code>
+                <span>{decisions.inlineRenderHash ? '内联' : '保留'}</span>
+              </li>
+              <li className={decisions.inlineMain ? 'is-inline' : 'is-reject'}>
+                <code>main → render</code>
+                <span>{decisions.inlineMain ? '内联' : '保留'}</span>
+              </li>
+            </ul>
+          ) : null}
         </aside>
       </div>
 
@@ -747,6 +713,9 @@ export default function SCCInlinerLab() {
       <footer className="pa-scc__foot">
         <p>
           <kbd>←</kbd> <kbd>→</kbd> 单步 · <kbd>空格</kbd> 播放 · 拖动阈值改变判定
+        </p>
+        <p className="pa-scc__foot-note">
+          图固定为决策前的 call graph；接受/拒绝只体现在面板，实际改写见 inline-function。
         </p>
         <p className="pa-scc__legend" aria-hidden="true">
           <span className="pa-scc__legend-dot" /> 当前 SCC

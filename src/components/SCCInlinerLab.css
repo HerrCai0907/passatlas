@@ -207,10 +207,6 @@
   stroke-dasharray: 5 4;
 }
 
-.pa-scc__edge.is-added .pa-scc__edge-line {
-  stroke-dasharray: 3 3;
-}
-
 .pa-scc__arrow {
   fill: var(--line-strong);
 }
@@ -267,14 +263,6 @@
   stroke: color-mix(in srgb, var(--scc-good) 55%, var(--line-strong));
 }
 
-.pa-scc__node.is-dead {
-  opacity: 0.38;
-}
-
-.pa-scc__node.is-dead rect {
-  stroke-dasharray: 4 4;
-}
-
 .pa-scc__node-name {
   font-family: var(--font-mono);
   font-size: 14px;
@@ -286,13 +274,6 @@
   font-family: var(--font-sans);
   font-size: 9.5px;
   fill: var(--faint);
-}
-
-.pa-scc__node-x {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  fill: var(--scc-bad);
-  text-anchor: middle;
 }
 
 /* ---------- 图：SCC 序号 ---------- */
@@ -813,12 +794,6 @@
   }
 }
 
-/* 本页有多个很长的 LLVM 标识符；允许行内 code 在窄屏断行，避免整页横向滚动。 */
-.pass__body.prose code:not(pre code) {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 /* 实验台位于 .prose 内，重置全局行内 code 的「标签」样式，避免代码行出现白色药丸。 */
 .pass__body.prose .pa-scc code:not(pre code) {
   padding: 0;
@@ -837,6 +812,52 @@
   white-space: nowrap;
 }
 
-.pa-scc__order.is-dead {
-  opacity: 0.48;
+/* ---------- 决策结论 ---------- */
+.pa-scc__summary {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pa-scc__summary li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.pa-scc__summary li:last-child {
+  border-bottom: 0;
+}
+
+.pa-scc__summary code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.pa-scc__summary span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.pa-scc__summary li.is-inline span {
+  color: var(--scc-good);
+}
+
+.pa-scc__summary li.is-reject span {
+  color: var(--scc-bad);
+}
+
+.pa-scc__foot-note {
+  flex-basis: 100%;
+  padding-top: 2px;
+  color: var(--faint);
 }
