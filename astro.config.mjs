@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import mdx from '@astrojs/mdx';
 import react from '@astrojs/react';
 import sitemap from '@astrojs/sitemap';
+import { paperTheme } from './src/lib/paper-theme.mjs';
 
 /**
  * 站点是 100% 静态的：没有 adapter、没有 SSR、没有运行期数据请求。
@@ -51,7 +52,7 @@ export default defineConfig({
   ],
   markdown: {
     shikiConfig: {
-      theme: 'github-light',
+      theme: paperTheme,
       wrap: true,
     },
   },

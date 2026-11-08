@@ -72,11 +72,11 @@
   top: 84px;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--console-line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: var(--console);
+  background: var(--code-bg);
   overflow: hidden;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .lab__editor-head {
@@ -85,8 +85,8 @@
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--console-line);
-  background: var(--console-raised);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
 }
 
 .lab__editor-head h2 {
@@ -96,13 +96,13 @@
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--console-text);
+  color: var(--ink);
 }
 
 .lab__lines {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--console-muted);
+  color: var(--muted);
 }
 
 .lab__textarea {
@@ -111,15 +111,15 @@
   height: 430px;
   padding: 12px 14px;
   border: 0;
-  background: var(--console);
-  color: var(--console-text);
+  background: var(--code-bg);
+  color: var(--code-text);
   font-family: var(--font-mono);
   font-size: 11.5px;
   line-height: 1.65;
   tab-size: 2;
   resize: vertical;
   outline: none;
-  caret-color: var(--ok);
+  caret-color: var(--accent);
 }
 
 .lab__textarea:focus-visible {
@@ -129,15 +129,15 @@
 .lab__note {
   margin: 0;
   padding: 8px 12px;
-  border-top: 1px solid var(--console-line);
+  border-top: 1px solid var(--line);
   font-size: 11.5px;
   line-height: 1.6;
-  color: var(--console-muted);
-  background: #101319;
+  color: var(--muted);
+  background: var(--surface-soft);
 }
 
 .lab__note span {
-  color: #5d6779;
+  color: var(--faint);
 }
 
 .lab__viewer {

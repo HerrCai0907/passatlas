@@ -21,7 +21,7 @@
 /* ---------- 边 ---------- */
 .cfg-edge {
   fill: none;
-  stroke: var(--line-strong);
+  stroke: var(--cfg-edge);
   stroke-width: 1.4;
   transition:
     stroke 0.15s var(--ease),
@@ -29,15 +29,15 @@
 }
 
 .cfg-edge--true {
-  stroke: color-mix(in srgb, var(--cat-scalar) 55%, var(--line-strong));
+  stroke: color-mix(in srgb, var(--cat-scalar) 60%, var(--cfg-edge));
 }
 
 .cfg-edge--false {
-  stroke: color-mix(in srgb, var(--cat-interproc) 45%, var(--line-strong));
+  stroke: color-mix(in srgb, var(--cat-interproc) 50%, var(--cfg-edge));
 }
 
 .cfg-edge--back {
-  stroke: color-mix(in srgb, var(--accent) 65%, var(--line-strong));
+  stroke: color-mix(in srgb, var(--accent) 70%, var(--cfg-edge));
   stroke-dasharray: 5 4;
 }
 
@@ -48,7 +48,7 @@
 }
 
 .cfg-arrow--idle {
-  fill: var(--line-strong);
+  fill: var(--cfg-edge);
 }
 
 .cfg-arrow--active {
@@ -126,7 +126,7 @@
   height: 30px;
   padding: 0 10px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface-soft);
+  background: var(--cfg-node-head);
 }
 
 .cfg-node__label {
@@ -191,21 +191,21 @@
 .cfg-node__body li.is-add {
   background: linear-gradient(90deg, var(--ok-bg), transparent 82%);
   box-shadow: inset 2px 0 0 var(--ok);
-  color: color-mix(in srgb, var(--ok) 62%, var(--ink-soft));
+  color: var(--ok);
 }
 
 .cfg-node__body li.is-del {
   background: linear-gradient(90deg, var(--bad-bg), transparent 82%);
   box-shadow: inset 2px 0 0 var(--bad);
-  color: color-mix(in srgb, var(--bad) 62%, var(--ink-soft));
+  color: var(--bad);
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--bad) 55%, transparent);
 }
 
 .cfg-node__body li.is-focus {
-  background: color-mix(in srgb, var(--focus-ring) 14%, transparent);
+  background: linear-gradient(90deg, var(--focus-bg), transparent 82%);
   box-shadow: inset 2px 0 0 var(--focus-ring);
-  color: color-mix(in srgb, var(--focus-ring) 56%, var(--ink-soft));
+  color: var(--focus-text);
 }
 
 @media (prefers-reduced-motion: no-preference) {

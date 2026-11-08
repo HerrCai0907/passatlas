@@ -19,18 +19,27 @@
   --accent-strong: #8f3406;
   --accent-soft: #f6e2d3;
 
-  /* IR 控制台 */
-  --console: #14171d;
-  --console-raised: #1a1e26;
-  --console-line: #2a303c;
-  --console-text: #d7dce7;
-  --console-muted: #78839a;
+  /* 代码块 / IR 面板：浅色纸面，而不是深色控制台 */
+  --code-bg: #fffdf8;
+  --code-border: #e3dac9;
+  --code-text: #2c313b;
+  --code-muted: #5f6672;
+  --code-gutter: #746c5d;
 
-  --ok: #6ee7a8;
-  --ok-bg: rgba(110, 231, 168, 0.09);
-  --bad: #ff9b9b;
-  --bad-bg: rgba(255, 155, 155, 0.09);
-  --focus-ring: #f0b429;
+  /* 行级 diff：浅底深字，正文对比度均 ≥ 4.5:1 */
+  --ok: #1e7a4b;
+  --ok-bg: #e6f2e9;
+  --bad: #b3261e;
+  --bad-bg: #fae8e5;
+  --focus-ring: #a16207;
+  --focus-bg: #fbf0d4;
+  --focus-text: #7a4d00;
+
+  /* CFG 画布与节点 */
+  --cfg-canvas: #ece4d5;
+  --cfg-dot: rgba(21, 24, 30, 0.1);
+  --cfg-node-head: #f8f2e6;
+  --cfg-edge: #877a63;
 
   /* pass 分类色 */
   --cat-dataflow: #a9500a;

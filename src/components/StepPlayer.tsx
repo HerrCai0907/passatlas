@@ -316,7 +316,7 @@ export default function StepPlayer({
           {caption ? <em className="pa-head__caption">{caption}</em> : null}
         </span>
         <span className="pa-head__right">
-          <ViewModeSwitch value={mode} onChange={setMode} tone="dark" label="分步演示的展示模式" />
+          <ViewModeSwitch value={mode} onChange={setMode} label="分步演示的展示模式" />
           <span className="pa-head__counter">
             <strong>{String(index + 1).padStart(2, '0')}</strong>
             <span aria-hidden="true"> / </span>
