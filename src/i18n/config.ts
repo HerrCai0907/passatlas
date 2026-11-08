@@ -7,7 +7,7 @@
  *
  * 新增语言时：在 locales 里加一项、在 localeMeta 里补元数据、
  * 在 messages 里补一份文案，再在 content/passes/<locale>/ 下补内容。
- * 路由、语言切换器和 hreflang 都由这里推导，不需要改页面文件。
+ * 路由、语言选择器和 hreflang 都由这里推导，不需要改页面文件。
  */
 export const locales = ['zh', 'en'] as const;
 
@@ -16,9 +16,9 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'zh';
 
 export interface LocaleMeta {
-  /** 语言切换器里显示的名字，用该语言自身书写 */
+  /** 语言选择器展开后显示的名字，用该语言自身书写 */
   label: string;
-  /** 空间紧张时显示的短标签 */
+  /** 窄屏下收起时显示的短标签 */
   short: string;
   /** <html lang> 与 hreflang 使用 */
   htmlLang: string;
@@ -43,9 +43,4 @@ export const localeMeta: Record<Locale, LocaleMeta> = {
 
 export function isLocale(value: unknown): value is Locale {
   return typeof value === 'string' && (locales as readonly string[]).includes(value);
-}
-
-/** 用于语言切换器：拿到「另一种语言」 */
-export function otherLocale(locale: Locale): Locale {
-  return locale === 'zh' ? 'en' : 'zh';
 }

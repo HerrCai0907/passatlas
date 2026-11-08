@@ -6,7 +6,7 @@ import { glob } from 'astro/loaders';
  * 内容按语言放在子目录里：
  *   src/content/passes/zh/mem2reg.mdx  → /passes/mem2reg/
  *   src/content/passes/en/mem2reg.mdx  → /en/passes/mem2reg/
- * 文件名（id 最后一段）在两种语言之间必须一致，上一篇 / 下一篇和语言切换器靠它配对。
+ * 文件名（id 最后一段）在两种语言之间必须一致，上一篇 / 下一篇和语言选择器靠它配对。
  */
 const passSchema = z.object({
   /** pass 的正式名字，显示为标题，如 mem2reg */

@@ -40,7 +40,7 @@ export function pathWithoutLocaleUrl(pathname: string): string {
   return pathWithoutLocale(relative, localeFromRelativePath(relative));
 }
 
-/** 语言切换器：保持当前页面不变，只替换语言前缀 */
+/** 语言选择器：保持当前页面不变，只替换语言前缀 */
 export function switchLocaleUrl(pathname: string, locale: Locale): string {
   return url(pathWithoutLocaleUrl(pathname), locale);
 }

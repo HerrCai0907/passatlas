@@ -16,7 +16,7 @@
 - **内容即代码**：每篇 pass 是一个 MDX 文件，frontmatter 由 Zod 校验；写错字段、写错分类，构建直接失败。
 - **零配置部署**：push 到 `main` 自动构建并发布到 GitHub Pages，项目站点子路径（`/repo-name/`）自动处理。
 - **可访问**：键盘全可操作、focus 可见、`prefers-reduced-motion` 下自动停播并关闭动画。
-- **中英双语**：默认语言是中文（无路径前缀），英文在 `/en/` 下。语言切换器保持当前页面，head 里带 `hreflang`，sitemap 也声明两种语言的对应关系。
+- **中英双语**：默认语言是中文（无路径前缀），英文在 `/en/` 下。语言选择器列出中文和 English，并保持当前页面，head 里带 `hreflang`，sitemap 也声明两种语言的对应关系。
 
 ## 快速开始
 
@@ -154,7 +154,7 @@ source: llvm/lib/Transforms/.../X.cpp
 
 - 文案在 `src/i18n/ui.ts`，用 `t(locale, key, vars)` 取；英文表按中文表的键做类型约束，漏键会让 `npm run check` 失败。
 - 所有站内链接走 `url(path, locale)`；MDX 里用 `I18nLink`，它从当前 URL 推断语言。
-- 内容按语言放在 `src/content/passes/<locale>/<id>.mdx`，两个语言的文件名必须一致，上一篇/下一篇和语言切换器靠它配对。
+- 内容按语言放在 `src/content/passes/<locale>/<id>.mdx`，两个语言的文件名必须一致，上一篇/下一篇和语言选择器靠它配对。
 - 分类、路线图、CFG 示例、SCC 实验台和演示标题都有中英文两套；解析器错误信息也接受 locale 参数。
 - `BaseLayout` 输出 `<html lang>`、`og:locale`、canonical 与 `hreflang`，sitemap 同样声明两种语言的对应关系。
 

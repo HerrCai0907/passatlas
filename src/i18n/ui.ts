@@ -10,9 +10,8 @@ import { defaultLocale, type Locale } from './config.ts';
 
 const zh = {
   skip: '跳到正文',
-  'lang.switch': '切换语言',
-  'lang.toEnglish': '切换到英文',
-  'lang.toChinese': '切换到中文',
+  'lang.select': '选择语言',
+  'lang.current': '当前语言',
   'site.homeAria': '{name} 首页',
   'nav.main': '主导航',
   'nav.passes': '图鉴',
@@ -208,9 +207,8 @@ type Messages = { readonly [K in keyof ZhMessages]: string };
 
 const en: Messages = {
   skip: 'Skip to content',
-  'lang.switch': 'Change language',
-  'lang.toEnglish': 'Switch to English',
-  'lang.toChinese': 'Switch to Chinese',
+  'lang.select': 'Select language',
+  'lang.current': 'Current language',
   'site.homeAria': '{name} home',
   'nav.main': 'Main navigation',
   'nav.passes': 'Passes',

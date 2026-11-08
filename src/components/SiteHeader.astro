@@ -1,6 +1,6 @@
 ---
 import { nav, site } from '../site';
-import { localeMeta, otherLocale, type Locale } from '../i18n/config';
+import { localeMeta, locales, type Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import { isActive, switchLocaleUrl, url } from '../lib/url';
 
@@ -10,15 +10,15 @@ interface Props {
 
 const { locale } = Astro.props;
 const path = Astro.url.pathname;
-const targetLocale = otherLocale(locale);
-const targetMeta = localeMeta[targetLocale];
 const isNotFound = path.replace(/\/+$/, '').endsWith('/404');
-// 404 没有英文版本，切换语言时回到首页，避免把读者送到另一个 404
-const switchHref = isNotFound
-  ? url('/', targetLocale)
-  : `${switchLocaleUrl(path, targetLocale)}${Astro.url.search}`;
 const brandSubtitle = locale === 'zh' ? site.nameZh : site.nameEn;
-const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.toChinese');
+
+// 每个语言一个选项。404 没有对应语言的版本，统一回到该语言首页。
+const languageLinks = locales.map((value) => ({
+  locale: value,
+  label: localeMeta[value].label,
+  href: isNotFound ? url('/', value) : `${switchLocaleUrl(path, value)}${Astro.url.search}`,
+}));
 ---
 
 <header class="site-head">
@@ -58,22 +58,41 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
       }
     </nav>
 
-    <nav class="lang" aria-label={t(locale, 'lang.switch')}>
-      <a
-        href={switchHref}
-        hreflang={targetMeta.htmlLang}
-        lang={targetMeta.htmlLang}
-        aria-label={switchLabel}
-        title={switchLabel}
-      >
-        <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3">
+    <details class="lang" data-lang-select>
+      <summary aria-label={`${t(locale, 'lang.select')}: ${localeMeta[locale].label}`}>
+        <svg class="lang__globe" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3">
           <circle cx="8" cy="8" r="6.2" />
           <path d="M1.8 8h12.4M8 1.8c1.7 1.7 2.6 3.9 2.6 6.2S9.7 12.5 8 14.2C6.3 12.5 5.4 10.3 5.4 8S6.3 3.5 8 1.8Z" />
         </svg>
-        <span class="lang__full">{targetMeta.label}</span>
-        <span class="lang__short" aria-hidden="true">{targetMeta.short}</span>
-      </a>
-    </nav>
+        <span class="lang__full">{localeMeta[locale].label}</span>
+        <span class="lang__short" aria-hidden="true">{localeMeta[locale].short}</span>
+        <svg class="lang__chevron" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </summary>
+      <ul class="lang__menu" aria-label={t(locale, 'lang.select')}>
+        {
+          languageLinks.map((item) => (
+            <li>
+              <a
+                href={item.href}
+                hreflang={localeMeta[item.locale].htmlLang}
+                lang={localeMeta[item.locale].htmlLang}
+                aria-current={item.locale === locale ? 'true' : undefined}
+              >
+                <span>{item.label}</span>
+                {item.locale === locale ? (
+                  <>
+                    <span class="lang__check" aria-hidden="true">✓</span>
+                    <span class="sr-only">{t(locale, 'lang.current')}</span>
+                  </>
+                ) : null}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </details>
 
     <a class="repo" href={site.github} target="_blank" rel="noopener noreferrer">
       <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
@@ -85,6 +104,22 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
     </a>
   </div>
 </header>
+
+<script is:inline>
+  // 点击外部或按 Esc 时关闭语言菜单；<details> 本身在没有 JS 时也能工作。
+  document.addEventListener('click', (event) => {
+    document.querySelectorAll('details[data-lang-select][open]').forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    document.querySelectorAll('details[data-lang-select][open]').forEach((menu) => {
+      menu.open = false;
+      menu.querySelector('summary')?.focus();
+    });
+  });
+</script>
 
 <style>
   .site-head {
@@ -177,7 +212,12 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
     background: var(--accent);
   }
 
-  .lang a,
+  .lang {
+    position: relative;
+    flex: none;
+  }
+
+  .lang summary,
   .repo {
     display: inline-flex;
     align-items: center;
@@ -197,8 +237,26 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
       background-color 0.16s var(--ease);
   }
 
-  .lang a {
-    padding-inline: 10px;
+  .lang summary {
+    padding: 6px 10px 6px 11px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .lang summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .lang summary::marker {
+    content: '';
+  }
+
+  .lang summary:hover,
+  .lang[open] summary,
+  .repo:hover {
+    color: var(--ink);
+    border-color: var(--ink);
+    background: var(--surface);
   }
 
   .lang svg,
@@ -208,15 +266,63 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
     flex: none;
   }
 
+  .lang .lang__chevron {
+    width: 12px;
+    height: 12px;
+    transition: transform 0.16s var(--ease);
+  }
+
   .lang__short {
     display: none;
   }
 
-  .lang a:hover,
-  .repo:hover {
-    color: var(--ink);
-    border-color: var(--ink);
+  .lang[open] .lang__chevron {
+    transform: rotate(180deg);
+  }
+
+  .lang__menu {
+    position: absolute;
+    top: calc(100% + 16px);
+    right: 0;
+    z-index: 60;
+    min-width: 168px;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
     background: var(--surface);
+    box-shadow: var(--shadow-md);
+  }
+
+  .lang__menu a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 13px;
+    text-decoration: none;
+    transition:
+      color 0.16s var(--ease),
+      background-color 0.16s var(--ease);
+  }
+
+  .lang__menu a:hover {
+    color: var(--ink);
+    background: color-mix(in srgb, var(--ink) 5%, transparent);
+  }
+
+  .lang__menu a[aria-current='true'] {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  .lang__check {
+    color: var(--accent);
+    font-size: 12px;
   }
 
   @media (max-width: 760px) {
@@ -232,16 +338,17 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
       padding-inline: 8px;
     }
 
+    .lang summary {
+      gap: 5px;
+      padding: 7px 8px;
+    }
+
     .lang__full {
       display: none;
     }
 
     .lang__short {
       display: inline;
-    }
-
-    .lang a {
-      padding: 7px 9px;
     }
 
     .repo span {
@@ -258,6 +365,10 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
       gap: 4px;
     }
 
+    .lang__globe {
+      display: none;
+    }
+
     .nav {
       gap: 0;
     }
@@ -265,10 +376,6 @@ const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.t
     .nav a {
       padding-inline: 6px;
       font-size: 13px;
-    }
-
-    .lang svg {
-      display: none;
     }
   }
 </style>

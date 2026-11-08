@@ -88,15 +88,16 @@ truth is `src/i18n/config.ts` (`locales`, `defaultLocale`, `localeMeta`). Routes
 - **Server components accept `locale`.** Pages derive it from the route and pass it to layouts,
   cards and React islands. Client islands never guess the locale from `navigator`.
 - **Content is per locale.** `src/content/passes/zh/<id>.mdx` and `.../en/<id>.mdx`; the file id must
-  match across locales so prev/next and the language switcher pair correctly. `subtitle` and
+  match across locales so prev/next and the language selector pair correctly. `subtitle` and
   `summary` are written in the language of the file.
 - **Data with copy is localized.** Demos take `{ en: { steps: [...] } }` as the fourth argument of
   `makeDemo`; categories, roadmap and CFG samples use `Record<Locale, string>`; the SCC lab copy
   lives in `src/i18n/lab-scc.ts`; `parseIR(ir, locale)` localizes parser messages.
 - **Head metadata follows the locale.** `BaseLayout` emits `<html lang>`, `og:locale`, the canonical
   URL and `hreflang` alternates; the sitemap integration emits the same alternates.
-- **The language switcher keeps the reader on the same page.** `switchLocaleUrl()` strips the old
-  prefix and adds the new one. 404 is the only page whose switcher targets the home page.
+- **The language selector lists 中文 and English and keeps the reader on the same page.**
+  `switchLocaleUrl()` strips the old prefix and adds the new one; the header renders both options
+  in a `<details>` menu. 404 is the only page whose options target the home page.
 
 When adding a locale: extend `locales` and `localeMeta`, add a `messages` dictionary, add content
 under `src/content/passes/<locale>/`, and add the locale to the sitemap config. Then run the checks.
@@ -292,8 +293,8 @@ Every change that affects the built site must pass this checklist before it is h
       this step.
 - [ ] The hand-off names the exact URL and the page / step / control the reviewer should look
       at. A statement like “it works locally” without a reachable URL does not count.
-- [ ] Both locales render the changed page (`/…/` and `/en/…/`), the language switcher lands on
-      the counterpart, and `<html lang>` / `hreflang` match the page language.
+- [ ] Both locales render the changed page (`/…/` and `/en/…/`), the language selector lists both
+      languages and lands on the counterpart, and `<html lang>` / `hreflang` match the page language.
 - [ ] Visual or interactive changes list what was checked manually: the 390 / 768 / 1440 px
       breakpoints, keyboard navigation (`←` `→` `Space`), the CFG / IR switch, and
       `prefers-reduced-motion` where relevant.
