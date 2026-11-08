@@ -1,33 +1,36 @@
 ---
-import type { CollectionEntry } from 'astro:content';
-import { categories, difficultyLabels } from '../lib/categories';
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { categoryName, difficultyLabel } from '../lib/categories';
+import { passSlug, passSubtitle, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
 
 interface Props {
-  pass: CollectionEntry<'passes'>;
+  pass: PassEntry;
+  locale: Locale;
 }
 
-const { pass } = Astro.props;
-const { title, zh, summary, category, difficulty, stage } = pass.data;
-const categoryMeta = categories[category];
+const { pass, locale } = Astro.props;
+const { title, summary, category, difficulty, stage } = pass.data;
+const label = difficultyLabel(difficulty, locale);
 ---
 
-<a class={`card cat-${category}`} href={url(`/passes/${pass.id}/`)}>
+<a class={`card cat-${category}`} href={url(`/passes/${passSlug(pass)}/`, locale)}>
   <div class="card__top">
-    <span class="chip chip--cat">{categoryMeta.zh}</span>
-    <span class="card__difficulty" title={`难度：${difficultyLabels[difficulty]}`}>
+    <span class="chip chip--cat">{categoryName(category, locale)}</span>
+    <span class="card__difficulty" title={t(locale, 'card.difficultyTitle', { level: label })}>
       <span aria-hidden="true">{'●'.repeat(difficulty)}{'○'.repeat(3 - difficulty)}</span>
-      <span class="sr-only">难度 {difficultyLabels[difficulty]}</span>
+      <span class="sr-only">{t(locale, 'card.difficultyTitle', { level: label })}</span>
     </span>
   </div>
 
   <h3 class="card__title">{title}</h3>
-  <p class="card__zh">{zh}</p>
+  <p class="card__zh">{passSubtitle(pass)}</p>
   <p class="card__summary">{summary}</p>
 
   <div class="card__foot">
     <span class="card__stage">{stage.length > 0 ? stage.join(' · ') : '—'}</span>
-    <span class="card__go" aria-hidden="true">阅读 →</span>
+    <span class="card__go" aria-hidden="true">{t(locale, 'card.read')}</span>
   </div>
 </a>
 

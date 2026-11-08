@@ -3,7 +3,11 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
+import { cfgSamples, localizeSample } from '../src/data/cfg-samples.ts';
+import { getDemo } from '../src/demos/registry.ts';
 import { makeDemo, makeStep } from '../src/demos/types.ts';
+import { localizedPath, pathWithoutLocale } from '../src/i18n/paths.ts';
+import { t } from '../src/i18n/ui.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
@@ -278,4 +282,39 @@ entry:
   assert.equal(demo.maxLines, 5);
 }
 
-console.log('IR parser & CFG layout: all assertions passed');
+
+// ---- i18n：路径前缀、文案回退与内容本地化 ----
+{
+  assert.equal(localizedPath('/passes/mem2reg/', 'zh'), '/passes/mem2reg/');
+  assert.equal(localizedPath('/passes/mem2reg/', 'en'), '/en/passes/mem2reg/');
+  assert.equal(localizedPath('/', 'en'), '/en/');
+  assert.equal(pathWithoutLocale('/en/passes/mem2reg/', 'en'), '/passes/mem2reg/');
+  assert.equal(pathWithoutLocale('/passes/mem2reg/', 'zh'), '/passes/mem2reg/');
+
+  assert.equal(t('zh', 'nav.passes'), '图鉴');
+  assert.equal(t('en', 'nav.passes'), 'Passes');
+  assert.equal(t('en', 'cfg.metaBlocks', { blocks: 3, edges: 4 }), 'Basic blocks: 3 · control-flow edges: 4');
+  assert.equal(t('zh', 'cfg.metaBlocks', { blocks: 3, edges: 4 }), '3 个基本块 · 4 条控制流边');
+
+  const zhDemo = getDemo('mem2reg', 'zh');
+  const enDemo = getDemo('mem2reg', 'en');
+  assert.ok(zhDemo && enDemo);
+  assert.equal(zhDemo.steps.length, enDemo.steps.length);
+  assert.match(zhDemo.steps[0].title, /第 1 步/);
+  assert.match(enDemo.steps[0].title, /^Step 1/);
+  assert.ok(enDemo.steps.every((step) => Array.isArray(step.before)));
+  assert.deepEqual(
+    enDemo.steps.map((step) => step.before.map((line) => line.text)),
+    zhDemo.steps.map((step) => step.before.map((line) => line.text)),
+  );
+
+  const enSample = localizeSample(cfgSamples[0], 'en');
+  assert.equal(enSample.label, 'Diamond branch');
+  assert.equal(localizeSample(cfgSamples[0], 'zh').label, '菱形分支');
+
+  const brokenEn = parseIR('define i32 @f() {\nentry:\n  %x = add i32 1, 2\n', 'en');
+  assert.ok(brokenEn.issues.some((issue) => issue.message.includes('missing its closing')));
+  assert.ok(brokenEn.issues.some((issue) => issue.message.includes('has no terminator')));
+}
+
+console.log('IR parser, CFG layout & i18n: all assertions passed');

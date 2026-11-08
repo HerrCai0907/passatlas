@@ -7,6 +7,9 @@
  * - 所有问题通过 issues 返回，UI 决定怎么展示。
  */
 
+import { defaultLocale, type Locale } from '../../i18n/config.ts';
+import { t } from '../../i18n/ui.ts';
+
 export type EdgeKind =
   | 'branch'
   | 'true'
@@ -183,7 +186,7 @@ function edgesOf(block: IRBlock): IREdge[] {
   }
 }
 
-export function parseIR(source: string): IRParseResult {
+export function parseIR(source: string, locale: Locale = defaultLocale): IRParseResult {
   const issues: IRParseIssue[] = [];
   const functions: IRFunction[] = [];
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
@@ -233,7 +236,7 @@ export function parseIR(source: string): IRParseResult {
       if (labelMatch) {
         const label = normaliseLabel(labelMatch[1] ?? '');
         if (seen.has(label)) {
-          issues.push({ line: lineIndex, message: `基本块 ${label} 重复定义` });
+          issues.push({ line: lineIndex, message: t(locale, 'parse.duplicateBlock', { label }) });
         }
         startBlock(label);
         continue;
@@ -262,11 +265,11 @@ export function parseIR(source: string): IRParseResult {
     if (current) blocks.push(current);
 
     if (!closed) {
-      issues.push({ line: defineLine, message: `函数 @${name} 缺少结尾的 }` });
+      issues.push({ line: defineLine, message: t(locale, 'parse.missingBrace', { name }) });
     }
 
     if (blocks.length === 0) {
-      issues.push({ line: defineLine, message: `函数 @${name} 里没有基本块` });
+      issues.push({ line: defineLine, message: t(locale, 'parse.emptyFunction', { name }) });
       continue;
     }
 
@@ -277,7 +280,7 @@ export function parseIR(source: string): IRParseResult {
       if (!block.terminator) {
         issues.push({
           line: defineLine,
-          message: `基本块 ${block.label} 没有终结指令（br / ret / switch…）`,
+          message: t(locale, 'parse.missingTerminator', { label: block.label }),
         });
       }
 
@@ -285,7 +288,7 @@ export function parseIR(source: string): IRParseResult {
         if (!byId.has(edge.to)) {
           issues.push({
             line: defineLine,
-            message: `基本块 ${block.label} 跳转到了不存在的 ${edge.to}`,
+            message: t(locale, 'parse.unknownTarget', { label: block.label, to: edge.to }),
           });
           continue;
         }
@@ -297,7 +300,7 @@ export function parseIR(source: string): IRParseResult {
   }
 
   if (functions.length === 0 && source.trim() !== '') {
-    issues.push({ line: 1, message: '没有找到 define 定义的函数' });
+    issues.push({ line: 1, message: t(locale, 'parse.noFunctions') });
   }
 
   return { functions, issues };

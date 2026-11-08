@@ -1,0 +1,10 @@
+---
+import SCCInlinerLab from './SCCInlinerLab';
+import { getLocaleFromPath } from '../lib/url';
+
+// MDX 内容里不能方便地把当前语言传给 island，这里用当前 URL 推断，
+// 让中英文内容复用同一个实验台组件。
+const locale = getLocaleFromPath(Astro.url.pathname);
+---
+
+<SCCInlinerLab locale={locale} client:visible />

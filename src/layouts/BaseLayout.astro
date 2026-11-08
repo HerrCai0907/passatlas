@@ -1,7 +1,9 @@
 ---
 import '../styles/global.css';
-import { site } from '../site';
-import { url } from '../lib/url';
+import { site, siteDescription, siteTitle } from '../site';
+import { localeMeta, locales, type Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { getLocaleFromPath, pathWithoutLocaleUrl, url } from '../lib/url';
 import SiteHeader from '../components/SiteHeader.astro';
 import SiteFooter from '../components/SiteFooter.astro';
 
@@ -10,21 +12,45 @@ interface Props {
   title?: string;
   description?: string;
   noindex?: boolean;
+  /** 由页面显式传入；不传时从 URL 推断 */
+  locale?: Locale;
 }
 
-const { title, description = site.description, noindex = false } = Astro.props;
-const fullTitle = title ? `${title} · ${site.name}` : `${site.name} · ${site.nameZh}`;
+const {
+  title,
+  description,
+  noindex = false,
+  locale: explicitLocale,
+} = Astro.props;
+
+const locale = explicitLocale ?? getLocaleFromPath(Astro.url.pathname);
+const meta = localeMeta[locale];
+const descriptionText = description ?? siteDescription(locale);
+const fullTitle = title ? `${title} · ${site.name}` : siteTitle(locale);
 const canonical = new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin);
+
+// 同一页面在其它语言下的地址：去掉 base 与语言前缀，再换成目标语言
+const alternatePath = pathWithoutLocaleUrl(Astro.url.pathname);
+const alternates = locales.map((item) => ({
+  locale: item,
+  meta: localeMeta[item],
+  href: new URL(url(alternatePath, item), Astro.site ?? Astro.url.origin).href,
+}));
+const otherMetas = alternates.filter((item) => item.locale !== locale);
 ---
 
 <!doctype html>
-<html lang="zh-CN">
+<html lang={meta.htmlLang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{fullTitle}</title>
-    <meta name="description" content={description} />
+    <meta name="description" content={descriptionText} />
     <link rel="canonical" href={canonical.href} />
+    {!noindex && alternates.map((item) => (
+      <link rel="alternate" hreflang={item.meta.htmlLang} href={item.href} />
+    ))}
+    {!noindex && <link rel="alternate" hreflang="x-default" href={alternates[0]?.href} />}
     <link rel="icon" type="image/svg+xml" href={url('/favicon.svg')} />
     <meta name="theme-color" content="#f7f3ea" />
     <meta name="generator" content={Astro.generator} />
@@ -32,20 +58,23 @@ const canonical = new URL(Astro.url.pathname, Astro.site ?? Astro.url.origin);
 
     <meta property="og:type" content="article" />
     <meta property="og:site_name" content={site.name} />
-    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:locale" content={meta.ogLocale} />
+    {otherMetas.map((item) => (
+      <meta property="og:locale:alternate" content={item.meta.ogLocale} />
+    ))}
     <meta property="og:title" content={fullTitle} />
-    <meta property="og:description" content={description} />
+    <meta property="og:description" content={descriptionText} />
     <meta property="og:url" content={canonical.href} />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content={fullTitle} />
-    <meta name="twitter:description" content={description} />
+    <meta name="twitter:description" content={descriptionText} />
   </head>
   <body>
-    <a class="skip-link" href="#main">跳到正文</a>
-    <SiteHeader />
+    <a class="skip-link" href="#main">{t(locale, 'skip')}</a>
+    <SiteHeader locale={locale} />
     <main id="main">
       <slot />
     </main>
-    <SiteFooter />
+    <SiteFooter locale={locale} />
   </body>
 </html>

@@ -48,6 +48,11 @@ export default defineConfig({
     react(),
     sitemap({
       filter: (page) => !page.endsWith('/404/'),
+      // 同一页面的中英文版本在 sitemap 里互相声明 hreflang
+      i18n: {
+        defaultLocale: 'zh',
+        locales: { zh: 'zh-CN', en: 'en' },
+      },
     }),
   ],
   markdown: {

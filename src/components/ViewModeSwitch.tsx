@@ -1,3 +1,5 @@
+import { defaultLocale, type Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
 import './ViewModeSwitch.css';
 
 export type ViewMode = 'cfg' | 'ir';
@@ -5,6 +7,7 @@ export type ViewMode = 'cfg' | 'ir';
 interface Props {
   value: ViewMode;
   onChange: (mode: ViewMode) => void;
+  locale?: Locale;
   label?: string;
 }
 
@@ -12,15 +15,16 @@ interface Props {
 export default function ViewModeSwitch({
   value,
   onChange,
-  label = '展示模式',
+  locale = defaultLocale,
+  label,
 }: Props) {
   return (
-    <div className="vm" role="group" aria-label={label}>
+    <div className="vm" role="group" aria-label={label ?? t(locale, 'viewMode.group')}>
       <button
         type="button"
         aria-pressed={value === 'cfg'}
         onClick={() => onChange('cfg')}
-        title="按基本块显示为有向图"
+        title={t(locale, 'viewMode.cfgTitle')}
       >
         CFG
       </button>
@@ -28,7 +32,7 @@ export default function ViewModeSwitch({
         type="button"
         aria-pressed={value === 'ir'}
         onClick={() => onChange('ir')}
-        title="显示原始 IR 文本"
+        title={t(locale, 'viewMode.irTitle')}
       >
         IR
       </button>

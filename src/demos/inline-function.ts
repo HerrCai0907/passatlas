@@ -1,4 +1,4 @@
-import { makeDemo } from './types';
+import { makeDemo } from './types.ts';
 
 const inputIR = `
 define i32 @caller(i32 %x) {
@@ -105,4 +105,23 @@ export const inlineFunctionDemo = makeDemo('inline-function', 'inline function',
     before: inlinedIR,
     after: cleanedIR,
   },
-]);
+],
+  {
+    en: {
+      steps: [
+      {
+        title: 'Step 1 · Check that it can be inlined',
+        note: 'The decision is already made. InlineFunction checks the call site: does the callee have a definition, is it already in !inline_history, does it have an operand bundle that cannot be expanded. Then it records two return points: pick returns from %pos and from %neg.',
+      },
+      {
+        title: 'Step 2 · Split the call site, clone and stitch the CFG',
+        note: "caller's entry is split at the call. pick's three blocks are cloned with a .i suffix; both rets become branches to %cont, and %cont uses a phi to merge the two possible values of %r.",
+      },
+      {
+        title: 'Step 3 · Clean up the callee',
+        note: 'pick is internal, its only call site is gone and it has no live uses, so it is trivially dead and removed from the module. Block names and merge strategy are illustrative; real CLI output varies by version.',
+      },
+      ],
+    },
+  },
+);

@@ -6,6 +6,8 @@
  * 这样内容作者不需要手写 mark，也不会出现标注和代码不一致。
  */
 
+import { defaultLocale, type Locale } from '../i18n/config.ts';
+
 export type Mark = 'keep' | 'add' | 'del' | 'focus';
 
 export interface IRLine {
@@ -20,6 +22,12 @@ export interface DemoStep {
   after: IRLine[];
 }
 
+/** 一种语言的标题与说明；IR 本身不需要翻译，所以只覆盖文案 */
+export interface DemoLocalization {
+  label?: string;
+  steps: Array<{ title: string; note: string }>;
+}
+
 export interface Demo {
   id: string;
   label: string;
@@ -29,6 +37,8 @@ export interface Demo {
    * 播放器据此为 IR 面板预留固定高度，切步时按钮不会上下跳动。
    */
   maxLines: number;
+  /** 除默认语言（中文）之外的界面文案 */
+  localizations?: Partial<Record<Locale, DemoLocalization>>;
 }
 
 export interface StepSource {
@@ -129,6 +139,7 @@ export function makeDemo(
   id: string,
   label: string,
   sources: StepSource[],
+  localizations?: Partial<Record<Locale, DemoLocalization>>,
 ): Demo {
   const steps = sources.map(makeStep);
   const maxLines = steps.reduce(
@@ -136,5 +147,21 @@ export function makeDemo(
     0,
   );
 
-  return { id, label, steps, maxLines };
+  return { id, label, steps, maxLines, localizations };
+}
+
+/** 取某种语言的演示；没有翻译时回退到默认文案，保证页面永远有内容 */
+export function localizeDemo(demo: Demo, locale: Locale = defaultLocale): Demo {
+  const copy = demo.localizations?.[locale];
+  if (!copy) return demo;
+
+  return {
+    ...demo,
+    label: copy.label ?? demo.label,
+    steps: demo.steps.map((step, index) => ({
+      ...step,
+      title: copy.steps[index]?.title ?? step.title,
+      note: copy.steps[index]?.note ?? step.note,
+    })),
+  };
 }

@@ -7,7 +7,7 @@
  *
  * 输出按「基本块 id + 指令下标」索引，和 `CFGCanvas` 的渲染单位一致。
  */
-import type { IRFunction } from './parse';
+import type { IRFunction } from './parse.ts';
 
 export type InstructionMark = 'add' | 'del' | 'focus';
 

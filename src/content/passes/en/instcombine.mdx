@@ -1,0 +1,83 @@
+---
+title: instcombine
+subtitle: Instruction combining and simplification
+summary: A worklist-driven pattern-matching engine that rewrites identity operations, strength-reducible multiplies and foldable comparisons until the function stops changing.
+category: scalar
+difficulty: 2
+status: ready
+order: 2
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Peephole', 'Worklist', 'Canonicalization']
+demo: instcombine
+source: llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+updated: 2026-11-03
+---
+
+## What problem does it solve
+
+IR produced by the front end is a literal translation and full of locally simplifiable instructions:
+
+- identity operations: `add x, 0`, `mul x, 1`, `or x, 0`
+- expensive but equivalent forms: `mul x, 8` can become `shl x, 3`
+- comparisons that are always constant: `icmp eq x, x` is always true
+- redundant conversions: `sext` immediately followed by a `trunc` back to the original width
+
+Each rewrite looks small, but together they are the foundation for later work: the more canonical the IR, the easier GVN, SCCP and instruction selection become. instcombine is the pass responsible for that canonicalisation.
+
+## Why a worklist instead of one scan
+
+A single linear scan misses chain reactions: simplifying `a` may make `b` foldable, but `b` was already visited before `a`.
+
+instcombine's answer is to put instructions on a worklist, pop them, try to match and rewrite, and re-enqueue affected users until the queue is empty — that is, until a fixed point is reached.
+
+```text
+worklist = all instructions in the function
+while worklist is not empty:
+  I = pop(worklist)
+  if I has been erased: continue
+  if R = visit(I):          // some simplification pattern matched
+    replaceInstUsesWith(I, R)
+    push all users of I     // chain reaction
+    erase I
+```
+
+The "already erased" line matters: one rewrite may delete other instructions still in the queue, so the code has to defend against stale entries.
+
+## What it actually does
+
+Walking the source, `InstCombine*.cpp` covers roughly these families:
+
+| Family | Example | Depends on |
+| --- | --- | --- |
+| Algebraic identity | `x + 0`, `x * 1`, `x - x` | No analysis |
+| Strength reduction | `mul x, 2^k` → `shl`; `urem x, 2^k` → `and` | Known constants |
+| Constant folding | `add 3, 4` → `7` | Constant folder |
+| Comparisons and select | `icmp eq x, x` → `true`; min/max recognition | Predicate analysis |
+| Cast canonicalisation | merge `sext` + `trunc`, split constant GEP indices | Type information |
+| Dead-code cleanup | delete pure instructions with no users | Side-effect check |
+
+Many of these decisions rely on facts supplied by `KnownBits` (which bits are definitely 0 or 1), `DemandedBits` (which bits are actually used) and `SimplifyQuery`; that is what makes instcombine stronger than pure pattern matching.
+
+## The correctness red line
+
+LLVM IR has `poison` and `undef`, plus promises such as `nsw`, `nuw` and `exact`. A simplification must preserve **refinement**: the new program may only behave in ways the old program could, and must not invent a definite value that did not exist before.
+
+- `add nsw x, 1` is `poison` on overflow and cannot be folded as a plain add;
+- floating-point reassociation is not allowed by default without a `fast` flag;
+- before deleting an instruction, confirm it has no side effects: `store`, `call` and `fence` are out.
+
+This is why, in the demo on this page, after `sub %b, %b` folds to `0`, the now-unused `shl` is left for DCE — instcombine only performs **local** simplification and does not do global dead-code elimination.
+
+## Cost
+
+- Roughly linear in practice, but one rewrite can trigger several re-enqueues, so the cost on large functions is not negligible.
+- It is one of the most frequently run passes in the pipeline: before and after inlining, and again after loop optimisation.
+- Simplification strength trades directly against compile time; `-O3` enables more aggressive patterns.
+
+## Run it yourself
+
+```bash
+opt -passes=instcombine -S demo.ll -o -
+```
+
+Write a few deliberately silly lines of IR, such as `add i32 %x, 0` followed by `mul i32 %a, 8`, and watch the output converge step by step.

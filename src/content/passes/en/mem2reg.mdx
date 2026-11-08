@@ -1,0 +1,99 @@
+---
+title: mem2reg
+subtitle: Memory to register promotion
+summary: At -O0 the front end keeps local variables in memory; mem2reg promotes them to SSA values so later passes can finally see the dataflow.
+category: dataflow
+difficulty: 1
+status: ready
+order: 1
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['SSA', 'Promotion', 'Dominance']
+demo: mem2reg
+source: llvm/lib/Transforms/Utils/Mem2Reg.cpp
+updated: 2026-11-01
+---
+
+## What problem does it solve
+
+IR produced by `clang -O0` looks almost the same everywhere: one `alloca` per local variable, a `store` for each assignment and a `load` for each read.
+
+```llvm
+%x = alloca i32
+store i32 1, ptr %x
+%v = load i32, ptr %x
+```
+
+These "variables in memory" are friendly to the machine but hostile to the optimiser: dependencies between values are hidden inside memory, and answering "which write did this read see" requires alias analysis.
+
+Almost every LLVM optimisation is built on **SSA** — each value is defined once, and use-def chains are explicit. mem2reg is that door: it replaces promotable `alloca`s with values in registers and puts the function into SSA form.
+
+## Which allocas can be promoted
+
+mem2reg does not handle every `alloca`. It must satisfy all of the following:
+
+- it is used only by direct `load` / `store` instructions, and its address is never passed to another instruction;
+- every access is non-`volatile` and uses a consistent type;
+- the address never escapes: it is not passed to a call, stored into another pointer, or converted with `ptrtoint`.
+
+If the address escapes once, the compiler can no longer track all reads and writes, and the `alloca` has to stay in memory. Arrays and multi-field structs are usually first split into scalars by SROA, and then mem2reg takes over.
+
+## The three-step algorithm
+
+The LLVM implementation (`PromoteMemoryToRegister.cpp`) can be split into three stages.
+
+**Step one: decide promotability.** Walk the users of the `alloca` and check that they are all direct `load` / `store` and that none is `volatile`. If not, skip it.
+
+**Step two: insert φ at the dominance frontier.** For every block that defines the variable, propagate outwards along the dominance frontier and insert φ nodes at merge points until no new definitions appear.
+
+```text
+for each promotable alloca A:
+  worklist = { B | B contains a store to A }
+  while worklist is not empty:
+    X = pop(worklist)
+    for Y in DF(X):
+      if Y does not yet have a φ for A:
+        insert φ(A) at Y
+        push Y        // the φ is a definition too, keep propagating
+```
+
+**Step three: rename along the dominator tree.** Do a dominator-tree DFS from the entry block while maintaining a stack of reaching definitions: push on a `store`, replace every use on a `load` with the top of the stack, and fill the corresponding φ incoming values before entering successors.
+
+```text
+rename(B):
+  for inst in B:
+    if store A, v:  stack.push(v)
+    if load A:      rauw(stack.top())
+  for S in successors(B):
+    for φ in S:     φ.addIncoming(stack.top(), B)
+  for C in dom-children(B): rename(C)
+  pop the definitions pushed by this block
+```
+
+After renaming, the `store`s and the `alloca` have no users left and are removed as dead instructions.
+
+## Why the dominance frontier
+
+A block only needs a φ when several predecessor paths bring different definitions together. `DF(X)` is exactly the set of blocks that a definition in X can reach but that X does not dominate — those are the places where values from different paths have to be merged.
+
+In the animation above, `then` and `else` both write `%slot` and meet at `merge`, so a φ is inserted at `merge`; the definition in `entry` does not reach `merge` (entry dominates merge, and every path must pass through a redefining block), so `entry` needs no φ.
+
+## Cost and pitfalls
+
+- **Cost**: the number of φ-insertion iterations depends on the size of the dominance frontier and is close to linear in practice; on very large functions (tens of thousands of blocks) it is still noticeable.
+- **Loops**: a φ in a loop header becomes a new definition, so the worklist must keep propagating until closure — otherwise nested phis are missed.
+- **Trivial phis**: a φ whose incoming values are all the same is redundant. mem2reg cleans some of them up, but later passes can create new ones.
+- **Names are not semantics**: names such as `%slot.0` are temporary. Do not read them as a specific storage location.
+
+## Where it sits in the pipeline
+
+mem2reg is one of the first function passes to run after `-O1`. It depends on `DominatorTree` and produces an SSA-ified function; only then do GVN, SCCP and instcombine have anything to work with.
+
+## Run it yourself
+
+```bash
+# -O0 adds optnone, so disable it explicitly
+clang -O0 -S -emit-llvm -Xclang -disable-O0-optnone demo.c -o demo.ll
+opt -passes=mem2reg -S demo.ll -o -
+```
+
+Replace `demo.c` with a small function containing an `if/else`, compare the output before and after `mem2reg`, and replay the animation above. It will feel very concrete.

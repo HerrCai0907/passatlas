@@ -1,6 +1,6 @@
 ---
 title: inline-function
-zh: 内联改写
+subtitle: 内联改写
 summary: 决策通过后，InlineFunction 克隆 callee、拆分 call site、把每个 ret 汇进 PHI，并补齐调试信息与调用图更新。
 category: interproc
 difficulty: 3
@@ -13,7 +13,7 @@ source: llvm/lib/Transforms/Utils/InlineFunction.cpp
 updated: 2026-11-08
 ---
 
-import { url as passUrl } from '../../lib/url';
+import I18nLink from '../../../components/I18nLink.astro';
 
 ## 它解决什么问题
 
@@ -21,7 +21,7 @@ import { url as passUrl } from '../../lib/url';
 
 它不是复制粘贴。克隆出来的 SSA 值要改名，实参要替换形参，caller 的基本块要在 call 处拆开，callee 的每个 `ret` 都要接到同一个 continuation 块，多个返回值要用 `phi` 合并；`invoke` 还要带着 landingpad 一起搬，调试信息要补 `inlinedAt` 链。做完这些，调用图、worklist 和死函数列表也要更新。
 
-这一页只看「怎么改」。哪条 call 值得内联，见 <a href={passUrl('/passes/inliner/')}>inliner</a>。
+这一页只看「怎么改」。哪条 call 值得内联，见 <I18nLink href="/passes/inliner/">inliner</I18nLink>。
 
 ## 算法
 
@@ -113,7 +113,7 @@ InlinerPass ──> advisor 说 yes ──> InlineFunction ──> 更新 CFG / 
 
 `AlwaysInlinerPass` 也会用它处理 `alwaysinline`；`ModuleInlinerPass` 是另一条决策路径，但底层同样落到这套克隆与缝合逻辑。
 
-真正的 pass 级入口仍然是 <a href={passUrl('/passes/inliner/')}>inliner</a>：SCC 后序、候选队列、代价模型都在那里；这一页只是它调用的「手术台」。
+真正的 pass 级入口仍然是 <I18nLink href="/passes/inliner/">inliner</I18nLink>：SCC 后序、候选队列、代价模型都在那里；这一页只是它调用的「手术台」。
 
 ## 自己跑一遍
 

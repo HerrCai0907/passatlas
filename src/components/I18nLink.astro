@@ -1,0 +1,17 @@
+---
+import { getLocaleFromPath, url } from '../lib/url';
+import type { Locale } from '../i18n/config';
+
+interface Props {
+  href: string;
+  /** 可选：显式指定语言；默认从当前页面 URL 推断 */
+  locale?: Locale;
+  class?: string;
+}
+
+const { href, locale: explicitLocale, class: className } = Astro.props;
+const locale = explicitLocale ?? getLocaleFromPath(Astro.url.pathname);
+const target = /^(https?:)?\/\//.test(href) || href.startsWith('#') ? href : url(href, locale);
+---
+
+<a class={className} href={target}><slot /></a>

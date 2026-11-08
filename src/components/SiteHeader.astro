@@ -1,13 +1,33 @@
 ---
 import { nav, site } from '../site';
-import { isActive, url } from '../lib/url';
+import { localeMeta, otherLocale, type Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { isActive, switchLocaleUrl, url } from '../lib/url';
 
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
 const path = Astro.url.pathname;
+const targetLocale = otherLocale(locale);
+const targetMeta = localeMeta[targetLocale];
+const isNotFound = path.replace(/\/+$/, '').endsWith('/404');
+// 404 没有英文版本，切换语言时回到首页，避免把读者送到另一个 404
+const switchHref = isNotFound
+  ? url('/', targetLocale)
+  : `${switchLocaleUrl(path, targetLocale)}${Astro.url.search}`;
+const brandSubtitle = locale === 'zh' ? site.nameZh : site.nameEn;
+const switchLabel = t(locale, targetLocale === 'en' ? 'lang.toEnglish' : 'lang.toChinese');
 ---
 
 <header class="site-head">
   <div class="container site-head__inner">
-    <a class="brand" href={url('/')} aria-label={`${site.name} 首页`}>
+    <a
+      class="brand"
+      href={url('/', locale)}
+      aria-label={t(locale, 'site.homeAria', { name: site.name })}
+    >
       <svg class="brand__mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
         <rect x="3.5" y="3.5" width="25" height="25" rx="7.5" stroke="currentColor" stroke-opacity="0.22" />
         <path d="M9 11h9M9 16h6M9 21h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
@@ -21,21 +41,38 @@ const path = Astro.url.pathname;
       </svg>
       <span class="brand__text">
         <strong>PassAtlas</strong>
-        <span>LLVM Pass 图鉴</span>
+        <span>{brandSubtitle}</span>
       </span>
     </a>
 
-    <nav class="nav" aria-label="主导航">
+    <nav class="nav" aria-label={t(locale, 'nav.main')}>
       {
         nav.map((item) => (
           <a
-            href={url(item.href)}
-            aria-current={isActive(path, item.href) ? 'page' : undefined}
+            href={url(item.href, locale)}
+            aria-current={isActive(path, item.href, locale) ? 'page' : undefined}
           >
-            {item.label}
+            {item.label[locale]}
           </a>
         ))
       }
+    </nav>
+
+    <nav class="lang" aria-label={t(locale, 'lang.switch')}>
+      <a
+        href={switchHref}
+        hreflang={targetMeta.htmlLang}
+        lang={targetMeta.htmlLang}
+        aria-label={switchLabel}
+        title={switchLabel}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3">
+          <circle cx="8" cy="8" r="6.2" />
+          <path d="M1.8 8h12.4M8 1.8c1.7 1.7 2.6 3.9 2.6 6.2S9.7 12.5 8 14.2C6.3 12.5 5.4 10.3 5.4 8S6.3 3.5 8 1.8Z" />
+        </svg>
+        <span class="lang__full">{targetMeta.label}</span>
+        <span class="lang__short" aria-hidden="true">{targetMeta.short}</span>
+      </a>
     </nav>
 
     <a class="repo" href={site.github} target="_blank" rel="noopener noreferrer">
@@ -63,7 +100,7 @@ const path = Astro.url.pathname;
   .site-head__inner {
     display: flex;
     align-items: center;
-    gap: 20px;
+    gap: 16px;
     min-height: 66px;
   }
 
@@ -140,11 +177,12 @@ const path = Astro.url.pathname;
     background: var(--accent);
   }
 
+  .lang a,
   .repo {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    padding: 6px 12px 6px 10px;
+    padding: 6px 12px;
     border: 1px solid var(--line-strong);
     border-radius: 999px;
     font-family: var(--font-mono);
@@ -152,26 +190,38 @@ const path = Astro.url.pathname;
     letter-spacing: 0.04em;
     color: var(--muted);
     text-decoration: none;
+    white-space: nowrap;
     transition:
       color 0.16s var(--ease),
       border-color 0.16s var(--ease),
       background-color 0.16s var(--ease);
   }
 
+  .lang a {
+    padding-inline: 10px;
+  }
+
+  .lang svg,
   .repo svg {
     width: 14px;
     height: 14px;
+    flex: none;
   }
 
+  .lang__short {
+    display: none;
+  }
+
+  .lang a:hover,
   .repo:hover {
     color: var(--ink);
     border-color: var(--ink);
     background: var(--surface);
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 760px) {
     .site-head__inner {
-      gap: 10px;
+      gap: 8px;
     }
 
     .brand__text span {
@@ -179,7 +229,19 @@ const path = Astro.url.pathname;
     }
 
     .nav a {
-      padding-inline: 9px;
+      padding-inline: 8px;
+    }
+
+    .lang__full {
+      display: none;
+    }
+
+    .lang__short {
+      display: inline;
+    }
+
+    .lang a {
+      padding: 7px 9px;
     }
 
     .repo span {
@@ -188,6 +250,25 @@ const path = Astro.url.pathname;
 
     .repo {
       padding: 7px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .site-head__inner {
+      gap: 4px;
+    }
+
+    .nav {
+      gap: 0;
+    }
+
+    .nav a {
+      padding-inline: 6px;
+      font-size: 13px;
+    }
+
+    .lang svg {
+      display: none;
     }
   }
 </style>

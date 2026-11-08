@@ -16,6 +16,7 @@
 - **内容即代码**：每篇 pass 是一个 MDX 文件，frontmatter 由 Zod 校验；写错字段、写错分类，构建直接失败。
 - **零配置部署**：push 到 `main` 自动构建并发布到 GitHub Pages，项目站点子路径（`/repo-name/`）自动处理。
 - **可访问**：键盘全可操作、focus 可见、`prefers-reduced-motion` 下自动停播并关闭动画。
+- **中英双语**：默认语言是中文（无路径前缀），英文在 `/en/` 下。语言切换器保持当前页面，head 里带 `hreflang`，sitemap 也声明两种语言的对应关系。
 
 ## 快速开始
 
@@ -25,7 +26,7 @@ npm run dev       # http://localhost:4321
 npm run build     # 静态产物输出到 dist/
 npm run preview   # 本地预览 dist/
 npm run check     # TypeScript / Astro 模板类型检查
-npm run test:ir   # IR 解析器与 CFG 布局的断言测试（Node 直接跑 TS）
+npm run test:ir   # IR 解析器、CFG 布局与 i18n 的断言测试（Node 直接跑 TS）
 ```
 
 要求 Node `>= 22.23.4`，版本见 `.nvmrc`。
@@ -34,14 +35,16 @@ npm run test:ir   # IR 解析器与 CFG 布局的断言测试（Node 直接跑 T
 
 ```text
 src/
-├── pages/                 路由
-│   ├── index.astro        首页：hero 动画 + 精选图鉴
-│   ├── passes/index.astro 图鉴目录（分类 + 路线图）
-│   ├── passes/[...slug].astro  pass 详情（构建期生成）
-│   ├── ir/index.astro     CFG 实验室：贴 IR 看控制流
-│   ├── about.astro        方法论与贡献说明
-│   └── 404.astro / robots.txt.ts
-├── layouts/               BaseLayout（head / meta / 页头页脚）
+├── pages/
+│   ├── [...locale]/       路由：一次生成中文（无前缀）与英文（/en/）
+│   │   ├── index.astro    首页：hero 动画 + 精选图鉴
+│   │   ├── passes/index.astro 图鉴目录（分类 + 路线图）
+│   │   ├── passes/[...slug].astro  pass 详情（构建期生成）
+│   │   ├── ir/index.astro CFG 实验室：贴 IR 看控制流
+│   │   └── about.astro    方法论与贡献说明
+│   └── 404.astro / robots.txt.ts   根路径专用
+├── i18n/                  config.ts（语言）· ui.ts（文案）· paths.ts · lab-scc.ts
+├── layouts/               BaseLayout（head / meta / hreflang / 页头页脚）
 │                          PassLayout（详情页骨架 + 上一篇/下一篇）
 ├── components/
 │   ├── StepPlayer.tsx     分步 IR 播放器
@@ -49,10 +52,12 @@ src/
 │   ├── CFGLab.tsx         实验室：可编辑 IR + 实时重绘
 │   ├── PassCard/PassRow   卡片（首页）与行（目录）
 │   └── ...                页头、页脚、管线标记
-├── content/passes/        每篇一个 .mdx
+├── content/passes/zh/     每篇一个中文 .mdx
+├── content/passes/en/     同一 id 的英文 .mdx
 ├── demos/                 演示数据：types.ts（diff 引擎）+ 每个 pass 一份
 ├── lib/
-│   ├── url.ts             base path 安全的链接助手
+│   ├── url.ts             base path + 语言前缀安全的链接助手
+│   ├── passes.ts          内容 id → slug / locale 的助手
 │   └── ir/                parse.ts（IR → 基本块）· layout.ts（分层布局）
 ├── data/                  roadmap.ts · cfg-samples.ts（实验室示例）
 └── styles/                tokens.css（设计令牌）· global.css（基础 + prose）
@@ -60,12 +65,12 @@ src/
 
 ## 新增一篇 pass
 
-完整规范见 [`AGENTS.md`](AGENTS.md)，核心只有三步：
+完整规范见 [`AGENTS.md`](AGENTS.md)，核心只有四步：
 
-1. **写演示数据** `src/demos/<id>.ts`：只提供 `before` / `after` 两段 IR，行级 diff 由 `makeStep()` 在构建期计算。
+1. **写演示数据** `src/demos/<id>.ts`：只提供 `before` / `after` 两段 IR，行级 diff 由 `makeStep()` 在构建期计算；第四参数补英文标题与说明。
 
    ```ts
-   import { makeDemo } from './types';
+   import { makeDemo } from './types.ts';
 
    export const exampleDemo = makeDemo('example', 'example', [
      {
@@ -79,16 +84,26 @@ src/
    ret i32 %x
    `,
      },
-   ]);
+   ], {
+     en: {
+       steps: [
+         {
+           title: 'Step 1 · Remove the identity add',
+           note: 'add x, 0 does not change the value; replace every use with the operand.',
+         },
+       ],
+     },
+   });
    ```
 
-2. **注册** `src/demos/registry.ts`：`example: exampleDemo`。
-3. **写页面** `src/content/passes/<id>.mdx`，frontmatter 里 `demo: example`。
+2. **注册** `src/demos/registry.ts`：`example: exampleDemo`。播放器通过 `getDemo(id, locale)` 取对应语言。
+3. **写中文页** `src/content/passes/zh/<id>.mdx`。
+4. **写英文页** `src/content/passes/en/<id>.mdx`，frontmatter 里 `demo: example`，正文用对应的英文小节标题。
 
 ```yaml
 ---
 title: example
-zh: 一句话中文名
+subtitle: 一句话短名          # 英文文件里写英文短名
 summary: 会显示在卡片与 meta description 里
 category: scalar        # dataflow | scalar | loop | interproc | vectorize | codegen
 difficulty: 2           # 1–3
@@ -101,7 +116,7 @@ source: llvm/lib/Transforms/.../X.cpp
 ---
 ```
 
-正文固定五个 `##` 小节（编号由 CSS 自动生成）：它解决什么问题 / 算法 / 代价与坑 / 在管线里的位置 / 自己跑一遍。
+正文固定五个 `##` 小节（编号由 CSS 自动生成）：它解决什么问题 / 算法 / 代价与坑 / 在管线里的位置 / 自己跑一遍。英文页使用 What problem does it solve / Algorithm / Cost and pitfalls / Where it sits in the pipeline / Run it yourself。MDX 里的站内链接用 `<I18nLink href="/passes/other/">`，它会自动带当前语言前缀。
 
 ## CFG 视图与实验室
 
@@ -121,7 +136,27 @@ source: llvm/lib/Transforms/.../X.cpp
   <CFGViewer ir={someIR} client:visible height={520} />
   ```
 
-- **测试**：`npm run test:ir`，覆盖菱形分支、循环回边、switch 多路、不可达块、跨行指令与错误提示。
+- **测试**：`npm run test:ir`，覆盖菱形分支、循环回边、switch 多路、不可达块、跨行指令、错误提示，以及中英文路径与演示文案。
+
+## 多语言（i18n）
+
+默认语言是中文，URL 没有前缀；英文在 `/en/` 下：
+
+| 页面 | 中文 | 英文 |
+| --- | --- | --- |
+| 首页 | `/` | `/en/` |
+| 图鉴 | `/passes/` | `/en/passes/` |
+| pass 详情 | `/passes/mem2reg/` | `/en/passes/mem2reg/` |
+| CFG 实验室 | `/ir/` | `/en/ir/` |
+| 关于 | `/about/` | `/en/about/` |
+
+约定：
+
+- 文案在 `src/i18n/ui.ts`，用 `t(locale, key, vars)` 取；英文表按中文表的键做类型约束，漏键会让 `npm run check` 失败。
+- 所有站内链接走 `url(path, locale)`；MDX 里用 `I18nLink`，它从当前 URL 推断语言。
+- 内容按语言放在 `src/content/passes/<locale>/<id>.mdx`，两个语言的文件名必须一致，上一篇/下一篇和语言切换器靠它配对。
+- 分类、路线图、CFG 示例、SCC 实验台和演示标题都有中英文两套；解析器错误信息也接受 locale 参数。
+- `BaseLayout` 输出 `<html lang>`、`og:locale`、canonical 与 `hreflang`，sitemap 同样声明两种语言的对应关系。
 
 ## 部署到 GitHub Pages
 
@@ -150,8 +185,9 @@ npx serve dist   # 或任意静态服务器，访问 /passatlas/
 
 - 纸色底 + 墨色字 + 衬线标题，IR 控制台用深色反白；分类色通过 `--cat` 注入。
 - 颜色、字体、圆角、阴影全部走 `src/styles/tokens.css`，组件里不写死色值。
-- 所有站内链接必须经过 `src/lib/url.ts` 的 `url()`，否则部署到子路径会 404。
-- 交互只有一个岛（`StepPlayer`），其余页面是纯静态 HTML。
+- 所有站内链接必须经过 `src/lib/url.ts` 的 `url(path, locale)`，否则部署到子路径或英文页会 404。
+- UI 文案只从 `src/i18n/ui.ts` 取，组件里不写死中文或英文。
+- 交互只发生在少数 React 岛上（`StepPlayer`、`CFGViewer`、`CFGLab`、`SCCInlinerLab`），其余页面是纯静态 HTML。
 
 更完整的约束、动画规范与「完成定义」见 [`AGENTS.md`](AGENTS.md)。
 
