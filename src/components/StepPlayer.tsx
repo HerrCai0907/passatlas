@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
-import type { Demo, IRLine } from '../demos/types';
+import type { Demo, DemoStep, IRLine } from '../demos/types';
+import { diffInstructions } from '../lib/ir/diff';
+import type { InstructionDiff, InstructionMark } from '../lib/ir/diff';
 import { layoutCFG } from '../lib/ir/layout';
 import type { CFGGraph } from '../lib/ir/layout';
 import { parseIR } from '../lib/ir/parse';
@@ -40,19 +42,39 @@ function toIR(lines: IRLine[]): string {
   return lines.map((line) => line.text).join('\n');
 }
 
-function graphOf(ir: string): CFGGraph | null {
-  const fn = parseIR(ir).functions[0];
-  return fn ? layoutCFG(fn) : null;
+interface StepGraph {
+  before: CFGGraph | null;
+  after: CFGGraph | null;
+  diff: InstructionDiff | null;
+}
+
+/** 解析这一步的两侧 IR，并按指令文本做 diff；注释变化不会把整块染红染绿 */
+function graphOfStep(step: DemoStep): StepGraph {
+  const beforeFn = parseIR(toIR(step.before)).functions[0] ?? null;
+  const afterFn = parseIR(toIR(step.after)).functions[0] ?? null;
+  const focus = [...step.before, ...step.after]
+    .filter((line) => line.mark === 'focus')
+    .map((line) => line.text);
+
+  return {
+    before: beforeFn ? layoutCFG(beforeFn) : null,
+    after: afterFn ? layoutCFG(afterFn) : null,
+    diff: beforeFn && afterFn ? diffInstructions(beforeFn, afterFn, focus) : null,
+  };
 }
 
 function CFGPanel({
   label,
   side,
   graph,
+  marks,
+  delta,
 }: {
   label: string;
   side: 'before' | 'after';
   graph: CFGGraph | null;
+  marks?: ReadonlyMap<string, InstructionMark>;
+  delta?: { count: number; kind: 'add' | 'del' };
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
@@ -80,16 +102,47 @@ function CFGPanel({
     >
       <header className="pa-cfg__head">
         <span className="pa-cfg__label">{label}</span>
-        <span className="pa-cfg__count">{graph ? `${graph.blocks.length} 块` : '—'}</span>
+        <span className="pa-cfg__count">
+          {graph ? `${graph.blocks.length} 块` : '—'}
+          {delta && delta.count > 0 ? (
+            <em
+              className={`pa-cfg__delta pa-cfg__delta--${delta.kind}`}
+              title={`本步${delta.kind === 'add' ? '新增' : '删除'} ${delta.count} 条指令`}
+            >
+              {delta.kind === 'add' ? '+' : '−'}
+              {delta.count}
+            </em>
+          ) : null}
+        </span>
       </header>
       <div className="pa-cfg__viewport" ref={ref}>
         {graph ? (
-          <CFGCanvas graph={graph} scale={scale} interactive={false} />
+          <CFGCanvas graph={graph} scale={scale} interactive={false} marks={marks} />
         ) : (
           <p className="pa-cfg__empty">无法解析为基本块</p>
         )}
       </div>
     </section>
+  );
+}
+
+function DiffLegend() {
+  return (
+    <p className="pa-diffkey">
+      <span className="pa-diffkey__title">指令 diff</span>
+      <span className="pa-diffkey__item pa-diffkey__item--add">
+        <i aria-hidden="true" />
+        新增
+      </span>
+      <span className="pa-diffkey__item pa-diffkey__item--del">
+        <i aria-hidden="true" />
+        删除
+      </span>
+      <span className="pa-diffkey__item pa-diffkey__item--focus">
+        <i aria-hidden="true" />
+        关注
+      </span>
+    </p>
   );
 }
 
@@ -150,14 +203,7 @@ export default function StepPlayer({
   const total = steps.length;
   const step = steps[index];
 
-  const graphs = useMemo(
-    () =>
-      steps.map((item) => ({
-        before: graphOf(toIR(item.before)),
-        after: graphOf(toIR(item.after)),
-      })),
-    [steps],
-  );
+  const graphs = useMemo(() => steps.map(graphOfStep), [steps]);
 
   const goTo = useCallback(
     (next: number) => {
@@ -252,10 +298,25 @@ export default function StepPlayer({
       <p className="pa-title">{step.title}</p>
 
       {mode === 'cfg' ? (
-        <div className="pa-panes pa-panes--cfg">
-          <CFGPanel label="before" side="before" graph={current?.before ?? null} />
-          <CFGPanel label="after" side="after" graph={current?.after ?? null} />
-        </div>
+        <>
+          <DiffLegend />
+          <div className="pa-panes pa-panes--cfg">
+            <CFGPanel
+              label="before"
+              side="before"
+              graph={current?.before ?? null}
+              marks={current?.diff?.before}
+              delta={{ count: current?.diff?.removed ?? 0, kind: 'del' }}
+            />
+            <CFGPanel
+              label="after"
+              side="after"
+              graph={current?.after ?? null}
+              marks={current?.diff?.after}
+              delta={{ count: current?.diff?.added ?? 0, kind: 'add' }}
+            />
+          </div>
+        </>
       ) : (
         <div className="pa-panes">
           <IRPane label="before" side="before" lines={step.before} stepIndex={index} />

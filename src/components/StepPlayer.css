@@ -149,10 +149,72 @@
 }
 
 .pa-cfg__count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 10px;
   color: #515b6d;
   font-variant-numeric: tabular-nums;
+}
+
+.pa-cfg__delta {
+  font-style: normal;
+  font-weight: 600;
+}
+
+.pa-cfg__delta--add {
+  color: var(--ok);
+}
+
+.pa-cfg__delta--del {
+  color: var(--bad);
+}
+
+.pa-diffkey {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--console-line);
+  background: rgba(255, 255, 255, 0.012);
+  font-size: 10.5px;
+  color: var(--console-muted);
+}
+
+.pa-diffkey__title {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--console-muted);
+}
+
+.pa-diffkey__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pa-diffkey__item i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+
+.pa-diffkey__item--add i {
+  background: var(--ok);
+}
+
+.pa-diffkey__item--del i {
+  background: var(--bad);
+}
+
+.pa-diffkey__item--focus i {
+  background: var(--focus-ring);
 }
 
 .pa-cfg__viewport {
@@ -396,6 +458,10 @@
 /* 紧凑版：首页 hero */
 .pa-player--compact .pa-panes--cfg {
   grid-template-columns: 1fr;
+}
+
+.pa-player--compact .pa-diffkey {
+  display: none;
 }
 
 .pa-player--compact .pa-cfg__viewport {

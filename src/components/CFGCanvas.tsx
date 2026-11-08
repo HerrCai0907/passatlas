@@ -1,5 +1,7 @@
 import { useId } from 'react';
 import type { KeyboardEvent } from 'react';
+import { instructionKey } from '../lib/ir/diff';
+import type { InstructionMark } from '../lib/ir/diff';
 import type { CFGGraph, LaidOutBlock } from '../lib/ir/layout';
 import './CFGCanvas.css';
 
@@ -10,18 +12,28 @@ export interface CFGCanvasProps {
   onSelect?: (id: string) => void;
   /** 关掉后节点不可聚焦、不响应点击，用于只读预览 */
   interactive?: boolean;
+  /** 指令级 diff 标记，键由 instructionKey() 生成；用于分步播放器的 CFG 视图 */
+  marks?: ReadonlyMap<string, InstructionMark>;
 }
+
+const MARK_LABEL: Record<InstructionMark, string> = {
+  add: '新增',
+  del: '删除',
+  focus: '关注',
+};
 
 function BlockNode({
   block,
   selected,
   interactive,
   onSelect,
+  marks,
 }: {
   block: LaidOutBlock;
   selected: boolean;
   interactive: boolean;
   onSelect?: (id: string) => void;
+  marks?: ReadonlyMap<string, InstructionMark>;
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!interactive) return;
@@ -51,14 +63,18 @@ function BlockNode({
         </span>
       </div>
       <ol className="cfg-node__body">
-        {block.instructions.map((instruction, index) => (
-          <li
-            key={`${instruction.text}-${index}`}
-            className={instruction.terminator ? 'is-term' : undefined}
-          >
-            {instruction.text}
-          </li>
-        ))}
+        {block.instructions.map((instruction, index) => {
+          const mark = marks?.get(instructionKey(block.id, index));
+          const classes = [instruction.terminator ? 'is-term' : '', mark ? `is-${mark}` : '']
+            .filter(Boolean)
+            .join(' ');
+          return (
+            <li key={`${instruction.text}-${index}`} className={classes || undefined}>
+              {mark ? <span className="sr-only">{MARK_LABEL[mark]}：</span> : null}
+              {instruction.text}
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
@@ -70,6 +86,7 @@ export default function CFGCanvas({
   selected = null,
   onSelect,
   interactive = true,
+  marks,
 }: CFGCanvasProps) {
   const uid = useId().replace(/[:]/g, '');
 
@@ -148,6 +165,7 @@ export default function CFGCanvas({
             selected={selected === block.id}
             interactive={interactive}
             onSelect={onSelect}
+            marks={marks}
           />
         ))}
       </div>

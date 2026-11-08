@@ -178,3 +178,46 @@
   border-top: 1px solid var(--line);
   color: var(--ink);
 }
+
+/* ---------- 指令级 diff（分步播放器的 CFG 视图） ---------- */
+.cfg-node__body li.is-add,
+.cfg-node__body li.is-del,
+.cfg-node__body li.is-focus {
+  /* 负 margin + 等量 padding：底色铺到节点内边距，但不改变文字起始位置和折行 */
+  margin-inline: -10px;
+  padding-inline: 10px;
+}
+
+.cfg-node__body li.is-add {
+  background: linear-gradient(90deg, var(--ok-bg), transparent 82%);
+  box-shadow: inset 2px 0 0 var(--ok);
+  color: color-mix(in srgb, var(--ok) 62%, var(--ink-soft));
+}
+
+.cfg-node__body li.is-del {
+  background: linear-gradient(90deg, var(--bad-bg), transparent 82%);
+  box-shadow: inset 2px 0 0 var(--bad);
+  color: color-mix(in srgb, var(--bad) 62%, var(--ink-soft));
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--bad) 55%, transparent);
+}
+
+.cfg-node__body li.is-focus {
+  background: color-mix(in srgb, var(--focus-ring) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--focus-ring);
+  color: color-mix(in srgb, var(--focus-ring) 56%, var(--ink-soft));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cfg-node__body li.is-add,
+  .cfg-node__body li.is-del,
+  .cfg-node__body li.is-focus {
+    animation: cfg-mark-in 0.32s var(--ease) both;
+  }
+}
+
+@keyframes cfg-mark-in {
+  from {
+    opacity: 0.45;
+  }
+}
