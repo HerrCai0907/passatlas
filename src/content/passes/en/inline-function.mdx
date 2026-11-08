@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Cloning', 'ValueMap', 'CFG']
 demo: inline-function
 source: llvm/lib/Transforms/Utils/InlineFunction.cpp
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -89,7 +89,7 @@ Cloned instructions inherit the original `!dbg` and build an `inlinedAt` chain s
 
 - `InlinedCallSites`: the newly cloned calls, handed to `InlinerPass` for appending to the worklist;
 - return values, attributes and debug-info results, used by the pass for remarks;
-- the pass then calls `updateCGAndAnalysisManagerForCGSCC` to update the call graph, invalidate analyses and split SCCs when necessary.
+- the pass then calls `updateCGAndAnalysisManagerForCGSCCPass` to update the call graph, invalidate analyses and split SCCs when necessary.
 
 If the callee is internal, has zero live uses and is not a lib function, `InlinerPass` empties its body and queues it, eventually calling `CG.markDeadFunction`. That step is outside `InlineFunction` and belongs to the pass's cleanup.
 
@@ -145,14 +145,12 @@ opt -passes='cgscc(inline)' -S demo.ll -o -
 opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
 ```
 
-The first command should show `@pick` expanded into `@caller`: `%c.i`, `%pos.i`, `%neg.i` and `%cont` appear, `%r` becomes a `phi`, and `@pick` is then deleted. The second writes the decision to stderr:
+The first command should show `@pick` expanded into `@caller`: `%c.i`, `%pos.i` and `%neg.i` appear, both `ret`s feed into `%pick.exit`, the call result is replaced by a `phi` (called `%r1` in LLVM 23), and `@pick` is then deleted. The second writes the decision to stderr:
 
 ```text
-inlined into ... with (cost=..., threshold=225)
+remark: <unknown>:0:0: 'pick' inlined into 'caller' with (cost=..., threshold=225)
 ```
 
-Block names and whether an empty entry block remains may differ between versions; rely on the verifier and complete PHI incomings, not on exact names.
+The continuation block name (`%pick.exit`), the PHI result name (`%r1`) and whether an empty entry block remains may differ between versions; rely on the verifier and complete PHI incomings, not on exact names.
 
 If `opt` is an asserts build, add `-debug-only=inline` to watch each step; on a release build use `-pass-remarks=inline`.
-
-This machine has no compiled `opt`, so the pass names above were cross-checked against the current LLVM `PassRegistry.def` but not executed; use `opt -print-passes` as the source of truth for your version.

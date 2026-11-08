@@ -9,7 +9,7 @@ order: 4
 stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['CGSCC', 'InlineCost', 'Threshold']
 source: llvm/lib/Transforms/IPO/Inliner.cpp
-updated: 2026-11-08
+updated: 2026-11-09
 ---
 
 import SCCInlinerLabIsland from '../../../components/SCCInlinerLabIsland.astro';
@@ -138,14 +138,12 @@ opt -passes='print<inline-cost>' -disable-output demo.ll 2>&1
 opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
 ```
 
-第一条逐条打印代价分析，适合对照本文的「5 个单位一条指令」看。第二条把决策打到 stderr，格式类似：
+第一条逐条打印代价分析，适合对照本文的「5 个单位一条指令」看。第二条把决策打到 stderr，格式类似（示例 callee 是单基本块，阈值从 225 上浮 50%）：
 
 ```text
-inlined into ... with (cost=..., threshold=225)
+remark: <unknown>:0:0: 'scale' inlined into 'total' with (cost=..., threshold=337)
 ```
 
 具体数字随版本和 target 变化。若想同时看改写结果，去掉 `-o /dev/null` 并加上 `-S`；结果会输出到 stdout。
 
 如果 `opt` 是 release build，`-debug-only=inline` 不可用，用 `-pass-remarks=inline` 就够了。
-
-本机环境没有编译好的 `opt`，上面的 pass 名按 LLVM 当前 `PassRegistry.def` 校对，未实际执行；不同版本以 `opt -print-passes` 为准。
