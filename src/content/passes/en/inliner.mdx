@@ -106,7 +106,7 @@ When a call is accepted, `InlinerPass` hands the `CallBase` to `InlineFunction`;
 - **The callee gets fatter before the caller decides.** That is the price of post-order, and the reason raising the threshold in the lab can reject `main → render`.
 - **Recursion does not expand forever.** Direct recursion is rejected in `isInlineViable`; mutual recursion is cut off by `!inline_history`.
 - **An SCC needs extra defences.** `intra-scc-cost-multiplier` and `InlinedInternalEdges` exist for densely connected SCCs; otherwise every step looks profitable and the result grows super-linearly.
-- **Profiles change the conclusion.** Hot call sites, cold callees and cost-benefit analysis can all bypass the normal threshold; without a profile those paths never trigger.
+- **Profiles change the conclusion.** Hot call sites, cold callees and cost-benefit analysis can all bypass the normal threshold; without a profile those paths never trigger. Context-sensitive sample inlining replaces the criteria entirely; see <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>.
 
 ## Where it sits in the pipeline
 
