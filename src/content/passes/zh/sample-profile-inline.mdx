@@ -14,6 +14,7 @@ updated: 2026-11-08
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
+import SampleProfileInlinerLabIsland from '../../../components/SampleProfileInlinerLabIsland.astro';
 
 ## 它解决什么问题
 
@@ -30,6 +31,12 @@ CSSPGO 的做法是让样本带着调用栈进来。pseudo probe 或 DILocation 
 ## 算法
 
 一句话：**顺序由 profile 调用图决定，候选由调用点样本数排队，判定由热度阈值与合法性决定，记账在 context 树里。**
+
+<div class="pa-sp-bleed">
+  <SampleProfileInlinerLabIsland />
+</div>
+
+实验台只跑 5 帧：入队 → 展开 foo → 展开 bar → 处理 baz → 收尾。把「冷调用点上限」拖过 60，或者关掉「内联冷调用点」，看 baz 的判定、左边的内联栈和下面的结果怎么一起变。
 
 ### 输入：一棵 context 树
 

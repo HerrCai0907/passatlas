@@ -14,6 +14,7 @@ updated: 2026-11-08
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
+import SampleProfileInlinerLabIsland from '../../../components/SampleProfileInlinerLabIsland.astro';
 
 ## What problem does it solve
 
@@ -30,6 +31,12 @@ The naming needs a sentence. In the pipeline this is `-passes=sample-profile` (`
 ## Algorithm
 
 In one sentence: **the profiled call graph fixes the order, call-site sample counts order the queue, hotness plus legality decides, and the context tree keeps the books.**
+
+<div class="pa-sp-bleed">
+  <SampleProfileInlinerLabIsland />
+</div>
+
+The lab runs five frames: build the queue, expand foo, expand bar, handle baz, wrap up. Drag the cold call-site limit above 60, or switch off cold inlining, and watch the verdict, the inline stack on the left and the result change together.
 
 ### Input: a context tree
 
