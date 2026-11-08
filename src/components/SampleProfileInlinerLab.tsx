@@ -325,6 +325,7 @@ export default function SampleProfileInlinerLab({ locale = defaultLocale }: { lo
                 );
               })}
             </ol>
+            <p className="pa-sp__block-note">{text.queueHint}</p>
           </section>
         </div>
 

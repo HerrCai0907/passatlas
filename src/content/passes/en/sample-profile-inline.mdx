@@ -38,6 +38,17 @@ In one sentence: **the profiled call graph fixes the order, call-site sample cou
 
 The lab runs five frames: build the queue, expand foo, expand bar, handle baz, wrap up. Drag the cold call-site limit above 60, or switch off cold inlining, and watch the verdict, the inline stack on the left and the result change together.
 
+### What a sample actually counts
+
+The 98000 in a profile is not 98000 calls; it is **98000 samples**: the profiler interrupts the program at a fixed period, records the PC (AutoFDO also keeps a branch stack) and attributes each sample to a function, line and inline stack via debug info or pseudo probes. So:
+
+- **The count is time, not invocations.** Samples × sampling period ≈ CPU time spent; at 1 kHz, 98000 samples is roughly 98 seconds. Change the sampling rate and the magnitude changes with it.
+- **Hotness is relative.** `PSI->getHotCountThreshold()` comes from a profile-summary percentile, not a fixed number; in the demo 98000/100000 lands in the hot bucket, which is why the cost limit is 3000.
+- **The two header numbers differ.** A text profile header is `name:total:head`: `total` is the sum of the function body samples (including inlined code), `head` is the branch-target samples at entry, an approximation of the call count; the text format often writes 0. When it is 0, `getHeadSamplesEstimate()` falls back to the lowest-line body sample (or the first call site), so `CallsiteCount` is only an estimate of entry frequency.
+- **Duplicated call sites are prorated.** When one call site is cloned, `Factor` splits the samples so the same time is not counted twice.
+
+40 samples at 1 kHz is about 40 milliseconds, which is very noisy — do not fine-tune the hot/cold boundary.
+
 ### Input: a context tree
 
 In probe mode every probe carries a function GUID, a probe id, and a `Factor`. The first two identify "which line in which function"; `Factor` records duplicated call sites. When LTO prelink copies one call site into two, each copy gets a share of the samples instead of both counting the full amount.
@@ -164,7 +175,7 @@ Profile line numbers are not source lines; they are `line - function start line`
 
 ```text
 # demo.prof
-main:3000000:0
+main:100000:0
  1: 98000
  1: foo:98000
   1: 95000

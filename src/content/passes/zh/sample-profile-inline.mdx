@@ -38,6 +38,17 @@ CSSPGO 的做法是让样本带着调用栈进来。pseudo probe 或 DILocation 
 
 实验台只跑 5 帧：入队 → 展开 foo → 展开 bar → 处理 baz → 收尾。把「冷调用点上限」拖过 60，或者关掉「内联冷调用点」，看 baz 的判定、左边的内联栈和下面的结果怎么一起变。
 
+### 一个 sample 是什么
+
+profile 里的 98000 不是「调用 98000 次」，而是**被采样到 98000 次**：剖析器按固定周期打断程序，把当时的 PC（AutoFDO 还会带上分支栈）记下来，再按 debug info 或 pseudo probe 归因到「函数 + 行 + 内联栈」。所以：
+
+- **计数是时间，不是次数。** 样本数 × 采样周期 ≈ 这段代码消耗的 CPU 时间；1 kHz 采样下，98000 个样本大约 98 秒。换个采样频率，量级就跟着变。
+- **冷热看比例。** `PSI->getHotCountThreshold()` 来自 profile summary 的分位数，不是固定数字；demo 里 98000/100000 落在热区，所以 cost 上限是 3000。
+- **头部的两个数不一样。** 文本 profile 的头是 `函数名:total:head`：`total` 是函数体样本总和（含内联进来的部分），`head` 是入口处的分支目标样本，近似调用次数；文本格式里常写 0。为 0 时 `getHeadSamplesEstimate()` 退而用行号最小的那条 body sample（或第一个调用点）估算，所以 `CallsiteCount` 只是入口频率的估计。
+- **重复调用点要分摊。** 同一个 call site 被复制成几份时，`Factor` 把样本按比例切开，避免同一段时间被算两遍。
+
+40 个样本在 1 kHz 下只有约 40 毫秒，统计噪声很大——冷热边界上的小数字不必抠。
+
 ### 输入：一棵 context 树
 
 pseudo probe 模式下，每条 probe 带三样东西：函数 GUID、probe id，以及一个 `Factor`。前两者定位「这是哪个函数里的哪一行」，`Factor` 记录重复调用点：同一个 call site 在 LTO prelink 里被复制成两份时，两份各拿一部分样本，避免重复计数。
@@ -164,7 +175,7 @@ profile 的行号不是源码行号，而是 `line - 函数起始行` 的偏移�
 
 ```text
 # demo.prof
-main:3000000:0
+main:100000:0
  1: 98000
  1: foo:98000
   1: 95000

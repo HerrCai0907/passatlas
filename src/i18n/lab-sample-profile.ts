@@ -29,6 +29,7 @@ export interface SampleProfileLabText {
   stackNote: string;
   queueTitle: string;
   queueAria: string;
+  queueHint: string;
   topLevel: string;
   statusPending: string;
   statusCurrent: string;
@@ -88,6 +89,7 @@ const zh: SampleProfileLabText = {
   stackNote: '每展开一层，callee 的调用点就多一层前缀；队列里的候选按这个前缀去 profile 树里取样本。',
   queueTitle: '候选队列',
   queueAria: '按样本数出队的内联候选',
+  queueHint: '卡片上的数字是采样次数，不是调用次数；热不热取决于它在整个 profile 里的相对大小。',
   topLevel: '顶层',
   statusPending: '排队中',
   statusCurrent: '当前候选',
@@ -208,6 +210,7 @@ const en: SampleProfileLabText = {
   stackNote: 'Each expansion adds one prefix to the callee call site; candidates in the queue use that prefix to look up samples in the profile tree.',
   queueTitle: 'Candidate queue',
   queueAria: 'Inline candidates ordered by sample count',
+  queueHint: 'The numbers are sample counts, not call counts; hotness depends on their size relative to the whole profile.',
   topLevel: 'top level',
   statusPending: 'queued',
   statusCurrent: 'current',
