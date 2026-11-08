@@ -323,7 +323,8 @@ pre {
   background: var(--surface);
   font-size: 0.86em;
   color: var(--accent-strong);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .prose pre {

@@ -1,0 +1,863 @@
+/* 算法实验台：SCC 内联调度器。颜色全部来自 tokens.css。 */
+
+.pa-scc-bleed {
+  /* 与 PassLayout 的 .container 内容宽度对齐：正文是 760px，实验台要铺到 1040px。 */
+  --scc-gutter: clamp(18px, 4vw, 40px);
+  --scc-container: calc(min(var(--wrap), 100vw) - 2 * var(--scc-gutter));
+  width: calc(100% + max(0px, var(--scc-container) - 100%));
+  margin-block: 1.8em;
+}
+
+.pa-scc {
+  --scc-active: var(--cat, var(--accent));
+  --scc-good: var(--cat-scalar);
+  --scc-bad: var(--accent);
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  color: var(--ink-soft);
+}
+
+.pa-scc:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+/* ---------- 头部 ---------- */
+.pa-scc__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 17px 20px 13px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.pa-scc__kicker {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--scc-active);
+}
+
+.pa-scc__title {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.pa-scc__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pa-scc__btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    transform 0.18s var(--ease);
+}
+
+.pa-scc__btn:hover:not(:disabled) {
+  border-color: var(--scc-active);
+  color: var(--scc-active);
+  transform: translateY(-1px);
+}
+
+.pa-scc__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pa-scc__btn svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pa-scc__btn--play {
+  width: 40px;
+  height: 40px;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.pa-scc__btn--play:hover:not(:disabled) {
+  border-color: var(--scc-active);
+  background: var(--scc-active);
+  color: var(--surface);
+}
+
+.pa-scc__btn--play svg {
+  width: 18px;
+  height: 18px;
+}
+
+.pa-scc__counter {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.pa-scc__counter strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pa-scc__progress {
+  height: 2px;
+  background: var(--line);
+}
+
+.pa-scc__progress span {
+  display: block;
+  height: 100%;
+  background: var(--scc-active);
+  transition: width 0.35s var(--ease);
+}
+
+/* ---------- 主体 ---------- */
+.pa-scc__main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  min-height: 420px;
+}
+
+.pa-scc__graph {
+  position: relative;
+  min-width: 0;
+  padding: 10px 12px 4px;
+  border-right: 1px solid var(--line);
+  background-color: var(--surface-soft);
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--line) 48%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--line) 48%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.pa-scc__svg {
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+}
+
+/* ---------- 图：SCC 与边 ---------- */
+.pa-scc__scc-box {
+  fill: color-mix(in srgb, var(--scc-active) 4%, transparent);
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+  transition: stroke 0.2s var(--ease), fill 0.2s var(--ease);
+}
+
+.pa-scc__scc-box.is-active {
+  fill: color-mix(in srgb, var(--scc-active) 9%, transparent);
+  stroke: var(--scc-active);
+}
+
+.pa-scc__scc-box-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  fill: var(--faint);
+}
+
+.pa-scc__edge-line {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.6;
+  transition: stroke 0.2s var(--ease);
+}
+
+.pa-scc__edge.is-active .pa-scc__edge-line {
+  stroke: var(--scc-active);
+  stroke-width: 2.4;
+}
+
+.pa-scc__edge.is-back .pa-scc__edge-line {
+  stroke-dasharray: 5 4;
+}
+
+.pa-scc__arrow {
+  fill: var(--line-strong);
+}
+
+.pa-scc__arrow--active {
+  fill: var(--scc-active);
+}
+
+.pa-scc__edge-cost {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  fill: var(--muted);
+  paint-order: stroke;
+  stroke: var(--surface-soft);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+/* ---------- 图：节点 ---------- */
+.pa-scc__node {
+  cursor: pointer;
+}
+
+.pa-scc__node rect {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+  transition:
+    fill 0.2s var(--ease),
+    stroke 0.2s var(--ease);
+}
+
+.pa-scc__node:hover rect {
+  stroke: var(--scc-active);
+}
+
+.pa-scc__node:focus-visible {
+  outline: none;
+}
+
+.pa-scc__node:focus-visible rect {
+  stroke: var(--focus-ring);
+  stroke-width: 3;
+}
+
+.pa-scc__node.is-active rect {
+  fill: color-mix(in srgb, var(--scc-active) 8%, var(--surface));
+  stroke: var(--scc-active);
+  stroke-width: 2.5;
+}
+
+.pa-scc__node.is-done rect {
+  stroke: color-mix(in srgb, var(--scc-good) 55%, var(--line-strong));
+}
+
+.pa-scc__node-name {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+.pa-scc__node-sub {
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  fill: var(--faint);
+}
+
+/* ---------- 图：SCC 序号 ---------- */
+.pa-scc__order circle {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  transition: fill 0.2s var(--ease), stroke 0.2s var(--ease);
+}
+
+.pa-scc__order text {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  fill: var(--muted);
+}
+
+.pa-scc__order.is-active circle {
+  fill: var(--scc-active);
+  stroke: var(--scc-active);
+}
+
+.pa-scc__order.is-active text {
+  fill: var(--surface);
+}
+
+.pa-scc__order.is-done circle {
+  fill: color-mix(in srgb, var(--scc-good) 16%, var(--surface));
+  stroke: var(--scc-good);
+}
+
+.pa-scc__order.is-done text {
+  fill: var(--scc-good);
+}
+
+.pa-scc__scc-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  fill: var(--faint);
+}
+
+.pa-scc__order.is-active .pa-scc__scc-label {
+  fill: var(--scc-active);
+}
+
+/* ---------- 右侧面板 ---------- */
+.pa-scc__panel {
+  min-width: 0;
+  padding: 16px 20px 18px;
+  background: var(--surface);
+}
+
+.pa-scc__phase {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--scc-active);
+}
+
+.pa-scc__panel-title {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.pa-scc__note {
+  margin-top: 7px;
+  font-size: 13px;
+  line-height: 1.72;
+  color: var(--muted);
+}
+
+/* ---------- 伪代码 ---------- */
+.pa-scc__code {
+  margin: 12px 0 0;
+  padding: 8px 0;
+  list-style: none;
+  border: 1px solid var(--console-line);
+  border-radius: 10px;
+  background: var(--console);
+  overflow-x: auto;
+}
+
+.pa-scc__code li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 6px;
+  padding: 1px 10px;
+  border-left: 2px solid transparent;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.62;
+  color: var(--console-muted);
+  white-space: pre;
+}
+
+.pa-scc__code li.is-active {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--console-text);
+}
+
+.pa-scc__code-no {
+  color: var(--console-muted);
+  opacity: 0.55;
+  text-align: right;
+  user-select: none;
+}
+
+.pa-scc__code code {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* ---------- 阈值 ---------- */
+.pa-scc__threshold {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.pa-scc__threshold-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.pa-scc__threshold-head label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pa-scc__threshold-head .pa-scc__threshold-value {
+  display: inline-block;
+  min-width: 2.6em;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+  text-align: center;
+}
+
+.pa-scc__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pa-scc__preset {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    border-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.pa-scc__preset:hover {
+  border-color: var(--scc-active);
+  color: var(--scc-active);
+}
+
+.pa-scc__preset[aria-pressed='true'] {
+  border-color: var(--scc-active);
+  background: color-mix(in srgb, var(--scc-active) 9%, var(--surface));
+  color: var(--scc-active);
+}
+
+.pa-scc__slider {
+  width: 100%;
+  margin: 10px 0 0;
+  accent-color: var(--scc-active);
+  cursor: pointer;
+}
+
+.pa-scc__hint {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--faint);
+}
+
+/* ---------- 候选判定 ---------- */
+.pa-scc__candidates {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pa-scc__candidate {
+  padding: 9px 11px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.pa-scc__candidate.is-inline {
+  border-color: color-mix(in srgb, var(--scc-good) 32%, var(--line));
+}
+
+.pa-scc__candidate.is-reject {
+  border-color: color-mix(in srgb, var(--scc-bad) 28%, var(--line));
+}
+
+.pa-scc__candidate-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pa-scc__candidate-head code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pa-scc__badge {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.pa-scc__candidate.is-inline .pa-scc__badge {
+  color: var(--scc-good);
+  background: color-mix(in srgb, var(--scc-good) 8%, transparent);
+}
+
+.pa-scc__candidate.is-reject .pa-scc__badge {
+  color: var(--scc-bad);
+  background: color-mix(in srgb, var(--scc-bad) 7%, transparent);
+}
+
+.pa-scc__meter {
+  margin-top: 8px;
+}
+
+.pa-scc__meter-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--paper-deep);
+  overflow: hidden;
+}
+
+.pa-scc__meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--scc-good);
+  transition: width 0.35s var(--ease), background-color 0.2s var(--ease);
+}
+
+.pa-scc__meter-fill--bad {
+  background: var(--scc-bad);
+}
+
+.pa-scc__meter-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--ink);
+  transform: translateX(-1px);
+}
+
+.pa-scc__meter-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--faint);
+}
+
+.pa-scc__why {
+  margin-top: 6px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------- 时间线 ---------- */
+.pa-scc__timeline {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+  padding: 10px 20px 12px;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.pa-scc__step {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    color 0.18s var(--ease);
+}
+
+.pa-scc__step:hover {
+  background: var(--surface);
+}
+
+.pa-scc__step[aria-current='step'] {
+  border-color: color-mix(in srgb, var(--scc-active) 35%, transparent);
+  background: color-mix(in srgb, var(--scc-active) 8%, var(--surface));
+}
+
+.pa-scc__step-no {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+
+.pa-scc__step[aria-current='step'] .pa-scc__step-no {
+  color: var(--scc-active);
+}
+
+.pa-scc__step-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.pa-scc__step[aria-current='step'] .pa-scc__step-label {
+  color: var(--ink);
+}
+
+/* ---------- 底部 ---------- */
+.pa-scc__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 18px;
+  padding: 10px 20px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.pa-scc__foot p {
+  margin: 0;
+}
+
+.pa-scc__foot kbd {
+  padding: 0 4px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--ink-soft);
+}
+
+.pa-scc__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.pa-scc__legend-dot,
+.pa-scc__legend-line {
+  display: inline-block;
+  margin-left: 7px;
+  vertical-align: middle;
+}
+
+.pa-scc__legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--scc-active);
+}
+
+.pa-scc__legend-line {
+  width: 16px;
+  height: 0;
+  border-top: 1.5px solid var(--line-strong);
+}
+
+.pa-scc__legend-line--dash {
+  border-top-style: dashed;
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 900px) {
+  .pa-scc__main {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .pa-scc__graph {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 640px) {
+  .pa-scc__head {
+    padding: 14px 14px 11px;
+  }
+
+  .pa-scc__title {
+    font-size: 17px;
+  }
+
+  .pa-scc__kicker {
+    font-size: 9px;
+  }
+
+  .pa-scc__actions {
+    gap: 4px;
+  }
+
+  .pa-scc__btn {
+    width: 31px;
+    height: 31px;
+  }
+
+  .pa-scc__btn--play {
+    width: 36px;
+    height: 36px;
+  }
+
+  .pa-scc__counter {
+    margin-left: 2px;
+    font-size: 10px;
+  }
+
+  .pa-scc__panel {
+    padding: 14px;
+  }
+
+  .pa-scc__timeline {
+    padding: 8px 14px 10px;
+    gap: 3px;
+  }
+
+  .pa-scc__step {
+    padding: 4px 5px;
+  }
+
+  .pa-scc__step-label {
+    display: none;
+  }
+
+  .pa-scc__foot {
+    padding: 9px 14px 11px;
+  }
+
+  .pa-scc__node-sub,
+  .pa-scc__scc-box-label,
+  .pa-scc__edge-cost {
+    display: none;
+  }
+
+  .pa-scc__node-name {
+    font-size: 18px;
+  }
+
+  .pa-scc__scc-label {
+    font-size: 12px;
+  }
+
+  .pa-scc__code li {
+    font-size: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pa-scc *,
+  .pa-scc *::before,
+  .pa-scc *::after {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 实验台位于 .prose 内，重置全局行内 code 的「标签」样式，避免代码行出现白色药丸。 */
+.pass__body.prose .pa-scc code:not(pre code) {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.pass__body.prose .pa-scc .pa-scc__candidate-head code {
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---------- 决策结论 ---------- */
+.pa-scc__summary {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pa-scc__summary li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.pa-scc__summary li:last-child {
+  border-bottom: 0;
+}
+
+.pa-scc__summary code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.pa-scc__summary span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.pa-scc__summary li.is-inline span {
+  color: var(--scc-good);
+}
+
+.pa-scc__summary li.is-reject span {
+  color: var(--scc-bad);
+}
+
+.pa-scc__foot-note {
+  flex-basis: 100%;
+  padding-top: 2px;
+  color: var(--faint);
+}
