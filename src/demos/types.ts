@@ -104,11 +104,12 @@ const diff = (
 
 export function makeStep(source: StepSource): DemoStep {
   const { before, after } = diff(toLines(source.before), toLines(source.after));
-  const focus = new Set(source.focus ?? []);
+  // 作者写的 focus 行不带缩进；IRLine 保留缩进，比较前统一 trim
+  const focus = new Set((source.focus ?? []).map((line) => line.trim()));
 
   const applyFocus = (lines: IRLine[]): IRLine[] =>
     lines.map((line) =>
-      line.mark === 'keep' && focus.has(line.text) ? { ...line, mark: 'focus' } : line,
+      line.mark === 'keep' && focus.has(line.text.trim()) ? { ...line, mark: 'focus' } : line,
     );
 
   return {

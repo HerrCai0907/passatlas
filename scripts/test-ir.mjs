@@ -3,6 +3,8 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
+import { makeStep } from '../src/demos/types.ts';
+import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
 
@@ -124,6 +126,67 @@ dead:
   assert.ok(byLabel.get('merge').rank > byLabel.get('then').rank);
   // 菱形汇合：merge 必须排在 then/else 之后，且两条分支边都不是回边
   assert.equal(graph.edges.filter((edge) => edge.back).length, 0);
+}
+
+// ---- 行级 diff：focus 行不带缩进也能命中 ----
+{
+  const step = makeStep({
+    title: '只观察',
+    note: '',
+    before: `define i32 @f() {
+  ret i32 1
+}
+`,
+    after: `define i32 @f() {
+  ret i32 1
+}
+`,
+    focus: ['ret i32 1'],
+  });
+  assert.equal(step.before.find((line) => line.text.trim() === 'ret i32 1')?.mark, 'focus');
+  assert.equal(step.after.find((line) => line.text.trim() === 'ret i32 1')?.mark, 'focus');
+}
+
+// ---- 指令级 diff：CFG 视图的增删标记 ----
+{
+  const source = (comment = '') => `define i32 @f(i32 %x) {
+entry:
+  %dead = mul i32 %x, 7${comment}
+  %live = add i32 %x, 1${comment}
+  %cmp = icmp sgt i32 %live, 0${comment}
+  ret i32 %live${comment}
+}
+`;
+  const before = parseIR(source()).functions[0];
+  const after = parseIR(`define i32 @f(i32 %x) {
+entry:
+  %live = add i32 %x, 1
+  ret i32 %live
+}
+`).functions[0];
+
+  const diff = diffInstructions(before, after);
+  assert.equal(diff.removed, 2);
+  assert.equal(diff.added, 0);
+  assert.equal(diff.before.get(instructionKey('entry', 0)), 'del');
+  assert.equal(diff.before.get(instructionKey('entry', 2)), 'del');
+  assert.equal(diff.before.get(instructionKey('entry', 1)), undefined);
+  assert.equal(diff.after.size, 0);
+
+  // focus 只升级两侧都保留的指令，删除/新增优先
+  const framed = diffInstructions(before, after, [
+    '%live = add i32 %x, 1',
+    '%dead = mul i32 %x, 7',
+  ]);
+  assert.equal(framed.before.get(instructionKey('entry', 1)), 'focus');
+  assert.equal(framed.after.get(instructionKey('entry', 0)), 'focus');
+  assert.equal(framed.before.get(instructionKey('entry', 0)), 'del');
+
+  // 只改注释时，解析后的指令没有变化，CFG 不应出现红绿标记
+  const commented = parseIR(source('  ; 讲解用注释')).functions[0];
+  const commentOnly = diffInstructions(parseIR(source()).functions[0], commented);
+  assert.equal(commentOnly.added, 0);
+  assert.equal(commentOnly.removed, 0);
 }
 
 // ---- 文本视图：序列化后仍能解析回同样的块 ----
