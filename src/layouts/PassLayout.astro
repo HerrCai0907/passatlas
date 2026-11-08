@@ -65,7 +65,7 @@ const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
       }
 
       {
-        cfgSample && (
+        cfgSample && !demoData && (
           <section class="pass__cfg" aria-labelledby="cfg-heading">
             <div class="pass__demo-head">
               <h2 id="cfg-heading">控制流图</h2>

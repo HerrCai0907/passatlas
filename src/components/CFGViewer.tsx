@@ -1,8 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { layoutCFG } from '../lib/ir/layout';
-import type { LaidOutBlock } from '../lib/ir/layout';
-import { parseIR } from '../lib/ir/parse';
+import { functionToIR, parseIR } from '../lib/ir/parse';
+import type { IRFunction } from '../lib/ir/parse';
+import CFGCanvas from './CFGCanvas';
+import ViewModeSwitch from './ViewModeSwitch';
+import type { ViewMode } from './ViewModeSwitch';
 import './CFGViewer.css';
 
 export interface CFGViewerProps {
@@ -12,69 +14,32 @@ export interface CFGViewerProps {
   /** 视口最大高度，超出后内部滚动 */
   height?: number;
   collapsedByDefault?: boolean;
+  /** 默认展示模式；按产品约定默认是 CFG 图 */
+  defaultMode?: ViewMode;
 }
 
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 1.5;
 
+type IRRow = { text: string; kind: 'header' | 'label' | 'ins' | 'term' | 'brace' };
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function BlockNode({
-  block,
-  collapsed,
-  selected,
-  onSelect,
-}: {
-  block: LaidOutBlock;
-  collapsed: boolean;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const rows = collapsed && block.terminator ? [block.terminator] : block.instructions;
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      onSelect();
+function buildRows(fn: IRFunction): IRRow[] {
+  const rows: IRRow[] = [{ text: fn.header, kind: 'header' }];
+  for (const block of fn.blocks) {
+    rows.push({ text: `${block.label}:`, kind: 'label' });
+    for (const instruction of block.instructions) {
+      const kind = instruction.terminator ? 'term' : 'ins';
+      const [first, ...rest] = instruction.text.split('\n');
+      rows.push({ text: `  ${first ?? ''}`, kind });
+      for (const line of rest) rows.push({ text: `  ${line}`, kind });
     }
-  };
-
-  return (
-    <div
-      className={`cfg-node${block.isEntry ? ' is-entry' : ''}${selected ? ' is-selected' : ''}`}
-      style={{
-        left: block.x,
-        top: block.y,
-        width: block.width,
-        height: block.height,
-      }}
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      aria-label={`基本块 ${block.label}，${block.instructions.length} 条指令`}
-      onClick={onSelect}
-      onKeyDown={handleKeyDown}
-    >
-      <div className="cfg-node__head">
-        <span className="cfg-node__label">{block.label}</span>
-        <span className="cfg-node__count" aria-hidden="true">
-          {block.instructions.length}
-        </span>
-      </div>
-      <ol className="cfg-node__body">
-        {rows.map((instruction, index) => (
-          <li
-            key={`${instruction.text}-${index}`}
-            className={!collapsed && instruction.terminator ? 'is-term' : undefined}
-          >
-            {instruction.text}
-          </li>
-        ))}
-      </ol>
-    </div>
-  );
+  }
+  rows.push({ text: '}', kind: 'brace' });
+  return rows;
 }
 
 export default function CFGViewer({
@@ -82,19 +47,21 @@ export default function CFGViewer({
   title,
   height = 560,
   collapsedByDefault = false,
+  defaultMode = 'cfg',
 }: CFGViewerProps) {
   const parsed = useMemo(() => parseIR(ir), [ir]);
+  const [mode, setMode] = useState<ViewMode>(defaultMode);
   const [activeFunction, setActiveFunction] = useState(0);
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const [selected, setSelected] = useState<string | null>(null);
   const [autoFit, setAutoFit] = useState(true);
   const [scale, setScale] = useState(1);
+  const [copied, setCopied] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const rawId = useId();
-  const uid = rawId.replace(/[:]/g, '');
 
   const fn = parsed.functions[activeFunction];
   const graph = useMemo(() => (fn ? layoutCFG(fn, { collapsed }) : null), [fn, collapsed]);
+  const rows = useMemo(() => (fn ? buildRows(fn) : []), [fn]);
 
   useEffect(() => {
     setActiveFunction(0);
@@ -103,6 +70,7 @@ export default function CFGViewer({
   }, [ir]);
 
   useEffect(() => {
+    if (mode !== 'cfg') return;
     const viewport = viewportRef.current;
     if (!viewport || !graph) return;
 
@@ -117,12 +85,23 @@ export default function CFGViewer({
     const observer = new ResizeObserver(fit);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [graph, autoFit]);
+  }, [graph, autoFit, mode]);
 
   const issues = parsed.issues;
 
   const selectBlock = (id: string) => {
     setSelected((current) => (current === id ? null : id));
+  };
+
+  const copyIR = async () => {
+    if (!fn) return;
+    try {
+      await navigator.clipboard.writeText(functionToIR(fn));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
   };
 
   return (
@@ -145,50 +124,60 @@ export default function CFGViewer({
           ))}
         </div>
 
-        <div className="cfg__actions">
-          <button
-            type="button"
-            className="cfg__toggle"
-            aria-pressed={collapsed}
-            onClick={() => setCollapsed((value) => !value)}
-          >
-            {collapsed ? '显示指令' : '只看控制流'}
-          </button>
-          <div className="cfg__zoom" role="group" aria-label="缩放">
+        <ViewModeSwitch value={mode} onChange={setMode} label="CFG 图或 IR 文本" />
+
+        {mode === 'cfg' ? (
+          <div className="cfg__actions">
             <button
               type="button"
-              onClick={() => {
-                setAutoFit(false);
-                setScale((value) => clamp(value - 0.1, MIN_SCALE, MAX_SCALE));
-              }}
-              aria-label="缩小"
+              className="cfg__toggle"
+              aria-pressed={collapsed}
+              onClick={() => setCollapsed((value) => !value)}
             >
-              −
+              {collapsed ? '显示指令' : '只看控制流'}
             </button>
-            <span className="cfg__scale" aria-live="polite">
-              {Math.round(scale * 100)}%
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setAutoFit(false);
-                setScale((value) => clamp(value + 0.1, MIN_SCALE, MAX_SCALE));
-              }}
-              aria-label="放大"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className="cfg__fit"
-              onClick={() => setAutoFit(true)}
-              aria-label="适应宽度"
-              title="适应宽度"
-            >
-              适应
+            <div className="cfg__zoom" role="group" aria-label="缩放">
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoFit(false);
+                  setScale((value) => clamp(value - 0.1, MIN_SCALE, MAX_SCALE));
+                }}
+                aria-label="缩小"
+              >
+                −
+              </button>
+              <span className="cfg__scale" aria-live="polite">
+                {Math.round(scale * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoFit(false);
+                  setScale((value) => clamp(value + 0.1, MIN_SCALE, MAX_SCALE));
+                }}
+                aria-label="放大"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="cfg__fit"
+                onClick={() => setAutoFit(true)}
+                aria-label="适应宽度"
+                title="适应宽度"
+              >
+                适应
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="cfg__actions">
+            <button type="button" className="cfg__toggle" onClick={copyIR}>
+              {copied ? '已复制' : '复制 IR'}
             </button>
           </div>
-        </div>
+        )}
       </header>
 
       {issues.length > 0 ? (
@@ -201,103 +190,13 @@ export default function CFGViewer({
         </ul>
       ) : null}
 
-      {graph && fn ? (
+      {!fn || !graph ? (
+        <p className="cfg__empty">没有可展示的函数。粘贴一个包含 define 的 LLVM IR 试试。</p>
+      ) : mode === 'cfg' ? (
         <>
           <div className="cfg__viewport" ref={viewportRef} style={{ maxHeight: `${height}px` }}>
-            <div
-              className="cfg__canvas"
-              style={{ width: graph.width * scale, height: graph.height * scale }}
-            >
-              <div
-                className="cfg__stage"
-                style={
-                  {
-                    width: graph.width,
-                    height: graph.height,
-                    transform: `scale(${scale})`,
-                  } as CSSProperties
-                }
-              >
-                <svg
-                  className="cfg__edges"
-                  width={graph.width}
-                  height={graph.height}
-                  viewBox={`0 0 ${graph.width} ${graph.height}`}
-                  aria-hidden="true"
-                >
-                  <defs>
-                    {(['idle', 'active', 'back'] as const).map((variant) => (
-                      <marker
-                        key={variant}
-                        id={`${uid}-${variant}`}
-                        viewBox="0 0 8 8"
-                        refX="7.5"
-                        refY="4"
-                        markerWidth="7"
-                        markerHeight="7"
-                        orient="auto-start-reverse"
-                      >
-                        <path
-                          d="M0,0.6 L7.6,4 L0,7.4 z"
-                          className={`cfg-arrow cfg-arrow--${variant}`}
-                        />
-                      </marker>
-                    ))}
-                  </defs>
-
-                  {graph.edges.map((edge, index) => {
-                    const active =
-                      selected !== null && (edge.from === selected || edge.to === selected);
-                    const variant = active ? 'active' : edge.back ? 'back' : 'idle';
-                    const classes = [
-                      'cfg-edge',
-                      edge.back ? 'cfg-edge--back' : '',
-                      active ? 'is-active' : '',
-                      edge.kind === 'true' ? 'cfg-edge--true' : '',
-                      edge.kind === 'false' ? 'cfg-edge--false' : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' ');
-
-                    return (
-                      <g key={`${edge.from}-${edge.to}-${edge.label ?? ''}-${index}`}>
-                        <path
-                          d={edge.d}
-                          className={classes}
-                          markerEnd={`url(#${uid}-${variant})`}
-                        />
-                        {edge.label ? (
-                          <g className="cfg-edge__label">
-                            <rect
-                              x={edge.labelX - (edge.label.length * 6 + 10) / 2}
-                              y={edge.labelY - 9}
-                              width={edge.label.length * 6 + 10}
-                              height={15}
-                              rx={4}
-                            />
-                            <text x={edge.labelX} y={edge.labelY + 2} textAnchor="middle">
-                              {edge.label}
-                            </text>
-                          </g>
-                        ) : null}
-                      </g>
-                    );
-                  })}
-                </svg>
-
-                {graph.blocks.map((block) => (
-                  <BlockNode
-                    key={block.id}
-                    block={block}
-                    collapsed={collapsed}
-                    selected={selected === block.id}
-                    onSelect={() => selectBlock(block.id)}
-                  />
-                ))}
-              </div>
-            </div>
+            <CFGCanvas graph={graph} scale={scale} selected={selected} onSelect={selectBlock} />
           </div>
-
           <footer className="cfg__meta">
             <span>
               {fn.blocks.length} 个基本块 · {fn.edges.length} 条控制流边
@@ -308,7 +207,31 @@ export default function CFGViewer({
           </footer>
         </>
       ) : (
-        <p className="cfg__empty">没有可展示的函数。粘贴一个包含 define 的 LLVM IR 试试。</p>
+        <>
+          <div
+            className="cfg__ir"
+            style={{ maxHeight: `${height}px` }}
+            role="region"
+            aria-label={`@${fn.name} 的 IR 文本`}
+          >
+            <ol>
+              {rows.map((row, index) => (
+                <li key={index} className={`is-${row.kind}`}>
+                  <span className="no" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                  <code>{row.text}</code>
+                </li>
+              ))}
+            </ol>
+          </div>
+          <footer className="cfg__meta">
+            <span>
+              {fn.blocks.length} 个基本块 · {rows.length} 行 IR
+            </span>
+            <span className="cfg__hint">切回 CFG 可以看这些指令之间的跳转关系</span>
+          </footer>
+        </>
       )}
     </section>
   );

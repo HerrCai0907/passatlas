@@ -1,0 +1,55 @@
+.vm {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.vm button {
+  min-width: 34px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  cursor: pointer;
+  transition:
+    color 0.15s var(--ease),
+    background-color 0.15s var(--ease);
+}
+
+.vm button:hover {
+  color: var(--ink);
+}
+
+.vm button[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fffdf8;
+}
+
+/* 深色控制台 */
+.vm--dark {
+  border-color: var(--console-line);
+  background: #101319;
+}
+
+.vm--dark button {
+  color: var(--console-muted);
+}
+
+.vm--dark button:hover {
+  color: var(--console-text);
+}
+
+.vm--dark button[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fffdf8;
+}

@@ -42,6 +42,8 @@ export interface IREdge {
 
 export interface IRFunction {
   name: string;
+  /** 原始的 define 行，用于 IR 文本视图 */
+  header: string;
   blocks: IRBlock[];
   edges: IREdge[];
 }
@@ -291,7 +293,7 @@ export function parseIR(source: string): IRParseResult {
       }
     }
 
-    functions.push({ name, blocks, edges });
+    functions.push({ name, header: raw.trim(), blocks, edges });
   }
 
   if (functions.length === 0 && source.trim() !== '') {
@@ -299,4 +301,19 @@ export function parseIR(source: string): IRParseResult {
   }
 
   return { functions, issues };
+}
+
+/** 把解析结果还原成可读的 IR 文本（用于 CFG 视图的 IR 模式） */
+export function functionToIR(fn: IRFunction): string {
+  const lines: string[] = [fn.header];
+  for (const block of fn.blocks) {
+    lines.push(`${block.label}:`);
+    for (const instruction of block.instructions) {
+      const [first, ...rest] = instruction.text.split('\n');
+      lines.push(`  ${first ?? ''}`);
+      for (const line of rest) lines.push(`  ${line}`);
+    }
+  }
+  lines.push('}');
+  return lines.join('\n');
 }

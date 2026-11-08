@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import type { Demo, IRLine } from '../demos/types';
+import { layoutCFG } from '../lib/ir/layout';
+import type { CFGGraph } from '../lib/ir/layout';
+import { parseIR } from '../lib/ir/parse';
+import CFGCanvas from './CFGCanvas';
+import ViewModeSwitch from './ViewModeSwitch';
+import type { ViewMode } from './ViewModeSwitch';
 import './StepPlayer.css';
 
 interface StepPlayerProps {
@@ -10,6 +16,8 @@ interface StepPlayerProps {
   autoplay?: boolean;
   loop?: boolean;
   caption?: string;
+  /** 默认展示模式；按产品约定默认是 CFG 图 */
+  defaultMode?: ViewMode;
 }
 
 const SPEEDS = [0.75, 1, 1.5, 2];
@@ -28,7 +36,64 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-function Pane({
+function toIR(lines: IRLine[]): string {
+  return lines.map((line) => line.text).join('\n');
+}
+
+function graphOf(ir: string): CFGGraph | null {
+  const fn = parseIR(ir).functions[0];
+  return fn ? layoutCFG(fn) : null;
+}
+
+function CFGPanel({
+  label,
+  side,
+  graph,
+}: {
+  label: string;
+  side: 'before' | 'after';
+  graph: CFGGraph | null;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !graph) return;
+
+    const fit = () => {
+      const available = element.clientWidth - 16;
+      if (available <= 0) return;
+      setScale(Math.min(1, Math.max(0.25, available / graph.width)));
+    };
+
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [graph]);
+
+  return (
+    <section
+      className="pa-cfg"
+      aria-label={side === 'before' ? '改写前的控制流图' : '改写后的控制流图'}
+    >
+      <header className="pa-cfg__head">
+        <span className="pa-cfg__label">{label}</span>
+        <span className="pa-cfg__count">{graph ? `${graph.blocks.length} 块` : '—'}</span>
+      </header>
+      <div className="pa-cfg__viewport" ref={ref}>
+        {graph ? (
+          <CFGCanvas graph={graph} scale={scale} interactive={false} />
+        ) : (
+          <p className="pa-cfg__empty">无法解析为基本块</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function IRPane({
   label,
   lines,
   stepIndex,
@@ -73,8 +138,10 @@ export default function StepPlayer({
   autoplay = false,
   loop = false,
   caption,
+  defaultMode = 'cfg',
 }: StepPlayerProps) {
   const reducedMotion = usePrefersReducedMotion();
+  const [mode, setMode] = useState<ViewMode>(defaultMode);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(autoplay);
   const [speed, setSpeed] = useState(1);
@@ -82,6 +149,15 @@ export default function StepPlayer({
   const steps = demo.steps;
   const total = steps.length;
   const step = steps[index];
+
+  const graphs = useMemo(
+    () =>
+      steps.map((item) => ({
+        before: graphOf(toIR(item.before)),
+        after: graphOf(toIR(item.after)),
+      })),
+    [steps],
+  );
 
   const goTo = useCallback(
     (next: number) => {
@@ -112,6 +188,12 @@ export default function StepPlayer({
   }, [playing, index, speed, total, loop]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // 焦点在模式切换、步进按钮或下拉框上时，把键盘留给控件本身
+    const target = event.target as HTMLElement;
+    if (target !== event.currentTarget && target.closest('button, select, a, input, textarea')) {
+      return;
+    }
+
     if (event.key === 'ArrowRight') {
       event.preventDefault();
       setPlaying(false);
@@ -135,11 +217,13 @@ export default function StepPlayer({
   };
 
   const progress = ((index + 1) / total) * 100;
+  const current = graphs[index];
 
   return (
     <div
       className={`pa-player${compact ? ' pa-player--compact' : ''}`}
       data-playing={playing ? 'true' : 'false'}
+      data-mode={mode}
       role="group"
       aria-label={`${demo.label} 分步演示`}
       tabIndex={0}
@@ -155,19 +239,29 @@ export default function StepPlayer({
           {demo.label}
           {caption ? <em className="pa-head__caption">{caption}</em> : null}
         </span>
-        <span className="pa-head__counter">
-          <strong>{String(index + 1).padStart(2, '0')}</strong>
-          <span aria-hidden="true"> / </span>
-          {String(total).padStart(2, '0')}
+        <span className="pa-head__right">
+          <ViewModeSwitch value={mode} onChange={setMode} tone="dark" label="分步演示的展示模式" />
+          <span className="pa-head__counter">
+            <strong>{String(index + 1).padStart(2, '0')}</strong>
+            <span aria-hidden="true"> / </span>
+            {String(total).padStart(2, '0')}
+          </span>
         </span>
       </header>
 
       <p className="pa-title">{step.title}</p>
 
-      <div className="pa-panes">
-        <Pane label="before" side="before" lines={step.before} stepIndex={index} />
-        <Pane label="after" side="after" lines={step.after} stepIndex={index} />
-      </div>
+      {mode === 'cfg' ? (
+        <div className="pa-panes pa-panes--cfg">
+          <CFGPanel label="before" side="before" graph={current?.before ?? null} />
+          <CFGPanel label="after" side="after" graph={current?.after ?? null} />
+        </div>
+      ) : (
+        <div className="pa-panes">
+          <IRPane label="before" side="before" lines={step.before} stepIndex={index} />
+          <IRPane label="after" side="after" lines={step.after} stepIndex={index} />
+        </div>
+      )}
 
       <p className="pa-note" aria-live="polite">
         {step.note}

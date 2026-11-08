@@ -3,7 +3,7 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
-import { parseIR } from '../src/lib/ir/parse.ts';
+import { functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
 
 const diamond = `define i32 @pick(i1 %c) {
@@ -124,6 +124,17 @@ dead:
   assert.ok(byLabel.get('merge').rank > byLabel.get('then').rank);
   // 菱形汇合：merge 必须排在 then/else 之后，且两条分支边都不是回边
   assert.equal(graph.edges.filter((edge) => edge.back).length, 0);
+}
+
+// ---- 文本视图：序列化后仍能解析回同样的块 ----
+{
+  const fn = parseIR(diamond).functions[0];
+  const again = parseIR(functionToIR(fn)).functions[0];
+  assert.equal(again.blocks.length, fn.blocks.length);
+  assert.deepEqual(
+    again.blocks.map((block) => block.instructions.map((instruction) => instruction.text)),
+    fn.blocks.map((block) => block.instructions.map((instruction) => instruction.text)),
+  );
 }
 
 // ---- 循环：回边与秩 ----

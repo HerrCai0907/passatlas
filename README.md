@@ -11,7 +11,7 @@
 ## 特性
 
 - **分步动画**：before / after 双栏对照，构建期自动做行级 diff；绿线是新增、红线是删除、琥珀色是「看这里」。支持 `←` `→` 单步、`空格` 播放、速度调节与跳步。
-- **CFG 视图**：把任意 IR 按基本块切成有向图，节点里直接放指令。循环回边用虚线、条件分支的 `true` / `false` 分开着色，点击基本块高亮相关边。
+- **默认 CFG 视图**：所有 IR 展示模块（分步动画、实验室、独立图组件）都默认把 IR 画成基本块有向图，右上角一键切回 IR 文本。循环回边用虚线、条件分支的 `true` / `false` 分开着色，点击基本块高亮相关边。
 - **100% 静态**：构建产物是纯 HTML / CSS / JS，无后端、无数据库、无追踪脚本，扔进任何静态托管都能跑，也可以完全离线阅读。
 - **内容即代码**：每篇 pass 是一个 MDX 文件，frontmatter 由 Zod 校验；写错字段、写错分类，构建直接失败。
 - **零配置部署**：push 到 `main` 自动构建并发布到 GitHub Pages，项目站点子路径（`/repo-name/`）自动处理。
@@ -107,10 +107,12 @@ source: llvm/lib/Transforms/.../X.cpp
 
 `CFGViewer` 把一段 LLVM IR 切成基本块并画成有向图：解析和布局都是无依赖的纯函数，构建期就能渲染出 HTML，浏览器里只负责交互。
 
+**所有 IR 展示模块默认是 CFG 图，可随时切到 IR 文本**：分步动画（`StepPlayer`）的 before / after 两个面板、实验室、以及独立嵌图都共用同一个 `[CFG | IR]` 切换。
+
 ![CFG 实验室](docs/preview-cfg.png)
 
 - **实验室**：打开 [`/ir/`](https://herrcai0907.github.io/passatlas/ir/)，左边改 IR，右边实时重绘；也能用 `/ir/?sample=loop`、`/ir/?sample=switch` 直达示例。
-- **pass 页里嵌图**：在 frontmatter 里写 `cfg: diamond`（对应 `src/data/cfg-samples.ts` 的 id），页面会自动多出一节「控制流图」。
+- **pass 页里嵌图**：在 frontmatter 里写 `cfg: diamond`（对应 `src/data/cfg-samples.ts` 的 id）。当该页没有分步演示时，页面会自动多出一节「控制流图」；有演示的页面直接用播放器里的 CFG 模式，避免同一张图出现两次。
 - **任意位置调用**：
 
   ```mdx

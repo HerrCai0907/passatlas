@@ -52,8 +52,10 @@ src/
   layouts/              BaseLayout（head/meta）· PassLayout（详情页骨架）
   components/           SiteHeader · SiteFooter · PassCard · PassRow · PipelineStrip
     StepPlayer.tsx      分步 IR 播放器（唯一的播放器）
-    CFGViewer.tsx       IR → 基本块有向图
+    CFGViewer.tsx       IR → 基本块有向图（含 CFG / IR 模式切换）
+    CFGCanvas.tsx       纯渲染层：节点 + SVG 连边，被 viewer 与播放器复用
     CFGLab.tsx          实验室：textarea + CFGViewer，实时解析
+    ViewModeSwitch.tsx  「CFG | IR」切换控件
   content/passes/       每篇一个 .mdx（frontmatter 由 content.config.ts 校验）
   demos/                分步演示数据：types.ts + 每个 pass 一个文件 + registry.ts
   lib/                  url() / categories / 站点常量
@@ -149,24 +151,29 @@ updated: 2026-11-01
 `CFGViewer` turns IR text into a layered directed graph. The pipeline is
 **parse → layout → render**, and the first two stages are pure and run at build time too.
 
+**Every IR display defaults to CFG mode and offers an IR text toggle.** This is a product rule,
+not a per-page choice: `StepPlayer` and `CFGViewer` both use `ViewModeSwitch` and pass
+`defaultMode="cfg"`. If you add a new IR surface, wire the same switch and keep CFG as default.
+
 - `src/lib/ir/parse.ts`: functions → blocks → instructions → edges (`br`, `br i1`, `switch`,
   `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via `issues`.
 - `src/lib/ir/layout.ts`: DFS back-edge detection, longest-path ranks, barycentre ordering,
   content-based node widths. Returns plain coordinates; no DOM.
 - Multi-line instructions (e.g. `switch` label arrays) are joined with a literal newline and rendered with `white-space: pre-wrap`; height estimation must use the same per-line counting.
 - Geometry constants (`NODE_LINE`, `NODE_CHAR`, paddings) must stay in sync with
-  `CFGViewer.css`, otherwise text gets clipped. If you change one, change both.
+  `CFGCanvas.css`, otherwise text gets clipped. If you change one, change both.
 - Edges: solid = forward, dashed accent = back edge, teal/red labels = true/false branch.
 - Interactive requirements: nodes are keyboard focusable (`role="button"`, Enter/Space),
   fit-to-width on first render, zoom range 0.25–1.5.
 - `npm run test:ir` must pass. Add a case when you teach the parser new syntax.
 
 When embedding a graph in a pass page, prefer the frontmatter field (`cfg: <sample-id>`) over
-importing the component into MDX: it keeps full-width layout and one implementation.
+importing the component into MDX: it keeps full-width layout and one implementation. The section
+is only rendered when the page has no step demo (`demo`), because the player already shows a CFG.
 
 ## 6. Animation rules
 
-`StepPlayer` (`src/components/StepPlayer.tsx`) is the only client-side component. Its contract:
+`StepPlayer` (`src/components/StepPlayer.tsx`) plays the before/after states. Its contract:
 
 | prop | meaning |
 | --- | --- |
@@ -174,12 +181,15 @@ importing the component into MDX: it keeps full-width layout and one implementat
 | `compact` | smaller type for the home hero |
 | `autoplay` / `loop` | hero only; never autoplay on a content page |
 | `caption` | small label next to the demo id (e.g. 自动播放) |
+| `defaultMode` | `cfg` (default) or `ir`; CFG must stay the default in production |
 
 Rules:
 
 - One player per page. It is a teaching device, not decoration.
-- Colour carries meaning: green = added line, red = removed, amber = "look at this" (`focus`).
-  Do not add new semantic colours without changing `tokens.css` and this file.
+- IR mode keeps the diff colours: green = added line, red = removed, amber = "look at this"
+  (`focus`). CFG mode shows the same steps as before/after graphs; do not drop either mode.
+- CFG mode reuses `CFGCanvas` (non-interactive) so node geometry stays identical to `CFGViewer`.
+- Do not add new semantic colours without changing `tokens.css` and this file.
 - No layout shift between steps: panes have a `min-height`; keep IR snippets within it.
 - Respect `prefers-reduced-motion`: autoplay must stop, and line-in animations are disabled in CSS.
 - Never require a mouse: every control has a keyboard path and an `aria-label`.
