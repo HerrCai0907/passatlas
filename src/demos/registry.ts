@@ -1,6 +1,7 @@
 import type { Demo } from './types';
 import { dceDemo } from './dce';
 import { heroDemo } from './hero';
+import { inlinerDemo } from './inliner';
 import { instcombineDemo } from './instcombine';
 import { mem2regDemo } from './mem2reg';
 
@@ -11,6 +12,7 @@ import { mem2regDemo } from './mem2reg';
 export const demos: Record<string, Demo> = {
   dce: dceDemo,
   hero: heroDemo,
+  inliner: inlinerDemo,
   instcombine: instcombineDemo,
   mem2reg: mem2regDemo,
 };

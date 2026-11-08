@@ -43,12 +43,6 @@ export const roadmap: RoadmapItem[] = [
     note: '复制循环体，减少分支与索引开销，为向量化铺路。',
   },
   {
-    name: 'inline',
-    zh: '函数内联',
-    category: 'interproc',
-    note: '按代价模型决定是否把调用点展开，是跨函数优化的起点。',
-  },
-  {
     name: 'SLPVectorizer',
     zh: 'SLP 向量化',
     category: 'vectorize',

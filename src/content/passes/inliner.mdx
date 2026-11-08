@@ -1,0 +1,146 @@
+---
+title: inliner
+zh: SCC 内联器
+summary: 沿调用图的 SCC 后序自底向上，把 callee 的克隆体展开进 call site，再用代价模型决定哪条边值得消失。
+category: interproc
+difficulty: 3
+status: ready
+order: 4
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['CGSCC', 'InlineCost', 'Worklist']
+demo: inliner
+source: llvm/lib/Transforms/IPO/Inliner.cpp
+updated: 2026-11-08
+---
+
+import SCCInlinerLab from '../../components/SCCInlinerLab';
+
+## 它解决什么问题
+
+函数边界是优化器面前的一堵墙。`@scale` 里的 `mul` 在 callee 里，caller 只看到一个 `call`；参数是常量、返回值马上被丢掉、指针不会别名——这些事实都被调用边界切断了。内联把 callee 的指令克隆到 call site，实参替换形参，返回值替换 `ret` 的操作数，墙就没了。
+
+但内联不是免费的：代码体积、编译时间、寄存器压力都会涨。更麻烦的是，内联会改写调用图本身——删掉一条边、暴露新的 call、甚至让一个函数变成死函数。所以 LLVM 不是在函数列表上扫一遍，而是在**调用图的 SCC 上做后序遍历**：先处理 callee 所在的 SCC，再处理 caller，保证每次做决定时 callee 已经被优化过。
+
+这就是 `InlinerPass` 被注册成 CGSCC pass、而不是普通函数 pass 的原因。
+
+## 算法
+
+先记住一句话：**SCC 后序决定「什么时候看」，worklist 决定「看哪些 call」，代价模型决定「改不改」，调用图更新决定「下一步看什么」。**
+
+<div class="pa-scc-bleed">
+  <SCCInlinerLab client:visible />
+</div>
+
+上面的实验台把一轮内联拆成 8 帧。拖动阈值会改变 `render → hash` 和 `main → render` 的判定；注意阈值调高时，callee 可能先吸收更多内联而变胖，caller 的判定反而翻转。
+
+### 后序：从叶子 SCC 往上
+
+`LazyCallGraph` 把函数和 call edge 建成图，再把互相可达的函数缩成 SCC。SCC 之间不再有环，可以排序；`ModuleToPostOrderCGSCCPassAdaptor` 按后序访问，也就是先 callee、后 caller。
+
+递归和互递归正是 SCC 存在的理由：`@hash` 与 `@mix` 互相调用，拓扑排序不存在，只能当成一个整体处理。CGSCC 遍历保证进入一个 SCC 时，它调用的所有子 SCC 都已经处理完——内联器看到的是 callee 的最终形态，而不是半成品。
+
+### 一个 SCC 内部：一条会长大的 worklist
+
+`InlinerPass::run` 拿到一个 SCC 后，先把这个 SCC 里所有函数的 call site 收进一个 `SmallVector<CallBase*>`，按函数顺序、指令顺序排列。然后逐条处理；每成功内联一次，`InlineFunction` 会把克隆进来的新 call site 交给 `IFI.InlinedCallSites`，它们被**追加到 worklist 末尾**。
+
+```text
+calls = []
+for F in SCC:
+  for I in F:
+    if isa<CallBase>(I) and has_definition(I.callee):
+      calls.push(I)
+
+for i = 0; i < calls.size(); ++i:        // size 会变
+  if calls[i].caller 已经不在当前 SCC: continue
+  if advisor 不建议内联: continue
+  inline(calls[i])
+  calls.append(new_calls_exposed_by_inline)  // 追加，不插队
+```
+
+追加而不是插队，是有意为之：先把当前 SCC 的这一轮扫完，再处理内联刚刚暴露出来的传递调用。否则在一个高度互连的 SCC 里，每条边看起来都值得内联，函数会在互相内联中迅速膨胀。
+
+SCC 内部的边还有一层保护。如果新暴露的 call 和刚被内联的 callee 仍在同一个子 SCC 里，call site 会带上 `function-inline-cost-multiplier`，每次乘以 `-intra-scc-cost-multiplier`（默认 2）。内联穿过子 SCC 的次数越多，下一次越贵。
+
+### 代价模型：不是「小就内联」
+
+`Advisor.getAdvice` 先过属性闸门：`alwaysinline`、`noinline`、`optnone`、可被链接期替换（interposable）、target feature 不兼容、含间接分支 / `blockaddress` / 可变参数等，直接给出 always 或 never。然后 `InlineCostCallAnalyzer` 从 callee 的 entry 做一次 BFS，只走对这个 call site 活跃的块：
+
+- 常量实参会沿途折叠，分支条件已知就只走一边；
+- 能化简的指令不计成本，化简不了的默认按 5 个单位算；
+- 每个 call 另加 25 个单位的惩罚，调用点的参数准备成本会被减掉；
+- callee 是单基本块时，阈值临时加 50%；向量密集时最多加 150%；
+- internal 函数的最后一个 call site 直接减 15000——因为内联后整个函数可以删掉。
+
+阈值默认 225（`-O2`），`-O3` 是 250，`-Os` 是 50，`-Oz` 是 5；带 `inlinehint` 时 325，热调用点可以到 3000，冷调用点降到 45。最终判定只有一行：
+
+```cpp
+return Cost < std::max(1, Threshold) ? success : failure("Cost over threshold");
+```
+
+分析可以提前退出：一旦成本越过阈值，就不再往下走。省下来的时间，正是内联器在大型模块里还能跑得动的原因。
+
+### 改写之后：图和分析一起更新
+
+`InlineFunction` 做的事比「复制粘贴」多：参数 / 返回值映射、调试信息 `inlinedAt` 链、按需拆分基本块、把新 call 交给 worklist。它也会拒绝一些看起来能做的场景：`callbr`、没有可用定义的间接调用、带非法 operand bundle 的 call、以及 `!inline_history` 里已经出现过的 callee。
+
+内联成功后，`updateCGAndAnalysisManagerForCGSCC` 负责更新 call graph、失效受影响的分析、必要时拆分 SCC。如果这次内联把 SCC 拆开了，`InlinedInternalEdges` 会记下这条边，防止后续再次走到它、导致无限拆分与合并。
+
+callee 如果 internal、零 live use、又不是 lib function，会被立刻掏空并排队；等这个 SCC 处理完，统一 `CG.markDeadFunction`。这就是实验台最后一帧「删除死函数」的来源。
+
+## 代价与坑
+
+- **阈值是经验参数，不是语义。** 不同 LLVM 版本、target、profile 都会改数字。看 `-pass-remarks=inline` 的实际输出，比背 225 有用。
+- **代码膨胀是真实的。** 内联把 callee 复制到每个 call site；热路径上的小函数值得，冷路径上的大函数会让 I-cache 和编译时间一起变差。
+- **callee 先变胖，caller 再做决定。** 这是后序的代价，也是实验台里阈值调高反而拒绝 `main → render` 的原因。内联器还会用 deferral 启发式，避免把 caller 撑大后错过 caller 自身的上层内联。
+- **递归不会无限展开。** 直接递归在 `isInlineViable` 就被拒绝；互递归靠 call site 上的 `!inline_history` 截断：同一个 callee 在历史里出现过，下一次直接失败。
+- **SCC 内部要额外设防。** `intra-scc-cost-multiplier` 和 `InlinedInternalEdges` 都是为「高度互连的 SCC」准备的，否则成本分析看起来每一步都划算，最后却会超线性增长。
+- **profile 会改变结论。** 热调用点、冷 callee、cost-benefit 分析都可能绕过普通阈值；没有 profile 时，这些路径根本不会触发。
+
+## 在管线里的位置
+
+`-O2` / `-O3` 的默认管线把 `ModuleInlinerWrapperPass` 放在很前面：可选的 mandatory-first（只处理 `alwaysinline` 等强制项），再跑普通 `InlinerPass`。它被包在 `DevirtSCCRepeatedPass` 里，外面再套 `createModuleToPostOrderCGSCCPassAdaptor`，所以实际执行顺序是「按 SCC 后序 + 去虚拟化后重跑」。
+
+内联之后紧跟着 SROA、instcombine、GVN 等函数级清理。这也是内联器愿意接受「现在看起来略亏」的 call 的原因之一：后续 pass 会把克隆进来的代码化简掉。
+
+独立跑一个 SCC 内联：
+
+```bash
+opt -passes='cgscc(inline)' -S demo.ll -o -
+```
+
+LLVM 还提供 `always-inline`、`module-inline`、`partial-inliner` 等变体；它们复用 `InlineCost`，但遍历和决策策略不同。
+
+## 自己跑一遍
+
+```llvm
+define internal i32 @scale(i32 %x) {
+entry:
+  %mul = mul i32 %x, 3
+  ret i32 %mul
+}
+
+define i32 @total(i32 %x) {
+entry:
+  %sum = call i32 @scale(i32 %x)
+  %res = add i32 %sum, 1
+  ret i32 %res
+}
+```
+
+```bash
+opt -passes='cgscc(inline)' -S demo.ll -o -
+opt -passes='cgscc(inline)' -pass-remarks=inline -S demo.ll -o /dev/null
+opt -passes='print<inline-cost>' -disable-output demo.ll 2>&1
+```
+
+第一条命令应当输出 `@scale` 被内联进 `@total`、随后 `@scale` 被删除的 IR。第二条把决策打到 stderr，格式类似：
+
+```text
+inlined into ... with (cost=..., threshold=225)
+```
+
+具体数字随版本和 target 变化。第三条逐条打印代价分析，适合对照本文的「5 个单位一条指令」看。
+
+如果 `opt` 是 release build，`-debug-only=inline` 不可用，用 `-pass-remarks=inline` 就够了。
+
+本机环境没有编译好的 `opt`，上面的 pass 名按 LLVM 当前 `PassRegistry.def` 校对，未实际执行；不同版本以 `opt -print-passes` 为准。
