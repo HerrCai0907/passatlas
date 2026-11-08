@@ -39,6 +39,9 @@ npm run test:ir    # IR parser + CFG layout assertions (Node runs the .ts direct
 Always run `npm run build` before handing work back. Run `npm run check` when you touched
 TypeScript, Astro components, or the content schema.
 
+After the checks pass, start a local server and leave it running so the maintainer can review
+the change in a browser. This is part of the acceptance criteria in §10, not an optional extra.
+
 ## 3. Repository map
 
 ```
@@ -139,6 +142,7 @@ updated: 2026-11-01
 ### 4.3 Definition of done
 
 - [ ] `npm run build` passes, page appears under `/passes/<id>/`
+- [ ] local review server is running and the URL is reported (see §10)
 - [ ] animation has ≥ 2 steps, each step's IR is valid-looking LLVM (opaque `ptr`, `phi`, …)
 - [ ] frontmatter `demo` matches a registry key
 - [ ] prev/next navigation works (automatic via `order`)
@@ -222,7 +226,27 @@ Rules:
 - One pass page per commit. Do not reformat unrelated files in the same commit.
 - Never commit `dist/`, `.astro/`, `node_modules/`, or editor state.
 
-## 10. Things this project deliberately does not do
+## 10. Code-change acceptance（代码修改验收）
+
+Every change that affects the built site must pass this checklist before it is handed back.
+“It builds” is not acceptance; the maintainer must be able to open the result.
+
+- [ ] `npm run build` passes.
+      Run `npm run check` as well when TypeScript, Astro components or the content schema
+      changed, and `npm run test:ir` when the IR parser, layout or demo diff changed.
+- [ ] **A local server is running and left running for human review.**
+      Start `npm run dev` (default <http://localhost:4321>) or `npm run preview` (serves the
+      built `dist/`). If the default port is occupied, use another port rather than skipping
+      this step.
+- [ ] The hand-off names the exact URL and the page / step / control the reviewer should look
+      at. A statement like “it works locally” without a reachable URL does not count.
+- [ ] Visual or interactive changes list what was checked manually: the 390 / 768 / 1440 px
+      breakpoints, keyboard navigation (`←` `→` `Space`), the CFG / IR switch, and
+      `prefers-reduced-motion` where relevant.
+- [ ] Commit the change before handing it over, and keep the review server pointed at that
+      commit. If the reviewer requests revisions, update the same server and re-report the URL.
+
+## 11. Things this project deliberately does not do
 
 - No dark mode yet (the paper/ink identity is the brand). If added, do it via tokens, not
   per-component overrides.
