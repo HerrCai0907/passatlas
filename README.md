@@ -2,6 +2,8 @@
 
 > 每一个 pass，都是一次变形。
 
+**在线地址：<https://herrcai0907.github.io/passatlas/>**
+
 一个用**可交互动画**讲清 LLVM 优化 pass 的静态学习站。每篇图鉴固定回答五件事：它解决什么问题、算法怎么走、IR 怎么被改写、代价在哪、以及一条你能自己跑的命令。
 
 ![首页预览](docs/preview-home.png)
