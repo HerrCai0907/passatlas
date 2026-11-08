@@ -9,6 +9,8 @@ interface Props {
   onChange: (mode: ViewMode) => void;
   locale?: Locale;
   label?: string;
+  /** 有值时禁用 CFG 选项，并把原因同时用作 title */
+  cfgDisabledReason?: string;
 }
 
 /** IR 展示模块统一的「图 / 文」切换。默认选 CFG。 */
@@ -17,6 +19,7 @@ export default function ViewModeSwitch({
   onChange,
   locale = defaultLocale,
   label,
+  cfgDisabledReason,
 }: Props) {
   return (
     <div className="vm" role="group" aria-label={label ?? t(locale, 'viewMode.group')}>
@@ -24,7 +27,8 @@ export default function ViewModeSwitch({
         type="button"
         aria-pressed={value === 'cfg'}
         onClick={() => onChange('cfg')}
-        title={t(locale, 'viewMode.cfgTitle')}
+        title={cfgDisabledReason ?? t(locale, 'viewMode.cfgTitle')}
+        disabled={Boolean(cfgDisabledReason)}
       >
         CFG
       </button>

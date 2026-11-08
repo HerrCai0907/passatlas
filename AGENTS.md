@@ -209,6 +209,12 @@ updated: 2026-11-01
 not a per-page choice: `StepPlayer` and `CFGViewer` both use `ViewModeSwitch` and pass
 `defaultMode="cfg"`. If you add a new IR surface, wire the same switch and keep CFG as default.
 
+The one exception is `StepPlayer`: CFG mode draws a single function, so a demo whose before or
+after IR defines more than one function has no CFG mode. The player disables the CFG option (with
+an explanatory note) and stays in IR mode, because the graph would silently drop every function
+but the first. `CFGViewer` keeps its per-function tabs and still supports multi-function input.
+Use `canRenderCFG()` from `src/lib/ir/parse.ts` for this check.
+
 - `src/lib/ir/parse.ts`: functions → blocks → instructions → edges (`br`, `br i1`, `switch`,
   `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via `issues`.
 - `src/lib/ir/layout.ts`: DFS back-edge detection, longest-path ranks, barycentre ordering,
@@ -235,7 +241,7 @@ is only rendered when the page has no step demo (`demo`), because the player alr
 | `compact` | smaller type for the home hero |
 | `autoplay` / `loop` | hero only; never autoplay on a content page |
 | `caption` | small label next to the demo id (e.g. 自动播放) |
-| `defaultMode` | `cfg` (default) or `ir`; CFG must stay the default in production |
+| `defaultMode` | `cfg` (default) or `ir`; CFG must stay the default in production, except for multi-function demos |
 | `locale` | UI language; pass the route locale, never infer it in the island |
 
 Rules:

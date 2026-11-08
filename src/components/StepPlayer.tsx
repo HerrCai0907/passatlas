@@ -7,7 +7,7 @@ import { diffInstructions } from '../lib/ir/diff';
 import type { InstructionDiff, InstructionMark } from '../lib/ir/diff';
 import { layoutCFG } from '../lib/ir/layout';
 import type { CFGGraph } from '../lib/ir/layout';
-import { parseIR } from '../lib/ir/parse';
+import { canRenderCFG, parseIR } from '../lib/ir/parse';
 import CFGCanvas from './CFGCanvas';
 import ViewModeSwitch from './ViewModeSwitch';
 import type { ViewMode } from './ViewModeSwitch';
@@ -50,12 +50,16 @@ interface StepGraph {
   before: CFGGraph | null;
   after: CFGGraph | null;
   diff: InstructionDiff | null;
+  /** 这一步的两侧 IR 是否包含多个函数；多函数时不能用 CFG 模式 */
+  multiFunction: boolean;
 }
 
 /** 解析这一步的两侧 IR，并按指令文本做 diff；注释变化不会把整块染红染绿 */
 function graphOfStep(step: DemoStep, locale: Locale): StepGraph {
-  const beforeFn = parseIR(toIR(step.before), locale).functions[0] ?? null;
-  const afterFn = parseIR(toIR(step.after), locale).functions[0] ?? null;
+  const beforeParsed = parseIR(toIR(step.before), locale);
+  const afterParsed = parseIR(toIR(step.after), locale);
+  const beforeFn = beforeParsed.functions[0] ?? null;
+  const afterFn = afterParsed.functions[0] ?? null;
   const focus = [...step.before, ...step.after]
     .filter((line) => line.mark === 'focus')
     .map((line) => line.text);
@@ -64,6 +68,7 @@ function graphOfStep(step: DemoStep, locale: Locale): StepGraph {
     before: beforeFn ? layoutCFG(beforeFn) : null,
     after: afterFn ? layoutCFG(afterFn) : null,
     diff: beforeFn && afterFn ? diffInstructions(beforeFn, afterFn, focus) : null,
+    multiFunction: !canRenderCFG(beforeParsed) || !canRenderCFG(afterParsed),
   };
 }
 
@@ -243,6 +248,14 @@ export default function StepPlayer({
   const step = steps[index];
 
   const graphs = useMemo(() => steps.map((item) => graphOfStep(item, locale)), [steps, locale]);
+  // CFG 一次只画一个函数。只要任一步的任一侧是多函数 IR，整个播放器就不能切到
+  // CFG 模式：否则切步时会看到「只有第一个函数」的图，像是其他函数被优化掉了。
+  const cfgAvailable = useMemo(
+    () => graphs.every((graph) => !graph.multiFunction),
+    [graphs],
+  );
+  const shownMode: ViewMode = cfgAvailable ? mode : 'ir';
+  const cfgDisabledReason = cfgAvailable ? undefined : t(locale, 'player.cfgUnavailable');
   const cfgSides = useMemo(
     () => ({
       before: graphs.map((graph) => graph.before),
@@ -250,6 +263,10 @@ export default function StepPlayer({
     }),
     [graphs],
   );
+
+  useEffect(() => {
+    if (!cfgAvailable) setMode('ir');
+  }, [cfgAvailable]);
 
   const goTo = useCallback(
     (next: number) => {
@@ -315,7 +332,7 @@ export default function StepPlayer({
     <div
       className={`pa-player${compact ? ' pa-player--compact' : ''}`}
       data-playing={playing ? 'true' : 'false'}
-      data-mode={mode}
+      data-mode={shownMode}
       role="group"
       aria-label={t(locale, 'player.group', { name: demo.label })}
       tabIndex={0}
@@ -332,7 +349,13 @@ export default function StepPlayer({
           {caption ? <em className="pa-head__caption">{caption}</em> : null}
         </span>
         <span className="pa-head__right">
-          <ViewModeSwitch value={mode} onChange={setMode} locale={locale} label={t(locale, 'player.mode')} />
+          <ViewModeSwitch
+            value={shownMode}
+            onChange={setMode}
+            locale={locale}
+            label={t(locale, 'player.mode')}
+            cfgDisabledReason={cfgDisabledReason}
+          />
           <span className="pa-head__counter">
             <strong>{String(index + 1).padStart(2, '0')}</strong>
             <span aria-hidden="true"> / </span>
@@ -340,6 +363,12 @@ export default function StepPlayer({
           </span>
         </span>
       </header>
+
+      {cfgAvailable ? null : (
+        <p className="pa-mode-note" role="note">
+          {cfgDisabledReason}
+        </p>
+      )}
 
       <p className="pa-title">
         <span className="pa-title__text">{step.title}</span>
@@ -350,7 +379,7 @@ export default function StepPlayer({
         </span>
       </p>
 
-      {mode === 'cfg' ? (
+      {shownMode === 'cfg' ? (
         <>
           <DiffLegend locale={locale} />
           <div className="pa-panes pa-panes--cfg">

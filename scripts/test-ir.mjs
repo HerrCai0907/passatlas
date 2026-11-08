@@ -9,7 +9,7 @@ import { makeDemo, makeStep } from '../src/demos/types.ts';
 import { localizedPath, pathWithoutLocale } from '../src/i18n/paths.ts';
 import { t } from '../src/i18n/ui.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
-import { functionToIR, parseIR } from '../src/lib/ir/parse.ts';
+import { canRenderCFG, functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
 
 const diamond = `define i32 @pick(i1 %c) {
@@ -255,12 +255,34 @@ entry:
   );
   assert.equal(two.functions.length, 2);
 
+  // CFG 一次只画一个函数：多函数 IR 不能再提供 CFG 模式
+  assert.equal(canRenderCFG(parseIR(diamond)), true);
+  assert.equal(canRenderCFG(two), false);
+
   const commented = parseIR(
     'define void @f() {\nentry: ; 入口\n  ; 整行注释\n  ret void ; 返回\n}\n',
   );
   assert.equal(commented.functions[0].blocks.length, 1);
   assert.equal(commented.functions[0].blocks[0].instructions.length, 1);
   assert.equal(commented.functions[0].blocks[0].instructions[0].text, 'ret void');
+}
+
+// ---- 多函数演示：播放器必须禁用 CFG 模式 ----
+{
+  const toIR = (lines) => lines.map((line) => line.text).join('\n');
+  const demo = getDemo('inline-function', 'zh');
+  const multi = demo.steps.some((step) =>
+    [step.before, step.after].some((lines) => !canRenderCFG(parseIR(toIR(lines)))),
+  );
+  assert.equal(multi, true, 'inline-function 演示包含多函数 IR');
+
+  const single = getDemo('mem2reg', 'zh');
+  assert.ok(
+    single.steps.every((step) =>
+      [step.before, step.after].every((lines) => canRenderCFG(parseIR(toIR(lines)))),
+    ),
+    '单函数演示应继续使用 CFG 模式',
+  );
 }
 
 // ---- 播放器高度预留：maxLines 取所有步骤、两侧的最大行数 ----
