@@ -138,8 +138,8 @@
   position: relative;
   padding: 12px;
   overflow: auto;
-  background-color: #f2ede2;
-  background-image: radial-gradient(rgba(21, 24, 30, 0.1) 1px, transparent 1px);
+  background-color: var(--cfg-canvas);
+  background-image: radial-gradient(var(--cfg-dot) 1px, transparent 1px);
   background-size: 16px 16px;
   background-position: 6px 6px;
 }
@@ -149,8 +149,8 @@
   margin: 0;
   padding: 9px 0;
   overflow: auto;
-  background: var(--console);
-  color: var(--console-text);
+  background: var(--code-bg);
+  color: var(--code-text);
 }
 
 .cfg__ir ol {
@@ -170,11 +170,11 @@
 }
 
 .cfg__ir li:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .cfg__ir .no {
-  color: #4c5567;
+  color: var(--code-gutter);
   text-align: right;
   user-select: none;
   font-variant-numeric: tabular-nums;
@@ -183,11 +183,11 @@
 .cfg__ir code {
   white-space: pre-wrap;
   word-break: break-all;
-  color: #cfd6e4;
+  color: var(--code-text);
 }
 
 .cfg__ir li.is-header code {
-  color: #8c97ab;
+  color: var(--muted);
 }
 
 .cfg__ir li.is-label code {
@@ -195,11 +195,11 @@
 }
 
 .cfg__ir li.is-term code {
-  color: #ffdf9e;
+  color: var(--focus-text);
 }
 
 .cfg__ir li.is-brace code {
-  color: #8c97ab;
+  color: var(--muted);
 }
 
 /* ---------- 错误与页脚 ---------- */

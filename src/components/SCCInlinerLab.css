@@ -357,9 +357,9 @@
   margin: 12px 0 0;
   padding: 8px 0;
   list-style: none;
-  border: 1px solid var(--console-line);
+  border: 1px solid var(--code-border);
   border-radius: 10px;
-  background: var(--console);
+  background: var(--code-bg);
   overflow-x: auto;
 }
 
@@ -372,18 +372,18 @@
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.62;
-  color: var(--console-muted);
+  color: var(--code-muted);
   white-space: pre;
 }
 
 .pa-scc__code li.is-active {
   border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--console-text);
+  background: color-mix(in srgb, var(--accent) 10%, var(--code-bg));
+  color: var(--ink);
 }
 
 .pa-scc__code-no {
-  color: var(--console-muted);
+  color: var(--code-gutter);
   opacity: 0.55;
   text-align: right;
   user-select: none;

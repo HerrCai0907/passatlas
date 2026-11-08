@@ -5,8 +5,6 @@ export type ViewMode = 'cfg' | 'ir';
 interface Props {
   value: ViewMode;
   onChange: (mode: ViewMode) => void;
-  /** 深色控制台里用 dark，纸色背景里用 light */
-  tone?: 'light' | 'dark';
   label?: string;
 }
 
@@ -14,11 +12,10 @@ interface Props {
 export default function ViewModeSwitch({
   value,
   onChange,
-  tone = 'light',
   label = '展示模式',
 }: Props) {
   return (
-    <div className={`vm${tone === 'dark' ? ' vm--dark' : ''}`} role="group" aria-label={label}>
+    <div className="vm" role="group" aria-label={label}>
       <button
         type="button"
         aria-pressed={value === 'cfg'}

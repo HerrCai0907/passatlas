@@ -330,10 +330,11 @@ pre {
 .prose pre {
   margin-block: 1.5em;
   padding: 20px 22px;
-  border: 1px solid var(--console-line);
+  border: 1px solid var(--code-border);
+  border-left: 3px solid color-mix(in srgb, var(--accent) 46%, var(--code-border));
   border-radius: var(--radius);
-  background: var(--console) !important;
-  box-shadow: var(--shadow-sm);
+  background: var(--code-bg) !important;
+  box-shadow: 0 1px 2px rgba(21, 24, 30, 0.04);
   overflow-x: auto;
   font-size: 13.5px;
   line-height: 1.75;
@@ -341,7 +342,7 @@ pre {
 }
 
 .prose pre code {
-  color: var(--console-text);
+  color: var(--code-text);
 }
 
 .prose blockquote {

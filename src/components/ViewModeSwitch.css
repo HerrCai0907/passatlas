@@ -32,24 +32,5 @@
 
 .vm button[aria-pressed='true'] {
   background: var(--accent);
-  color: #fffdf8;
-}
-
-/* 深色控制台 */
-.vm--dark {
-  border-color: var(--console-line);
-  background: #101319;
-}
-
-.vm--dark button {
-  color: var(--console-muted);
-}
-
-.vm--dark button:hover {
-  color: var(--console-text);
-}
-
-.vm--dark button[aria-pressed='true'] {
-  background: var(--accent);
-  color: #fffdf8;
+  color: var(--surface);
 }
