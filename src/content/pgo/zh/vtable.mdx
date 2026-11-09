@@ -92,7 +92,7 @@ direct.foo:
 | 直调 + inliner | 比较成功后的 direct call | 去虚化，随后按普通直调内联 |
 | WPD / ThinLTO | 模块里的 `!type` 元数据 | 先缩小可能的类型集合，profile 再在里面挑热的 vtable |
 
-和普通的 <I18nLink href="/pgo/indirect-call/">indirect-call</I18nLink> 相比，收益来自少一次 load：普通 ICP 需要先 `load ptr, ptr %vptr` 拿到函数指针再比较；vtable ICP 直接比较已经在寄存器里的 `%vptr`。代价是多了一层类型匹配和 address point 计算。
+和普通的 <I18nLink href="/passes/pgo-instr-gen/indirect-call/">indirect-call</I18nLink> 相比，收益来自少一次 load：普通 ICP 需要先 `load ptr, ptr %vptr` 拿到函数指针再比较；vtable ICP 直接比较已经在寄存器里的 `%vptr`。代价是多了一层类型匹配和 address point 计算。
 
 ## 代价与坑
 

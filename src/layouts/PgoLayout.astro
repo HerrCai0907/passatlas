@@ -33,12 +33,19 @@ const otherSites = sites.filter((item) => pgoSlug(item) !== slug);
       <nav class="crumbs" aria-label={t(locale, 'pgo.detail.crumbs')}>
         <a href={url('/', locale)}>PassAtlas</a>
         <span aria-hidden="true">/</span>
-        <a href={url('/pgo/', locale)}>{t(locale, 'pgo.detail.atlas')}</a>
+        <a href={url('/passes/', locale)}>{t(locale, 'pass.atlas')}</a>
+        <span aria-hidden="true">/</span>
+        <a href={url('/passes/pgo-instr-gen/', locale)}>pgo-instr-gen</a>
         <span aria-hidden="true">/</span>
         <span aria-current="page">{title}</span>
       </nav>
 
       <header class="pgo__head">
+        <p class="pgo__parent">
+          <a href={url('/passes/pgo-instr-gen/', locale)}>
+            ← {t(locale, 'pgo.detail.parent')}
+          </a>
+        </p>
         <p class="eyebrow">
           {t(locale, 'pgo.detail.eyebrow', { index: String(index).padStart(2, '0') })}
         </p>
@@ -117,7 +124,7 @@ const otherSites = sites.filter((item) => pgoSlug(item) !== slug);
               const itemMeta = pgoSite(pgoSlug(item));
               return (
                 <li>
-                  <a href={url(`/pgo/${pgoSlug(item)}/`, locale)}>
+                  <a href={url(`/passes/pgo-instr-gen/${pgoSlug(item)}/`, locale)}>
                     <span class="other__name">{item.data.title}</span>
                     <span class="other__sub">{item.data.subtitle}</span>
                     {itemMeta ? <code>{itemMeta.record}</code> : null}
@@ -132,7 +139,7 @@ const otherSites = sites.filter((item) => pgoSlug(item) !== slug);
       <nav class="pager" aria-label={t(locale, 'pgo.detail.pager')}>
         {
           prev ? (
-            <a class="pager__item pager__item--prev" href={url(`/pgo/${pgoSlug(prev)}/`, locale)}>
+            <a class="pager__item pager__item--prev" href={url(`/passes/pgo-instr-gen/${pgoSlug(prev)}/`, locale)}>
               <span class="pager__dir">{t(locale, 'pgo.detail.prev')}</span>
               <span class="pager__name">{prev.data.title}</span>
             </a>
@@ -142,7 +149,7 @@ const otherSites = sites.filter((item) => pgoSlug(item) !== slug);
         }
         {
           next ? (
-            <a class="pager__item pager__item--next" href={url(`/pgo/${pgoSlug(next)}/`, locale)}>
+            <a class="pager__item pager__item--next" href={url(`/passes/pgo-instr-gen/${pgoSlug(next)}/`, locale)}>
               <span class="pager__dir">{t(locale, 'pgo.detail.next')}</span>
               <span class="pager__name">{next.data.title}</span>
             </a>
@@ -189,6 +196,23 @@ const otherSites = sites.filter((item) => pgoSlug(item) !== slug);
     margin-top: 26px;
     padding-bottom: clamp(24px, 4vw, 36px);
     border-bottom: 1px solid var(--line);
+  }
+
+  .pgo__parent {
+    margin-bottom: 10px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .pgo__parent a {
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  .pgo__parent a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
   }
 
   .pgo__title {

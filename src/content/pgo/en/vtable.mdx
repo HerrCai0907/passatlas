@@ -92,7 +92,7 @@ direct.foo:
 | direct call + inliner | the direct call after a successful compare | devirtualise, then inline like any other direct call |
 | WPD / ThinLTO | `!type` metadata in the module | narrow the possible type set; the profile then picks the hot vtable within it |
 
-Compared with ordinary <I18nLink href="/pgo/indirect-call/">indirect-call</I18nLink>, the gain is one fewer load: ordinary ICP loads the function pointer from the vtable and compares it; vtable ICP compares the `%vptr` already in a register. The cost is type matching and address-point arithmetic.
+Compared with ordinary <I18nLink href="/passes/pgo-instr-gen/indirect-call/">indirect-call</I18nLink>, the gain is one fewer load: ordinary ICP loads the function pointer from the vtable and compares it; vtable ICP compares the `%vptr` already in a register. The cost is type matching and address-point arithmetic.
 
 ## Cost and pitfalls
 

@@ -39,7 +39,7 @@ merge:
 !1 = !{!"branch_weights", i32 1180000, i32 20000}
 ```
 
-`!0` sits on the function, not on an instruction. `!1` is the branch weight derived from the same counters; the next page, <I18nLink href="/pgo/basic-block/">basic-block</I18nLink>, is about that.
+`!0` sits on the function, not on an instruction. `!1` is the branch weight derived from the same counters; the next page, <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink>, is about that.
 
 Force the entry counter on and the generation side gains one `llvm.instrprof.increment` with `index` 0:
 

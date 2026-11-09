@@ -53,7 +53,13 @@ const categoryLine =
           {tags.map((tag) => <span class="chip">{tag}</span>)}
         </div>
 
-        <PipelineStrip stage={stage} locale={locale} />
+        {
+          stage.length > 0 ? (
+            <PipelineStrip stage={stage} locale={locale} />
+          ) : (
+            <p class="pass__stage-none">{t(locale, 'pass.stageNone')}</p>
+          )
+        }
       </header>
 
       {
@@ -189,6 +195,13 @@ const categoryLine =
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 20px;
+  }
+
+  .pass__stage-none {
+    margin-top: 14px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--faint);
   }
 
   .pass__demo {

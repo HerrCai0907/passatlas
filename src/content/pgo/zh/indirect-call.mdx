@@ -99,7 +99,7 @@ merge:
 | `PGOIndirectCallPromotion`（`pgo-icall-prom`） | VP 的目标 hash 与计数 | 生成 callee 比较 + 条件直调，给分支写权重 |
 | inliner | 直调之后的调用点 | 对已知 callee 做内联，间接调用本身无法内联 |
 | GlobalOpt / IPSCCP | 直调 + 可见定义 | 把 callee 的常量、属性传播回 caller |
-| vtable ICP | VP kind 2 | 直接比较 vptr，省掉一次函数指针加载；见 <I18nLink href="/pgo/vtable/">vtable</I18nLink> |
+| vtable ICP | VP kind 2 | 直接比较 vptr，省掉一次函数指针加载；见 <I18nLink href="/passes/pgo-instr-gen/vtable/">vtable</I18nLink> |
 
 ICP 的判定不是「有 profile 就展开」。默认门槛：
 

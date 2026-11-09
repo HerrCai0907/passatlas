@@ -1,9 +1,9 @@
 ---
 import { getCollection, render } from 'astro:content';
-import PgoLayout from '../../../layouts/PgoLayout.astro';
-import { pgoSite } from '../../../data/pgo';
-import { defaultLocale, locales, type Locale } from '../../../i18n/config';
-import { pgoForLocale, pgoLocale, pgoSlug, type PgoEntry } from '../../../lib/pgo';
+import PgoLayout from '../../../../layouts/PgoLayout.astro';
+import { pgoSite } from '../../../../data/pgo';
+import { defaultLocale, locales, type Locale } from '../../../../i18n/config';
+import { pgoForLocale, pgoLocale, pgoSlug, type PgoEntry } from '../../../../lib/pgo';
 
 export async function getStaticPaths() {
   const all = await getCollection('pgo', ({ data }) => data.status === 'ready');

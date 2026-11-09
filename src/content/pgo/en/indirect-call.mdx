@@ -99,7 +99,7 @@ This is simplified: when `bar` also clears the thresholds, the `indirect` block 
 | `PGOIndirectCallPromotion` (`pgo-icall-prom`) | target hashes and counts from VP | build callee comparisons, guarded direct calls and branch weights |
 | inliner | the resulting direct call | inline a known callee; an indirect call cannot be inlined |
 | GlobalOpt / IPSCCP | direct call + visible definition | propagate constants and attributes back into the caller |
-| vtable ICP | VP kind 2 | compare the vptr directly and skip a function-pointer load; see <I18nLink href="/pgo/vtable/">vtable</I18nLink> |
+| vtable ICP | VP kind 2 | compare the vptr directly and skip a function-pointer load; see <I18nLink href="/passes/pgo-instr-gen/vtable/">vtable</I18nLink> |
 
 ICP does not promote everything the profile mentions. The default thresholds are:
 

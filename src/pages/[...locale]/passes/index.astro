@@ -2,13 +2,16 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import PassRow from '../../../components/PassRow.astro';
+import PgoSiteRow from '../../../components/PgoSiteRow.astro';
 import PipelineMap from '../../../components/PipelineMap.astro';
 import PassRegistry from '../../../components/PassRegistry.astro';
 import { pipelineStages } from '../../../data/pipeline';
+import { pgoGroup, pgoSite } from '../../../data/pgo';
 import { defaultLocale, locales, type Locale } from '../../../i18n/config';
 import { t } from '../../../i18n/ui';
 import { categories, categoryDescription, categoryName, categoryOrder } from '../../../lib/categories';
-import { passesForLocale } from '../../../lib/passes';
+import { passSlug, passesForLocale } from '../../../lib/passes';
+import { pgoForLocale, pgoSlug } from '../../../lib/pgo';
 import { url } from '../../../lib/url';
 
 export function getStaticPaths() {
@@ -22,11 +25,18 @@ const { locale } = Astro.props as { locale: Locale };
 
 const allPasses = await getCollection('passes', ({ data }) => data.status === 'ready');
 const passes = passesForLocale(allPasses, locale);
+const pgoLead = passes.find((pass) => passSlug(pass) === 'pgo-instr-gen');
+const groupedPasses = passes.filter((pass) => passSlug(pass) !== 'pgo-instr-gen');
+
+const pgoEntries = pgoForLocale(
+  await getCollection('pgo', ({ data }) => data.status === 'ready'),
+  locale,
+);
 
 let cursor = 0;
 const groups = categoryOrder
   .map((id) => {
-    const items = passes.filter((p) => p.data.category === id);
+    const items = groupedPasses.filter((p) => p.data.category === id);
     const group = { id, items, start: cursor + 1 };
     cursor += items.length;
     return group;
@@ -46,6 +56,10 @@ const groups = categoryOrder
       <p class="lead page-head__lead">{t(locale, 'passes.lead')}</p>
 
       <nav class="jump" aria-label={t(locale, 'passes.jump')}>
+        <a class="chip chip--pgo" href="#pgo">
+          {pgoGroup.short[locale]}
+          <span class="jump__count">{pgoEntries.length + (pgoLead ? 1 : 0)}</span>
+        </a>
         {
           groups.map((group) => (
             <a class="chip chip--cat" href={`#${group.id}`}>
@@ -63,6 +77,43 @@ const groups = categoryOrder
   </header>
 
   <div class="container">
+    <section class="group group--pgo" id="pgo" aria-labelledby="pgo-title">
+      <header class="group__head">
+        <div class="group__label">
+          <span class="group__dot" aria-hidden="true" />
+          <h2 id="pgo-title">{pgoGroup.title[locale]}</h2>
+          {locale === 'zh' ? <span class="group__en">{pgoGroup.en}</span> : null}
+        </div>
+        <p class="group__desc">{pgoGroup.description[locale]}</p>
+      </header>
+
+      {
+        pgoLead && (
+          <a class="pgo-lead" href={url(`/passes/${passSlug(pgoLead)}/`, locale)}>
+            <span class="pgo-lead__kicker">{pgoGroup.leadKicker[locale]}</span>
+            <span class="pgo-lead__main">
+              <span class="pgo-lead__name">{pgoLead.data.title}</span>
+              <span class="pgo-lead__sub">{pgoLead.data.subtitle}</span>
+              <span class="pgo-lead__summary">{pgoLead.data.summary}</span>
+            </span>
+            <span class="pgo-lead__arrow" aria-hidden="true">→</span>
+          </a>
+        )
+      }
+
+      <p class="pgo-sites-label">{pgoGroup.sitesLabel[locale]}</p>
+      <div class="rows">
+        {
+          pgoEntries.map((entry, index) => {
+            const meta = pgoSite(pgoSlug(entry));
+            return meta ? (
+              <PgoSiteRow entry={entry} meta={meta} index={index + 1} locale={locale} />
+            ) : null;
+          })
+        }
+      </div>
+    </section>
+
     {
       groups.map((group) => (
         <section class={`group cat-${group.id}`} id={group.id} aria-labelledby={`${group.id}-title`}>
@@ -96,7 +147,7 @@ const groups = categoryOrder
 
       <p class="pipeline__pgo">
         {t(locale, 'passes.pipeline.pgo')}
-        <a href={url('/pgo/', locale)}>
+        <a href={url('/passes/pgo-instr-gen/', locale)}>
           {t(locale, 'passes.pipeline.pgoLink')} <span aria-hidden="true">→</span>
         </a>
       </p>
@@ -142,9 +193,89 @@ const groups = categoryOrder
     opacity: 0.6;
   }
 
+  .chip--pgo {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+  }
+
   .group {
     padding-block: clamp(32px, 4.5vw, 52px);
     border-bottom: 1px solid var(--line);
+  }
+
+  .group--pgo {
+    --cat: var(--accent);
+  }
+
+  .pgo-lead {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 18px;
+    margin-bottom: 16px;
+    padding: 16px 18px;
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    color: var(--ink);
+    text-decoration: none;
+    transition:
+      border-color 0.16s var(--ease),
+      transform 0.16s var(--ease);
+  }
+
+  .pgo-lead:hover {
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+    transform: translateY(-1px);
+  }
+
+  .pgo-lead__kicker {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .pgo-lead__main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .pgo-lead__name {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .pgo-lead__sub {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .pgo-lead__summary {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+
+  .pgo-lead__arrow {
+    font-size: 14px;
+    color: var(--faint);
+  }
+
+  .pgo-sites-label {
+    margin: 0 0 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
   }
 
   .group__head {
@@ -246,6 +377,21 @@ const groups = categoryOrder
   @media (max-width: 760px) {
     .pipeline__head {
       grid-template-columns: 1fr;
+    }
+
+    .pgo-lead {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .pgo-lead__kicker {
+      grid-column: 1 / -1;
+    }
+
+    .pgo-lead__summary {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
   }
 </style>

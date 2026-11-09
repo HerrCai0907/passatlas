@@ -38,10 +38,9 @@ src/
 ├── pages/
 │   ├── [...locale]/       路由：一次生成中文（无前缀）与英文（/en/）
 │   │   ├── index.astro    首页：hero 动画 + 精选图鉴
-│   │   ├── passes/index.astro 图鉴目录（分类 + 管线图）
+│   │   ├── passes/index.astro 图鉴目录（IR PGO 分组 + 分类 + 管线图）
 │   │   ├── passes/[...slug].astro  pass 详情（构建期生成）
-│   │   ├── pgo/index.astro IR PGO 采样点总览（采集 → 合并 → 标注 → 消费）
-│   │   ├── pgo/[...slug].astro PGO 采样点详情（构建期生成）
+│   │   ├── passes/pgo-instr-gen/[...slug].astro PGO 采样点详情（挂在本页下）
 │   │   ├── ir/index.astro CFG 实验室：贴 IR 看控制流
 │   │   └── about.astro    方法论与贡献说明
 │   └── 404.astro / robots.txt.ts   根路径专用
@@ -57,6 +56,7 @@ src/
 │   └── ...                页头、页脚、管线标记
 ├── content/passes/zh/     每篇一个中文 .mdx
 ├── content/passes/en/     同一 id 的英文 .mdx
+├── content/passes/{zh,en}/pgo-instr-gen.mdx  IR PGO 插桩 pass 页
 ├── content/pgo/zh/        每个采样点一个中文 .mdx
 ├── content/pgo/en/        同一 id 的英文 .mdx
 ├── demos/                 演示数据：types.ts（diff 引擎）+ 每个 pass 一份
@@ -143,13 +143,13 @@ source: llvm/lib/Transforms/.../X.cpp
 
 - **测试**：`npm run test:ir`，覆盖菱形分支、循环回边、switch 多路、不可达块、跨行指令、错误提示，以及中英文路径与演示文案。
 
-## IR PGO 采样点
+## IR PGO 分组
 
-图鉴之外，**IR PGO** 单独成组：`/pgo/` 先讲清「插桩 → 运行 → 合并 → 标注 → 消费」的链路，再按实际插入位置拆成五页——函数入口、基本块/边、间接调用目标、内存操作长度、vtable 地址点。每页都回答三件事：采样什么、第二次编译写成什么元数据、后续哪些优化会消费它。
+图鉴顶部新增 **IR PGO** 分组，不再有独立的顶层栏目。先读插桩 pass `pgo-instr-gen`：它解释 IR 里插了哪些值、第二次编译把它们变成什么元数据，并指向消费这些值的 pass（`pgo-icall-prom`、`pgo-memop-opt`、`inliner` 等）。
 
-- 总览：`/pgo/`；示例详情：`/pgo/function-entry/`、`/pgo/indirect-call/`。
-- 内容在 `src/content/pgo/<locale>/<id>.mdx`，结构化事实在 `src/data/pgo.ts`，渲染骨架是 `src/layouts/PgoLayout.astro`。
-- 采样点不是 pass，因此没有分步动画，也不进入 `passes` 集合；页面底部的「图鉴里的消费者」负责回链到 `inliner` / `sample-profile-inline`。
+- 插桩 pass：`/passes/pgo-instr-gen/`；五个采样点详情：`/passes/pgo-instr-gen/function-entry/`、`.../basic-block/`、`.../indirect-call/`、`.../memop-size/`、`.../vtable/`。
+- 插桩 pass 在 `src/content/passes/<locale>/pgo-instr-gen.mdx`，带分步演示；采样点正文在 `src/content/pgo/<locale>/<id>.mdx`，结构化事实在 `src/data/pgo.ts`，渲染骨架是 `src/layouts/PgoLayout.astro`。
+- 采样点不是 pass，因此没有分步动画，也不进入 `passes` 集合；它们作为 `pgo-instr-gen` 的子页出现在图鉴的 IR PGO 分组里，并通过面包屑与父页互链。
 
 ## 多语言（i18n）
 
@@ -160,8 +160,8 @@ source: llvm/lib/Transforms/.../X.cpp
 | 首页 | `/` | `/en/` |
 | 图鉴 | `/passes/` | `/en/passes/` |
 | pass 详情 | `/passes/mem2reg/` | `/en/passes/mem2reg/` |
-| IR PGO | `/pgo/` | `/en/pgo/` |
-| PGO 采样点 | `/pgo/function-entry/` | `/en/pgo/function-entry/` |
+| IR PGO 插桩 pass | `/passes/pgo-instr-gen/` | `/en/passes/pgo-instr-gen/` |
+| PGO 采样点 | `/passes/pgo-instr-gen/function-entry/` | `/en/passes/pgo-instr-gen/function-entry/` |
 | CFG 实验室 | `/ir/` | `/en/ir/` |
 | 关于 | `/about/` | `/en/about/` |
 

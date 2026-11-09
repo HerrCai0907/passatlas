@@ -404,3 +404,16 @@ pre {
     scroll-behavior: auto !important;
   }
 }
+
+/* 窄屏下让 prose 表格按容器宽度重新分配列，避免整页横向滚动 */
+@media (max-width: 760px) {
+  .prose table {
+    table-layout: fixed;
+  }
+
+  .prose th,
+  .prose td {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}

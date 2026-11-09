@@ -14,7 +14,7 @@ import I18nLink from '../../../components/I18nLink.astro';
 
 基本块计数器采样的不是「每个块」，而是**一组能解出全部块计数的边**。`PGOInstrumentationGen` 在 CFG 上求最大权生成树：树上的边不插桩，树外的边插；对每条树外边，计数器放在源块（单后继）、目标块（非 critical edge）或新拆出的块（critical edge）里。这样计数器数量接近最少，同时让运行期只碰较少执行的边。
 
-入口块也是这套方程的一部分，所以 <I18nLink href="/pgo/function-entry/">function-entry</I18nLink> 和本页共用同一批计数。除此之外，每个 `select` 还有一个 `increment.step` 计数器，按条件真假累加 0/1；假分支的计数由所在块的计数减出来，索引排在块计数器之后。
+入口块也是这套方程的一部分，所以 <I18nLink href="/passes/pgo-instr-gen/function-entry/">function-entry</I18nLink> 和本页共用同一批计数。除此之外，每个 `select` 还有一个 `increment.step` 计数器，按条件真假累加 0/1；假分支的计数由所在块的计数减出来，索引排在块计数器之后。
 
 第二次编译时，`PGOInstrumentationUse` 做三件事：
 

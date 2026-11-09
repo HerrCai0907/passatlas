@@ -39,7 +39,7 @@ merge:
 !1 = !{!"branch_weights", i32 1180000, i32 20000}
 ```
 
-`!0` 挂在函数上，不是挂在某条指令上。`!1` 是同一套计数顺带导出的分支权重，下一页 <I18nLink href="/pgo/basic-block/">basic-block</I18nLink> 专门讲它。
+`!0` 挂在函数上，不是挂在某条指令上。`!1` 是同一套计数顺带导出的分支权重，下一页 <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink> 专门讲它。
 
 如果强制打开入口计数器，生成侧会多一条 `llvm.instrprof.increment`，`index` 为 0：
 

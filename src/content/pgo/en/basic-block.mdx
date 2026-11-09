@@ -14,7 +14,7 @@ import I18nLink from '../../../components/I18nLink.astro';
 
 Basic-block counters do not sample “every block”. They sample **a set of edges from which every block count can be solved**. `PGOInstrumentationGen` builds a maximum-weight spanning tree over the CFG: tree edges are not instrumented, non-tree edges are. For each non-tree edge the counter goes into the source block (single successor), the destination block (non-critical edge), or a newly split block (critical edge). The counter count stays close to minimal, and at runtime it touches the less frequently executed edges.
 
-The entry block is part of the same system of equations, which is why <I18nLink href="/pgo/function-entry/">function-entry</I18nLink> and this page share the counters. Each `select` also gets an `increment.step` counter that adds 0 or 1 from its condition; the false count is derived from the containing block’s count, and its index comes after the block counters.
+The entry block is part of the same system of equations, which is why <I18nLink href="/passes/pgo-instr-gen/function-entry/">function-entry</I18nLink> and this page share the counters. Each `select` also gets an `increment.step` counter that adds 0 or 1 from its condition; the false count is derived from the containing block’s count, and its index comes after the block counters.
 
 On the second build `PGOInstrumentationUse` does three things:
 

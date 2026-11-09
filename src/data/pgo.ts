@@ -151,92 +151,15 @@ export function pgoSite(id: string): PgoSiteMeta | undefined {
   return pgoSites.find((site) => site.id === id);
 }
 
-export interface PgoFlowStep {
-  no: string;
-  title: Record<Locale, string>;
-  body: Record<Locale, string>;
-  code: string;
-}
-
-/** 总览页的流水线：采集 → 运行 → 合并 → 标注 → 消费。 */
-export const pgoFlow: PgoFlowStep[] = [
-  {
-    no: '01',
-    title: { zh: '插桩', en: 'Instrument' },
-    body: {
-      zh: 'PGOInstrumentationGen 在 IR 里插入计数器与值采样，InstrProfiling 再把它降低成 __profc_* / __profd_*。',
-      en: 'PGOInstrumentationGen inserts counters and value sites into the IR; InstrProfiling lowers them to __profc_* / __profd_*.',
-    },
-    code: 'clang -fprofile-generate',
+/** 图鉴里的 IR PGO 分组：一个插桩 pass + 五个采样点。 */
+export const pgoGroup = {
+  short: { zh: 'IR PGO', en: 'IR PGO' },
+  title: { zh: 'IR PGO', en: 'IR PGO' },
+  en: 'Profile-guided optimization',
+  description: {
+    zh: '先由 pgo-instr-gen 插入计数器与值采样，跑完合并成 profile，再由 pgo-instr-use 读回。下面五页按采样点拆开，并指回消费它们的 pass。',
+    en: 'pgo-instr-gen inserts counters and value sites, a run turns them into a profile, and pgo-instr-use reads it back. The five pages below split the sites apart and point back to the passes that consume them.',
   },
-  {
-    no: '02',
-    title: { zh: '运行', en: 'Run' },
-    body: {
-      zh: '程序正常跑一遍负载。每次执行累加计数器，值采样把目标地址或长度写进 value 区，退出时落成 *.profraw。',
-      en: 'Run the workload. Counters increment, value sites record addresses or lengths, and the runtime writes *.profraw on exit.',
-    },
-    code: './app',
-  },
-  {
-    no: '03',
-    title: { zh: '合并', en: 'Merge' },
-    body: {
-      zh: 'llvm-profdata 合并多次运行的 raw profile，按函数名 hash 与 CFG hash 建索引，写出 *.profdata。',
-      en: 'llvm-profdata merges raw profiles from several runs, indexes them by function-name and CFG hashes, and writes *.profdata.',
-    },
-    code: 'llvm-profdata merge',
-  },
-  {
-    no: '04',
-    title: { zh: '标注', en: 'Annotate' },
-    body: {
-      zh: 'PGOInstrumentationUse 读回计数：函数写 function_entry_count，分支写 branch_weights，值采样点写 VP。',
-      en: 'PGOInstrumentationUse reads the counts back: function_entry_count on functions, branch_weights on branches, VP on value sites.',
-    },
-    code: 'clang -fprofile-use',
-  },
-  {
-    no: '05',
-    title: { zh: '消费', en: 'Consume' },
-    body: {
-      zh: '后面的 pass 只读 !prof 元数据：内联器、ICP、pgo-memop-opt、块布局。它们不直接读 .profdata。',
-      en: 'Later passes read only the !prof metadata: the inliner, ICP, pgo-memop-opt, block placement. They never read .profdata directly.',
-    },
-    code: '!prof',
-  },
-];
-
-export interface PgoComparisonRow {
-  label: Record<Locale, string>;
-  ir: Record<Locale, string>;
-  sample: Record<Locale, string>;
-}
-
-export const pgoComparison: PgoComparisonRow[] = [
-  {
-    label: { zh: '事实来源', en: 'Source of truth' },
-    ir: { zh: 'IR 里的计数器与值采样点', en: 'Counters and value sites in the IR' },
-    sample: { zh: '硬件采样器，或 pseudo probe', en: 'Hardware sampler, or pseudo probes' },
-  },
-  {
-    label: { zh: '精度', en: 'Precision' },
-    ir: { zh: '精确整数计数；冷路径也有 0', en: 'Exact integer counts, including zero on cold paths' },
-    sample: { zh: '统计估计；采样周期决定噪声', en: 'Statistical estimate; the sampling period sets the noise' },
-  },
-  {
-    label: { zh: '运行期开销', en: 'Runtime cost' },
-    ir: { zh: '有；计数器读写，循环里还要 counter promotion', en: 'Yes: counter traffic, plus counter promotion in loops' },
-    sample: { zh: '接近零；不需要插桩过的二进制', en: 'Near zero; no instrumented binary needed' },
-  },
-  {
-    label: { zh: '构建流程', en: 'Build flow' },
-    ir: { zh: 'gen → run → merge → use，至少两遍', en: 'gen → run → merge → use, at least two builds' },
-    sample: { zh: '采样 → merge → use；AutoFDO 可直接采生产二进制', en: 'sample → merge → use; AutoFDO can sample a production binary' },
-  },
-  {
-    label: { zh: '最擅长', en: 'Best at' },
-    ir: { zh: '分支、调用点、内存长度的精确分布', en: 'Exact distributions for branches, call sites and memory sizes' },
-    sample: { zh: '大规模部署、无法重编 instrumented binary 的场景', en: 'Large deployments where an instrumented binary is impractical' },
-  },
-];
+  sitesLabel: { zh: '五个采样点', en: 'Five sampling points' },
+  leadKicker: { zh: '插桩 pass', en: 'Instrumentation pass' },
+};

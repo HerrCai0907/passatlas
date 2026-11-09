@@ -18,7 +18,7 @@ const kindLabel =
   meta.kind === 'counter' ? t(locale, 'pgo.kind.counter') : t(locale, 'pgo.kind.value');
 ---
 
-<a class="pgo-row" href={url(`/pgo/${pgoSlug(entry)}/`, locale)}>
+<a class="pgo-row" href={url(`/passes/pgo-instr-gen/${pgoSlug(entry)}/`, locale)}>
   <span class="pgo-row__no">{String(index).padStart(2, '0')}</span>
 
   <span class="pgo-row__main">

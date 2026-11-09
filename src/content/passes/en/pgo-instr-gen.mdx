@@ -1,0 +1,145 @@
+---
+title: pgo-instr-gen
+subtitle: IR PGO instrumentation
+summary: 'The first build of PGO: insert counters and value sites into the IR, run the program to get .profraw, then let PGOInstrumentationUse turn the counts into !prof metadata for ICP, pgo-memop-opt and the inliner.'
+category: interproc
+difficulty: 3
+status: ready
+order: 7
+stage: []
+tags: ['PGO', 'Instrumentation', 'Counters', 'ValueProfile']
+demo: pgo-instr-gen
+source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+The optimiser sees the IR, not how many times a branch runs in a real workload. `pgo-instr-gen` makes that measurable: it inserts counters and value sites into the IR so the program can record its own runtime facts. It is not an optimisation and does not change semantics; it only leaves probes in functions, blocks and call sites.
+
+The full chain is two builds:
+
+```text
+clang -fprofile-generate   →  run the program  →  .profraw
+        ↑                                        │
+   pgo-instr-gen                           llvm-profdata merge
+        │                                        ↓
+        └──────────  clang -fprofile-use  ←  .profdata
+                           ↑
+                    pgo-instr-use
+```
+
+In the first build, the PGO-specific passes are only `pgo-instr-gen` (generation) and `InstrProfiling` (lowering the intrinsics to `__profc_*` / `__profd_*`); the normal optimisation pipeline still runs. The second build lets `pgo-instr-use` read the counts back and write `!prof`. **The instrumentation values themselves never appear in the use-side IR**; the use side sees `function_entry_count`, `branch_weights` and `VP`.
+
+The easiest switch to confuse here is `-fprofile-instr-generate`: that is Clang’s frontend instrumentation (coverage / Clang instrumentation), not IR PGO. IR PGO uses `-fprofile-generate` / `-fprofile-use`; the latter’s pass only accepts an IR-level profile.
+
+## Algorithm
+
+### Block counts: save on the tree, record off the tree
+
+`PGOInstrumentationGen` builds a maximum-weight spanning tree over the CFG and instruments only the edges **outside** the tree with `llvm.instrprof.increment`. For each non-tree edge the counter goes into the source block (single successor), the destination block (non-critical edge), or a newly split block (critical edge). Tree edges get no counter because their counts are solved by flow conservation.
+
+`select` is handled separately: each `select` gets one `llvm.instrprof.increment.step` that adds 0 or 1 from the condition, with its index after the block counters.
+
+```llvm
+@__profn_dispatch = private constant [9 x i8] c"dispatch\00"
+declare void @llvm.instrprof.increment(ptr, i64, i32, i32)
+
+define i32 @dispatch(i1 %c) {
+entry:
+  br i1 %c, label %hot, label %cold
+hot:
+  call void @llvm.instrprof.increment(ptr @__profn_dispatch, i64 170957022131388415, i32 2, i32 0)
+  ret i32 1
+cold:
+  call void @llvm.instrprof.increment(ptr @__profn_dispatch, i64 170957022131388415, i32 2, i32 1)
+  ret i32 0
+}
+```
+
+The `i64` is the CFG hash, `i32 2` the number of counters, and the last `i32` the index. On the second build, `pgo-instr-use` solves these into per-block counts, then writes `function_entry_count` and `branch_weights`.
+
+### Value profiling: record “what value this time”
+
+Block counters answer “how many times”; value sites answer “what value this time”. `ValueProfileCollector` currently has three plugins:
+
+| Site | Inserted at | Recorded value | value kind |
+| --- | --- | --- | --- |
+| Indirect call target | before each indirect `call` / `invoke` | callee address → function-name hash | `0` |
+| Memory-operation size | before a variable-length `memcpy` / `memset` / `memcmp` / `bcmp` | size | `1` |
+| Vtable address point | after the vptr load of a virtual call | vtable address → vtable GUID | `2` (experimental, ELF) |
+
+They all use the same intrinsic; only `value_kind` differs:
+
+```llvm
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+; i32 0: indirect call target
+%target = ptrtoint ptr %fn to i64
+call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %target, i32 0, i32 0)
+
+; i32 1: size passed to memcpy
+call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %n, i32 1, i32 0)
+```
+
+Constant-length memory operations are not instrumented; `memmove` is sampled, but the optimisation side skips it. Vtable profiling is off by default, needs `-mllvm -enable-vtable-value-profiling=1`, and works only on ELF.
+
+### Lowering: intrinsic → runtime globals
+
+`InstrProfiling` lowers the intrinsics into real memory operations:
+
+- `llvm.instrprof.increment` → load / add / store on the `@__profc_<func>` array; loops may get counter promotion.
+- `llvm.instrprof.value.profile` → `__llvm_profile_instrument_target` (kind 0/2) or `__llvm_profile_instrument_memop` (kind 1).
+- Every function also gets an `@__profd_<func>` profile-data structure with the function-name hash, CFG hash, counter pointer and number of value sites.
+
+## Cost and pitfalls
+
+- **Instrumentation is not free.** A counter is a memory RMW, and loops make it worse. `InstrProfiling` promotes counters to registers when it is safe, writing them back after the loop; `-O0` does no promotion. Multithreaded programs need `-fprofile-update=atomic`, otherwise concurrent updates lose counts.
+- **gen and use must see the same CFG.** The MST edge set, critical-edge splits and select count all feed the CFG hash. Change the source, optimisation level or pipeline and the hash changes; use then warns and skips that function rather than applying stale counts.
+- **Value sites keep only the top N.** One indirect call can have dozens of targets; the profile keeps the hottest few, and VP counts do not have to sum to the total.
+- **A profile is input, not proof.** Error handling that the workload never reaches gets a zero and is treated as cold. That is not the compiler guessing wrong; it is an unrepresentative workload.
+- **Vtable profiling is still experimental.** Both flags default off, generation is ELF-only, and use depends on ThinLTO + WPD. Do not assume it exists in a portable default configuration.
+- **Do not substitute `-fprofile-instr-generate`.** Frontend instrumentation does not produce the IR-level profile that `pgo-instr-use` expects.
+
+## Where it sits in the pipeline
+
+On the generation side, `PGOInstrumentationGen` is added to the module pipeline by `-fprofile-generate` (or `-fcs-profile-generate`), followed by `InstrProfilingLoweringPass`. It is not in the fixed `-O1` / `-O2` pass list, which is why this page has an empty stage.
+
+On the use side, `PGOInstrumentationUse` reads the profile near the front of the pipeline; the values then flow to:
+
+| Instrumentation value | Use-side metadata | Consuming pass |
+| --- | --- | --- |
+| Function entry / block edges | `function_entry_count`, `branch_weights` | <I18nLink href="/passes/inliner/">inliner</I18nLink>, BFI-driven loop and layout passes; sites: <I18nLink href="/passes/pgo-instr-gen/function-entry/">function-entry</I18nLink>, <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink> |
+| Indirect call target | `!prof !{!"VP", i32 0, ...}` | <I18nLink href="/passes/pgo-instr-gen/indirect-call/">pgo-icall-prom</I18nLink> (`PGOIndirectCallPromotion`), then inlining |
+| Memory-operation size | `!prof !{!"VP", i32 1, ...}` | <I18nLink href="/passes/pgo-instr-gen/memop-size/">pgo-memop-opt</I18nLink> (`PGOMemOPSizeOpt`) |
+| Vtable address point | `!prof !{!"VP", i32 2, ...}` | <I18nLink href="/passes/pgo-instr-gen/vtable/">pgo-icall-prom</I18nLink>’s vtable comparison mode |
+
+The links for `pgo-icall-prom` and `pgo-memop-opt` point to the sampling pages that explain their algorithms; `inliner` is an existing pass page. `pgo-icall-prom` turns hot targets into “compare + direct call”, and the direct call then goes to the <I18nLink href="/passes/inliner/">inliner</I18nLink>; `pgo-memop-opt` turns hot sizes into constant cases for SelectionDAG to expand. Sample PGO takes a different path; see <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>: it reads sample contexts, not these counters.
+
+## Run it yourself
+
+```bash
+# 1. generation: pgo-instr-gen + InstrProfiling
+clang -O2 -fprofile-generate app.c -o app
+
+# 2. run the workload to get default_*.profraw
+./app
+
+# 3. merge
+llvm-profdata merge -o app.profdata default_*.profraw
+
+# 4. use: pgo-instr-use turns counts into !prof
+clang -O2 -fprofile-use=app.profdata -S -emit-llvm app.c -o app.pgo.ll
+grep -n 'function_entry_count\|branch_weights\|!prof' app.pgo.ll
+```
+
+To inspect only the generation side without running anything:
+
+```bash
+opt -passes='pgo-instr-gen,instrprof' -S app.ll -o app.instr.ll
+grep -n 'instrprof\|__profc\|__profd' app.instr.ll
+```
+
+`app.ll` is clean IR with no profile. `pgo-instr-gen` inserts `llvm.instrprof.increment` on non-tree edges, and `instrprof` lowers it to `__profc_*`. For the shape of use-side metadata, jump to <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink> or <I18nLink href="/passes/pgo-instr-gen/indirect-call/">indirect-call</I18nLink> and run the example there.

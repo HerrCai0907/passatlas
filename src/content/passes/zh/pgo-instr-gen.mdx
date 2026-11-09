@@ -1,0 +1,145 @@
+---
+title: pgo-instr-gen
+subtitle: IR PGO 插桩
+summary: PGO 的第一次编译：在 IR 里插入计数器与值采样，跑完得到 .profraw；第二次编译由 PGOInstrumentationUse 读回，变成 !prof 元数据，喂给 ICP、pgo-memop-opt 与内联器。
+category: interproc
+difficulty: 3
+status: ready
+order: 7
+stage: []
+tags: ['PGO', 'Instrumentation', 'Counters', 'ValueProfile']
+demo: pgo-instr-gen
+source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+优化器只能看见 IR，看不见「这条分支在真实负载里走多少次」。`pgo-instr-gen` 负责把这件事变成可测量的：在 IR 里插入计数器与值采样，让程序自己记录运行事实。它不是一次优化，也不改变语义；它只是在函数、基本块和调用点上留下探针。
+
+完整链路是两遍编译：
+
+```text
+clang -fprofile-generate   →  运行程序  →  .profraw
+        ↑                                      │
+   pgo-instr-gen                         llvm-profdata merge
+        │                                      ↓
+        └────────  clang -fprofile-use  ←  .profdata
+                         ↑
+                  pgo-instr-use
+```
+
+第一遍里，与 PGO 相关的只有 `pgo-instr-gen`（生成）和 `InstrProfiling`（把 intrinsic 降成 `__profc_*` / `__profd_*`）；普通的优化管线仍然会跑。第二遍由 `pgo-instr-use` 读回计数，写成 `!prof`。**插桩值本身不会直接出现在使用侧的 IR 里**，使用侧看到的是 `function_entry_count`、`branch_weights` 和 `VP`。
+
+这里最容易混的开关是 `-fprofile-instr-generate`：那是 Clang 前端插桩（coverage / Clang instrumentation），不是 IR PGO。IR PGO 用 `-fprofile-generate` / `-fprofile-use`；后者的 pass 只接受 IR-level profile。
+
+## 算法
+
+### 块计数：在树上省，在树外记
+
+`PGOInstrumentationGen` 在 CFG 上求最大权生成树，只给**树外**的边插 `llvm.instrprof.increment`。每条树外边的计数器放在源块（单后继）、目标块（非 critical edge）或新拆出的块（critical edge）里；树上的边不插，因为它们的计数可以由流量守恒解出来。
+
+`select` 单独处理：每个 `select` 用一个 `llvm.instrprof.increment.step`，按条件真假累加 0/1，索引排在块计数器之后。
+
+```llvm
+@__profn_dispatch = private constant [9 x i8] c"dispatch\00"
+declare void @llvm.instrprof.increment(ptr, i64, i32, i32)
+
+define i32 @dispatch(i1 %c) {
+entry:
+  br i1 %c, label %hot, label %cold
+hot:
+  call void @llvm.instrprof.increment(ptr @__profn_dispatch, i64 170957022131388415, i32 2, i32 0)
+  ret i32 1
+cold:
+  call void @llvm.instrprof.increment(ptr @__profn_dispatch, i64 170957022131388415, i32 2, i32 1)
+  ret i32 0
+}
+```
+
+`i64` 是 CFG hash，`i32 2` 是计数器总数，最后一个 `i32` 是索引。第二次编译时，`pgo-instr-use` 把它们解成每个块的计数，再写 `function_entry_count` 和 `branch_weights`。
+
+### 值采样：记录「这一次是多少」
+
+块计数回答「走了多少次」，值采样回答「这一次的值是什么」。`ValueProfileCollector` 目前挂三类插件：
+
+| 采样点 | 插在哪 | 记录的值 | value kind |
+| --- | --- | --- | --- |
+| 间接调用目标 | 每个间接 `call` / `invoke` 前 | callee 地址 → 函数名 hash | `0` |
+| 内存操作长度 | 变长 `memcpy` / `memset` / `memcmp` / `bcmp` 前 | size | `1` |
+| vtable 地址点 | 虚调用前的 vptr 加载之后 | vtable 地址 → vtable GUID | `2`（实验，ELF） |
+
+它们都走同一个 intrinsic，区别只在 `value_kind`：
+
+```llvm
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+; i32 0：间接调用目标
+%target = ptrtoint ptr %fn to i64
+call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %target, i32 0, i32 0)
+
+; i32 1：memcpy 的 size
+call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %n, i32 1, i32 0)
+```
+
+常量长度的内存操作不会插桩；`memmove` 会被采样，但优化侧跳过它。vtable 采样默认关闭，需要 `-mllvm -enable-vtable-value-profiling=1`，而且只在 ELF 上工作。
+
+### 降低：intrinsic → 运行时全局
+
+`InstrProfiling` 把 intrinsic 降成真正的内存操作：
+
+- `llvm.instrprof.increment` → 对 `@__profc_<func>` 数组的 load / add / store；循环里可能做 counter promotion。
+- `llvm.instrprof.value.profile` → `__llvm_profile_instrument_target`（kind 0/2）或 `__llvm_profile_instrument_memop`（kind 1）。
+- 每个函数还有 `@__profd_<func>` 的 profile data 结构，记录函数名 hash、CFG hash、计数器指针和 value site 数。
+
+## 代价与坑
+
+- **插桩不是免费的。** 计数器是内存 RMW；循环里尤其贵。`InstrProfiling` 会在安全时把计数器提升到寄存器，循环结束再写回；`-O0` 不做 promotion。多线程程序用 `-fprofile-update=atomic`，否则并发更新会丢计数。
+- **gen 和 use 必须看到同一套 CFG。** MST 的边集、critical edge 拆分、`select` 数都进入 CFG hash；源码、优化级别或管线一变，hash 变了，use 会警告并跳过这个函数，而不是套旧计数。
+- **值采样只记 top-N。** 一个间接调用点可能有几十个目标，profile 里只保留最热的几个；VP 的计数不要求和等于 total。
+- **profile 是输入，不是证明。** 测试集没走到的错误处理会被记成 0，随后被当成冷代码；这不是编译器猜错，是负载不代表性。
+- **vtable 采样仍是实验路径。** 两个开关默认关闭，生成侧只支持 ELF，使用侧还依赖 ThinLTO + WPD；不要在跨平台默认配置里假设它存在。
+- **别用 `-fprofile-instr-generate` 代替 `-fprofile-generate`。** 前端插桩的 profile 不能被 `pgo-instr-use` 当作 IR-level profile 读取。
+
+## 在管线里的位置
+
+生成侧，`PGOInstrumentationGen` 由 `-fprofile-generate`（或 `-fcs-profile-generate`）加入 module pipeline，后面紧跟 `InstrProfilingLoweringPass`；它不在 `-O1` / `-O2` 的固定 pass 列表里，所以这一页的 stage 是空的。
+
+使用侧，`PGOInstrumentationUse` 在管线前部读回 profile；之后这些值分别流向：
+
+| 插桩值 | 使用侧元数据 | 消费它的 pass |
+| --- | --- | --- |
+| 函数入口 / 基本块边 | `function_entry_count`、`branch_weights` | <I18nLink href="/passes/inliner/">inliner</I18nLink>、BFI 驱动的循环与布局 pass；采样点见 <I18nLink href="/passes/pgo-instr-gen/function-entry/">function-entry</I18nLink>、<I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink> |
+| 间接调用目标 | `!prof !{!"VP", i32 0, ...}` | <I18nLink href="/passes/pgo-instr-gen/indirect-call/">pgo-icall-prom</I18nLink>（`PGOIndirectCallPromotion`），生成直调后再交给 inliner |
+| 内存操作长度 | `!prof !{!"VP", i32 1, ...}` | <I18nLink href="/passes/pgo-instr-gen/memop-size/">pgo-memop-opt</I18nLink>（`PGOMemOPSizeOpt`） |
+| vtable 地址点 | `!prof !{!"VP", i32 2, ...}` | <I18nLink href="/passes/pgo-instr-gen/vtable/">pgo-icall-prom</I18nLink> 的 vtable 比较模式 |
+
+`pgo-icall-prom` 与 `pgo-memop-opt` 的链接指向解释其算法的采样点页；`inliner` 是已有的 pass 页。`pgo-icall-prom` 把热目标变成「比较 + 直调」，直调再交给 <I18nLink href="/passes/inliner/">inliner</I18nLink>；`pgo-memop-opt` 把热长度拆成常量 case，再交给 SelectionDAG 展开。样本 PGO 走的是另一条链，见 <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>：它读样本上下文，不读这里的计数器。
+
+## 自己跑一遍
+
+```bash
+# 1. 生成：pgo-instr-gen + InstrProfiling
+clang -O2 -fprofile-generate app.c -o app
+
+# 2. 跑负载，得到 default_*.profraw
+./app
+
+# 3. 合并
+llvm-profdata merge -o app.profdata default_*.profraw
+
+# 4. 使用：pgo-instr-use 把计数变成 !prof
+clang -O2 -fprofile-use=app.profdata -S -emit-llvm app.c -o app.pgo.ll
+grep -n 'function_entry_count\|branch_weights\|!prof' app.pgo.ll
+```
+
+只看生成侧插了什么，不用跑程序：
+
+```bash
+opt -passes='pgo-instr-gen,instrprof' -S app.ll -o app.instr.ll
+grep -n 'instrprof\|__profc\|__profd' app.instr.ll
+```
+
+`app.ll` 是一份干净的、没有 profile 的 IR。`pgo-instr-gen` 会在树外边上插 `llvm.instrprof.increment`，`instrprof` 再把它降成 `__profc_*`。想看 use 侧的元数据形状，直接跳到 <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink> 或 <I18nLink href="/passes/pgo-instr-gen/indirect-call/">indirect-call</I18nLink> 的「自己跑一遍」。
