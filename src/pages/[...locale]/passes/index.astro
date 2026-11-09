@@ -56,6 +56,10 @@ const groups = categoryOrder
       <p class="lead page-head__lead">{t(locale, 'passes.lead')}</p>
 
       <nav class="jump" aria-label={t(locale, 'passes.jump')}>
+        <a class="chip" href="#pipeline">
+          {t(locale, 'passes.pipeline.jump')}
+          <span class="jump__count" aria-hidden="true">↓</span>
+        </a>
         <a class="chip chip--pgo" href="#pgo">
           {pgoGroup.short[locale]}
           <span class="jump__count">{pgoEntries.length + (pgoLead ? 1 : 0)}</span>
@@ -68,15 +72,37 @@ const groups = categoryOrder
             </a>
           ))
         }
-        <a class="chip" href="#pipeline">
-          {t(locale, 'passes.pipeline.jump')}
-          <span class="jump__count" aria-hidden="true">↓</span>
-        </a>
       </nav>
     </div>
   </header>
 
   <div class="container">
+    <section class="pipeline" id="pipeline" aria-labelledby="pipeline-title">
+      <header class="pipeline__head">
+        <div class="pipeline__intro">
+          <p class="eyebrow">{t(locale, 'passes.pipeline.eyebrow')}</p>
+          <h2 id="pipeline-title">{t(locale, 'passes.pipeline.title')}</h2>
+        </div>
+        <p class="muted pipeline__lead">{t(locale, 'passes.pipeline.body')}</p>
+      </header>
+
+      <p class="pipeline__pgo">
+        {t(locale, 'passes.pipeline.pgo')}
+        <a href={url('/passes/pgo-instr-gen/', locale)}>
+          {t(locale, 'passes.pipeline.pgoLink')} <span aria-hidden="true">→</span>
+        </a>
+      </p>
+
+      <PipelineMap stages={pipelineStages} pages={passes} locale={locale} />
+      <PassRegistry pages={passes} locale={locale} />
+
+      <p class="pipeline__cta">
+        <a class="btn btn--ghost" href={url('/about/', locale)}>
+          {t(locale, 'passes.pipeline.cta')} <span class="btn__arrow" aria-hidden="true">→</span>
+        </a>
+      </p>
+    </section>
+
     <section class="group group--pgo" id="pgo" aria-labelledby="pgo-title">
       <header class="group__head">
         <div class="group__label">
@@ -135,32 +161,6 @@ const groups = categoryOrder
         </section>
       ))
     }
-
-    <section class="pipeline" id="pipeline" aria-labelledby="pipeline-title">
-      <header class="pipeline__head">
-        <div class="pipeline__intro">
-          <p class="eyebrow">{t(locale, 'passes.pipeline.eyebrow')}</p>
-          <h2 id="pipeline-title">{t(locale, 'passes.pipeline.title')}</h2>
-        </div>
-        <p class="muted pipeline__lead">{t(locale, 'passes.pipeline.body')}</p>
-      </header>
-
-      <p class="pipeline__pgo">
-        {t(locale, 'passes.pipeline.pgo')}
-        <a href={url('/passes/pgo-instr-gen/', locale)}>
-          {t(locale, 'passes.pipeline.pgoLink')} <span aria-hidden="true">→</span>
-        </a>
-      </p>
-
-      <PipelineMap stages={pipelineStages} pages={passes} locale={locale} />
-      <PassRegistry pages={passes} locale={locale} />
-
-      <p class="pipeline__cta">
-        <a class="btn btn--ghost" href={url('/about/', locale)}>
-          {t(locale, 'passes.pipeline.cta')} <span class="btn__arrow" aria-hidden="true">→</span>
-        </a>
-      </p>
-    </section>
   </div>
 </BaseLayout>
 
@@ -323,7 +323,8 @@ const groups = categoryOrder
 
   /* ---------- 管线地图 ---------- */
   .pipeline {
-    padding-block: clamp(40px, 6vw, 64px);
+    padding-block: clamp(30px, 4.5vw, 48px) clamp(36px, 5vw, 56px);
+    border-bottom: 1px solid var(--line);
   }
 
   .pipeline__head {
