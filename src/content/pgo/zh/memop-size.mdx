@@ -1,0 +1,151 @@
+---
+title: memop-size
+subtitle: 内存操作长度
+summary: 记录 memcpy / memset / memcmp 在一次运行里实际拿到多长的 size，写成 VP 元数据里的 i32 1。热长度会被 pgo-memop-opt 拆成 switch，随后展开成常量大小的加载/存储。
+status: ready
+order: 40
+source: llvm/lib/Transforms/Instrumentation/PGOMemOPSizeOpt.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它采样什么
+
+变长内存操作在一次运行里实际拿到的长度。采样对象是 `llvm.memcpy` / `llvm.memset` / `llvm.memcmp` 之类的内存 intrinsic，以及 `memcmp` / `bcmp` 的 libcall；**常量长度不插桩**，因为编译期已经知道，没有 profile 也能特化。
+
+`MemIntrinsicPlugin` 只处理 `MemIntrinsic` 且 length 不是 `ConstantInt` 的调用；`memcmp` / `bcmp` 走 `TargetLibraryInfo` 的 `LibFunc` 判断。每个 site 有独立索引，`!prof` 里的 value kind 是 `1`。lowering 之后，runtime 调用是 `__llvm_profile_instrument_memop(length, data, site)`，和间接调用的 `__llvm_profile_instrument_target` 分开。
+
+注意 `memmove`：它也会被采样，但 `PGOMemOPSizeOpt::perform` 明确跳过它。采样不等于一定优化。
+
+## IR 里的样子
+
+带一个变长 `memcpy` 的函数：
+
+```llvm
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+
+define void @copy(ptr %dst, ptr %src, i64 %n) {
+entry:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false)
+  ret void
+}
+```
+
+生成侧插 intrinsic（同样用 `__profn_*` 作为名字全局变量）：
+
+```llvm
+@__profn_copy = private constant [5 x i8] c"copy\00"
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+define void @copy(ptr %dst, ptr %src, i64 %n) {
+entry:
+  call void @llvm.instrprof.value.profile(ptr @__profn_copy, i64 742261418966908927, i64 %n, i32 1, i32 0)
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false)
+  ret void
+}
+```
+
+use 侧把它写成调用指令上的 `!prof`：
+
+```llvm
+define void @copy(ptr %dst, ptr %src, i64 %n) !prof !0 {
+entry:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false), !prof !1
+  ret void
+}
+
+!0 = !{!"function_entry_count", i64 10000}
+!1 = !{!"VP", i32 1, i64 10000, i64 4, i64 6000, i64 16, i64 3000}
+```
+
+读法：这个调用点执行 10,000 次；`n = 4` 有 6,000 次，`n = 16` 有 3,000 次，剩下 1,000 次是其他长度。
+
+`PGOMemOPSizeOpt` 把最热的两个长度拆成 case，默认路径保留原来的变长调用：
+
+```llvm
+define void @copy(ptr %dst, ptr %src, i64 %n) {
+entry:
+  switch i64 %n, label %MemOP.Default [
+    i64 4, label %MemOP.Case.4
+    i64 16, label %MemOP.Case.16
+  ]
+
+MemOP.Case.4:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 4, i1 false)
+  br label %MemOP.Merge
+
+MemOP.Case.16:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 16, i1 false)
+  br label %MemOP.Merge
+
+MemOP.Default:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false)
+  br label %MemOP.Merge
+
+MemOP.Merge:
+  ret void
+}
+```
+
+这一步只是把 size 变成常量。真正把它变成几条 load / store 的是后面的 SelectionDAG；对 `memcmp` 则是按常量长度展开成整数比较。只有一个 size 通过阈值时，`PGOMemOPSizeOpt` 仍会先建一个单 case 的 switch；后续 `SimplifyCFG` 会把它折成一次比较加一条常量路径。`MemOP.Case.*` 的数量取决于被选中的 size 数。
+
+## 后续优化点
+
+| 消费者 | 读到什么 | 用来做什么 |
+| --- | --- | --- |
+| `PGOMemOPSizeOpt`（`pgo-memop-opt`） | VP kind 1 的 size 分布 | 生成 size switch，把热长度变成常量 |
+| SelectionDAG / TargetLowering | 常量长度的 memcpy / memset | 小拷贝展开成 load / store，大拷贝走 libcall 或向量化 |
+| memcmp / bcmp 特化 | 常量长度 | 展开成按字宽的整数比较 |
+| 后续 CFG 优化 | switch 的形状 | 折叠重复 case、调整冷热块布局 |
+
+`PGOMemOPSizeOpt` 只在 **IR PGO use** 的管线里运行，而且 `-Os` 下不运行。默认门槛（源码里的 hidden flag）：
+
+- 调用点计数至少 1,000（`-pgo-memop-count-threshold`）；
+- 每个候选至少占剩余计数的 40%（`-pgo-memop-percent-threshold`）；
+- 最多 3 个版本（`-pgo-memop-max-version`）；
+- 只特化不大于 128 字节的长度（`-memop-value-prof-max-opt-size`）；
+- `memmove` 直接跳过；`memcmp` / `bcmp` 是否特化由 `-pgo-memop-optimize-memcmp-bcmp` 控制，默认开。
+
+被特化掉的记录会从 `!prof` 里删除；没被选中的 size 继续留在元数据里，交给下一轮或别的优化。
+
+## 代价与坑
+
+- **常量长度根本不进 profile。** 这不是遗漏，是设计：`memcpy(p, q, 16)` 在 IR 里就是常量，`PGOMemOPSizeOpt` 不需要 count 也能特化，SelectionDAG 也会直接展开。
+- **不是所有 `memcpy` 都是 `MemIntrinsic`。** 插件只认内存 intrinsic 和 `memcmp` / `bcmp` libcall。一个已经被 lowering 成 `__memcpy_chk` 或 target 特化 libcall 的调用不会被采样；在 `-O0` 下用普通 `memcpy` 很容易踩到这一点，`__builtin_memcpy` 更容易保持成 `llvm.memcpy`。
+- **switch 本身有成本。** 多一个间接分支、多几个基本块；只有热且分布集中的 site 才划算。40% 阈值和 3 个版本上限就是防止把冷 site 也拆开。
+- **`memmove` 不优化。** 即使它被采样，`perform` 也直接返回 false；重叠语义让按长度特化的收益/复杂度不划算。
+- **count 需要 BFI。** 默认 `-pgo-memop-scale-count=true`，用基本块计数缩放 value 计数；如果 BFI 拿不到块计数（比如手写 IR 没有 `function_entry_count`），这个 site 会被跳过。
+- **profile 过期时 site 数量会对不上。** value site 是按函数内顺序编号的；源码增删一个 memcpy，后面的索引全变。use 会警告并跳过这个函数的值采样，而不是错位套用。
+
+## 自己跑一遍
+
+手写一个带 `!prof` 的模块，直接看 switch 生成：
+
+```bash
+cat > memop.ll <<'EOF'
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+
+define void @copy(ptr %dst, ptr %src, i64 %n) !prof !0 {
+entry:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false), !prof !1
+  ret void
+}
+
+!0 = !{!"function_entry_count", i64 10000}
+!1 = !{!"VP", i32 1, i64 10000, i64 4, i64 6000, i64 16, i64 3000}
+EOF
+
+opt -passes=pgo-memop-opt -pass-remarks=pgo-memop-opt -S memop.ll -o -
+```
+
+预期输出里有 `MemOP.Case.4`、`MemOP.Case.16`、`MemOP.Default` 和 `MemOP.Merge`，以及一条类似 `optimized memcpy with count 9000 out of 10000 for 2 versions` 的 remark。把 `i64 4` 的计数改成 100，观察它被 40% 阈值挡掉、只剩一个版本。
+
+想看真实 profile，用 `__builtin_memcpy` 而不是普通 `memcpy`：
+
+```bash
+clang -O2 -fprofile-generate memop.c -o memop
+./memop
+llvm-profdata merge -o memop.profdata default_*.profraw
+llvm-profdata show --all-functions memop.profdata | grep -A3 copy
+```

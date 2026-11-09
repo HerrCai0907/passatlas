@@ -1,0 +1,156 @@
+---
+title: indirect-call
+subtitle: 间接调用目标
+summary: 每个间接调用点记录实际落到的函数，写成 VP 元数据里的 i32 0。ICP 把热目标变成带条件判断的直调，后面的内联器才接得上手。
+status: ready
+order: 30
+source: llvm/lib/Transforms/Instrumentation/IndirectCallPromotion.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它采样什么
+
+每个间接调用点实际落到了哪个函数。`findIndirectCalls` 找出被调用者不是已知函数、需要从值里加载的 `call` / `invoke`；`PGOInstrumentationGen` 在每个这样的调用点前插一条值采样，把 callee 指针转成 `i64` 交给 runtime。
+
+runtime 记录的是**函数地址**。`llvm-profdata merge` 读 raw profile 时，用二进制里的符号表把地址映射成函数名的 64 位 MD5 hash（GUID），indexed profile 里只剩 hash。所以 IR 里的 `!prof` 永远看不到 `@foo` 这个名字，只看到一串十进制整数。
+
+一个函数可以有很多个间接调用点。每个点是一个 value site，索引从 0 开始；`!prof` 写在对应的调用指令上。
+
+## IR 里的样子
+
+`PGOInstrumentationGen` 先插 intrinsic。名字全局变量是 `__profn_*`，不是 `__profd_*`；后者是 lowering 之后的数据结构：
+
+```llvm
+@__profn_dispatch = private constant [9 x i8] c"dispatch\00"
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %target = ptrtoint ptr %fn to i64
+  call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %target, i32 0, i32 0)
+  %r = call i32 %fn(i32 %x)
+  ret i32 %r
+}
+```
+
+`InstrProfiling` 把它降低成 runtime 调用，同时给函数补上计数器：
+
+```llvm
+@__profc_dispatch = private global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", align 8
+@__profd_dispatch = private global { i64, i64, i64, i64, ptr, ptr, i32, [3 x i16], i32 } zeroinitializer, section "__llvm_prf_data", align 8
+declare void @__llvm_profile_instrument_target(i64, ptr, i32)
+
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %c = load i64, ptr @__profc_dispatch, align 8
+  %c1 = add i64 %c, 1
+  store i64 %c1, ptr @__profc_dispatch, align 8
+  %target = ptrtoint ptr %fn to i64
+  call void @__llvm_profile_instrument_target(i64 %target, ptr nonnull @__profd_dispatch, i32 0)
+  %r = call i32 %fn(i32 %x)
+  ret i32 %r
+}
+```
+
+第二次编译，`PGOInstrumentationUse` 把热目标写回调用指令。下面两个 hash 分别是 `foo` 和 `bar` 的 GUID：
+
+```llvm
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %r = call i32 %fn(i32 %x), !prof !0
+  ret i32 %r
+}
+
+!0 = !{!"VP", i32 0, i64 1000000, i64 6699318081062747564, i64 750000, i64 -2012135647395072713, i64 200000}
+```
+
+读法：这个调用点执行了 1,000,000 次；`foo` 命中 750,000 次，`bar` 命中 200,000 次；剩下 50,000 次落在没进 top-N 的目标上。VP 的计数不要求和等于 total，LangRef 明确允许只记录最热的值。
+
+`PGOIndirectCallPromotion` 之后，热目标变成 guard + 直调：
+
+```llvm
+entry:
+  %is.foo = icmp eq ptr %fn, @foo
+  br i1 %is.foo, label %direct.foo, label %indirect, !prof !1
+
+direct.foo:
+  %r.foo = call i32 @foo(i32 %x)
+  br label %merge
+
+indirect:
+  %r.other = call i32 %fn(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %r.foo, %direct.foo ], [ %r.other, %indirect ]
+  ret i32 %r
+
+!1 = !{!"branch_weights", i32 750000, i32 250000}
+```
+
+这是示意：`bar` 也满足阈值时，`indirect` 块里会再套一层 guard。ICP 不删除间接调用，它把「可能直达」的路径切出来；真正把 `foo` 展开进 caller 的是随后的内联。
+
+## 后续优化点
+
+| 消费者 | 读到什么 | 用来做什么 |
+| --- | --- | --- |
+| `PGOIndirectCallPromotion`（`pgo-icall-prom`） | VP 的目标 hash 与计数 | 生成 callee 比较 + 条件直调，给分支写权重 |
+| inliner | 直调之后的调用点 | 对已知 callee 做内联，间接调用本身无法内联 |
+| GlobalOpt / IPSCCP | 直调 + 可见定义 | 把 callee 的常量、属性传播回 caller |
+| vtable ICP | VP kind 2 | 直接比较 vptr，省掉一次函数指针加载；见 <I18nLink href="/pgo/vtable/">vtable</I18nLink> |
+
+ICP 的判定不是「有 profile 就展开」。默认门槛：
+
+- 调用点总计数必须是热（`-icp-allow-hot-only=true`）；没有 profile summary 的 IR 会跳过这个检查。
+- 每个候选至少占**总计数**的 5%（`-icp-total-percent-threshold`），且至少占**剩余未提升计数**的 30%（`-icp-remaining-percent-threshold`）。
+- 单个调用点最多提升 3 个目标（`-icp-max-prom`）。
+- 目标函数必须有定义，或者显式允许只有声明（`-icp-allow-decls`）。
+
+在管线里，它通常紧跟 `PGOInstrumentationUse`，排在主内联之前。ThinLTO 的 postlink 阶段要在 GlobalOpt 之前跑一次，否则 imported 的 `available_externally` 函数会被当成无人引用而删掉。
+
+## 代价与坑
+
+- **guard 不是免费的。** 每个 promoted 目标都多一次比较和一次分支；分布很平或预测器猜不中时，收益会被抵消。ICP 只处理热调用点，就是在避免这种全局插入。
+- **目标必须可见。** 动态库里的 callee 如果只有声明，`-icp-allow-decls=false` 时不会被提升；ThinLTO 导入之后才有机会。
+- **hash 依赖名字。** VP 里的 GUID 是函数名的 MD5。改名、改 mangling、跨模块合并都可能让 hash 对不上；这时不是「优化变弱」，而是 profile 直接失效。
+- **top-N 会截断长尾。** 采样点只记录最热的几个目标；剩下的计数落在 total 与已知目标之差里。一个 40% / 30% / 30% 的三峰分布，可能只提升前两个。
+- **`noinline` 目标提升后仍然不内联。** ICP 仍会生成直调，但 `InlineCost` 会拒绝展开；收益只剩「省一次间接跳转」。
+- **stale profile 最危险。** 调用点数量、顺序和 CFG hash 必须与 gen 时一致；对不上时 use 会警告并跳过，但如果你把警告关掉，就会得到一份看起来有 `!prof`、实际没生效的 IR。
+
+## 自己跑一遍
+
+手写一个带 VP 元数据的模块，直接看 ICP 的改写：
+
+```bash
+cat > icall.ll <<'EOF'
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @foo(i32 %x) {
+entry:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @bar(i32 %x) {
+entry:
+  %r = add i32 %x, 2
+  ret i32 %r
+}
+
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %r = call i32 %fn(i32 %x), !prof !0
+  ret i32 %r
+}
+
+!0 = !{!"VP", i32 0, i64 1000000, i64 6699318081062747564, i64 750000, i64 -2012135647395072713, i64 200000}
+EOF
+
+opt -passes=pgo-icall-prom -pass-remarks=pgo-icall-prom -S icall.ll -o -
+```
+
+如果 `foo` 和 `bar` 的 GUID 算错了，ICP 会找不到目标，输出里一条直调都不会出现——这正好演示了「profile 是按名字 hash 对上的」。用 `opt -passes=pgo-icall-prom -debug-only=pgo-icall-prom` 的调试构建可以看到它逐个候选比较的过程。
+
+想看它和样本 PGO 的差别，去 <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>：那里也读 VP，但决策是「调用上下文 + 样本数」，不是「总计数 + 百分比阈值」。

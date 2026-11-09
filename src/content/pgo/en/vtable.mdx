@@ -1,0 +1,134 @@
+---
+title: vtable
+subtitle: Vtable address points (experimental)
+summary: Records the vtable address point loaded before a virtual call and writes VP kind 2. ICP can compare the vptr directly and skip a function-pointer load; off by default and only complete on ELF with ThinLTO + WPD.
+status: ready
+order: 50
+source: llvm/lib/Transforms/Instrumentation/IndirectCallPromotion.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What does it sample
+
+The **vtable address point** loaded from an object before a C++ virtual call. Not the function pointer, and not the class name. `VTableProfilingPlugin` uses `findVTableAddrs` to find the instruction producing the vtable address and inserts a value site after it; the value kind is `2`, separate from indirect calls (0) and memory sizes (1).
+
+The raw profile stores the vtable address, its address range and the vtable name; `llvm-profdata merge` maps the address to a vtable GUID. The indexed profile also keeps the vtable names, so `llvm-profdata show` can display them.
+
+The path is off by default and needs explicit flags:
+
+```bash
+-mllvm -enable-vtable-value-profiling=1   # generation side
+-mllvm -enable-vtable-profile-use=1       # use side
+```
+
+The source is explicit about the constraints: ELF only; and the `enable-vtable-profile-use` description requires ThinLTO + WPD. Enabling generation on a non-ELF target diagnoses an error rather than silently degrading.
+
+## What it looks like in IR
+
+A typical virtual call:
+
+```llvm
+define i32 @dispatch(ptr %obj, i32 %x) {
+entry:
+  %vptr = load ptr, ptr %obj, align 8
+  %fn = load ptr, ptr %vptr, align 8
+  %r = call i32 %fn(ptr %obj, i32 %x)
+  ret i32 %r
+}
+```
+
+Generation inserts the site after `%vptr`, before `%fn`:
+
+```llvm
+@__profn_dispatch = private constant [9 x i8] c"dispatch\00"
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+define i32 @dispatch(ptr %obj, i32 %x) {
+entry:
+  %vptr = load ptr, ptr %obj, align 8
+  %vp = ptrtoint ptr %vptr to i64
+  call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %vp, i32 2, i32 0)
+  %fn = load ptr, ptr %vptr, align 8
+  %r = call i32 %fn(ptr %obj, i32 %x)
+  ret i32 %r
+}
+```
+
+Use attaches VP to the **vptr load**, not the call:
+
+```llvm
+%vptr = load ptr, ptr %obj, align 8, !prof !0
+!0 = !{!"VP", i32 2, i64 100000, i64 -1234567890123456789, i64 80000, i64 1234567890123456789, i64 15000}
+```
+
+Those integers are vtable GUIDs, not function-name GUIDs. ICP matches them against vtable globals carrying `!type` metadata.
+
+Once matched, the guard compares the vptr instead of loading the function pointer first:
+
+```llvm
+@_ZTV3Foo = external constant i8
+
+%vt.foo = getelementptr inbounds i8, ptr @_ZTV3Foo, i64 16
+%is.foo = icmp eq ptr %vptr, %vt.foo
+br i1 %is.foo, label %direct.foo, label %fallback, !prof !1
+
+direct.foo:
+  %r.foo = call i32 @Foo3foo(ptr %obj, i32 %x)
+  br label %merge
+
+!1 = !{!"branch_weights", i32 80000, i32 20000}
+```
+
+`+16` is the common address-point offset on 64-bit Itanium ABI; the real offset depends on the vtable layout and inheritance. The source computes it with `getAddressPointOffset` from the vtable’s type metadata, not as a constant. This is a structural sketch.
+
+## What consumes it
+
+| Consumer | Reads | Uses it for |
+| --- | --- | --- |
+| `PGOIndirectCallPromotion` | vtable GUIDs from VP kind 2 | decide between vtable comparison and function-pointer comparison |
+| `isProfitableToCompareVTables` | vtable count / function count | compare vtables only when coverage is high enough (`-icp-vtable-percentage-threshold`, default 0.995) |
+| direct call + inliner | the direct call after a successful compare | devirtualise, then inline like any other direct call |
+| WPD / ThinLTO | `!type` metadata in the module | narrow the possible type set; the profile then picks the hot vtable within it |
+
+Compared with ordinary <I18nLink href="/pgo/indirect-call/">indirect-call</I18nLink>, the gain is one fewer load: ordinary ICP loads the function pointer from the vtable and compares it; vtable ICP compares the `%vptr` already in a register. The cost is type matching and address-point arithmetic.
+
+## Cost and pitfalls
+
+- **Experimental and off by default.** Both flags default to false, and generation only works on ELF. Do not treat this as a portable default.
+- **It depends on WPD’s result.** Without ThinLTO + `-fwhole-program-vtables`, the type set is not narrow, and both the profitability and the legality of vtable comparison suffer. The option description lists all three conditions together for a reason.
+- **A stale profile also means stale types.** Change the class hierarchy, vtable layout or virtual table entries and both GUIDs and address points can mismatch. Use warns and skips instead of forcing old types onto a new binary.
+- **One vtable can have several address points.** With multiple or virtual inheritance, objects of the same class can point at different address-point offsets. `-icp-max-num-vtable-last-candidate` caps how many vtables the last candidate may compare.
+- **Not every vtable is worth comparing.** `-icp-vtable-percentage-threshold` defaults to 0.995: the vtable count must almost cover the function count, otherwise ICP falls back to function-pointer comparison. A hot vtable with a long tail of functions will not trigger it.
+- **`-fstrict-vtable-pointers` interacts.** With it, one vtable may be used to load several virtual functions; the source has a FIXME noting that vtable profile updates are not fully handled in that case. Be conservative in this combination.
+- **It decides what to compare, not whether devirtualisation happens.** A successful compare is still a runtime branch; whether the callee inlines still depends on visibility and `InlineCost`.
+
+## Run it yourself
+
+Generation and use are separate builds, and both need `-mllvm`:
+
+```bash
+# 1. generation: ELF target, vtable value profiling on
+clang++ -O2 -fprofile-generate -mllvm -enable-vtable-value-profiling=1 \
+        app.cc -o app
+./app
+llvm-profdata merge -o app.profdata default_*.profraw
+
+# 2. use: ThinLTO + WPD, vtable profile use on
+clang++ -O2 -fprofile-use=app.profdata -flto=thin -fwhole-program-vtables \
+        -mllvm -enable-vtable-profile-use=1 app.cc -o app.pgo
+
+# 3. inspect vtable names in the profile
+llvm-profdata show --all-functions app.profdata | grep -i vtable
+```
+
+LLVM 23.1.4 stores vtable names in a separate VNames section; the exact `show` format can change between releases. Use `llvm-profdata show --all-functions` if the filtered output is empty.
+
+To inspect only the ICP rewrite, hand-write a module with kind 2 VP and replace the GUID with a local vtable GUID:
+
+```bash
+opt -passes=pgo-icall-prom -S vtable.ll -o -
+```
+
+Without `-enable-vtable-profile-use=1`, ICP ignores the kind 2 records and falls back to ordinary function-pointer comparison. That is a useful demonstration that the whole path is opt-in.

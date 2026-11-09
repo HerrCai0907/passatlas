@@ -47,6 +47,7 @@ export function siteDescription(locale: Locale): string {
 /** 主导航。href 不带语言前缀，渲染时交给 url(href, locale)。 */
 export const nav = [
   { href: '/passes/', label: { zh: '图鉴', en: 'Passes' } },
+  { href: '/pgo/', label: { zh: 'PGO', en: 'PGO' } },
   { href: '/ir/', label: { zh: '实验室', en: 'Lab' } },
   { href: '/about/', label: { zh: '关于', en: 'About' } },
 ] as const;

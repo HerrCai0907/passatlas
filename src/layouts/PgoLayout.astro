@@ -1,0 +1,447 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import { pgoSite, type PgoSiteMeta } from '../data/pgo';
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { pgoSlug, type PgoEntry } from '../lib/pgo';
+import { url } from '../lib/url';
+import { llvmSourceUrl, site } from '../site';
+
+interface Props {
+  entry: PgoEntry;
+  meta: PgoSiteMeta;
+  locale: Locale;
+  index: number;
+  prev?: PgoEntry;
+  next?: PgoEntry;
+  sites: PgoEntry[];
+}
+
+const { entry, meta, locale, index, prev, next, sites } = Astro.props;
+const { title, subtitle, summary } = entry.data;
+const slug = pgoSlug(entry);
+const source = entry.data.source ?? meta.source;
+const editUrl = `${site.github}/blob/main/src/content/pgo/${entry.id}.mdx`;
+const kindLabel =
+  meta.kind === 'counter' ? t(locale, 'pgo.kind.counter') : t(locale, 'pgo.kind.value');
+const otherSites = sites.filter((item) => pgoSlug(item) !== slug);
+---
+
+<BaseLayout title={`${title} · ${subtitle}`} description={summary} locale={locale}>
+  <article class="pgo">
+    <div class="container">
+      <nav class="crumbs" aria-label={t(locale, 'pgo.detail.crumbs')}>
+        <a href={url('/', locale)}>PassAtlas</a>
+        <span aria-hidden="true">/</span>
+        <a href={url('/pgo/', locale)}>{t(locale, 'pgo.detail.atlas')}</a>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{title}</span>
+      </nav>
+
+      <header class="pgo__head">
+        <p class="eyebrow">
+          {t(locale, 'pgo.detail.eyebrow', { index: String(index).padStart(2, '0') })}
+        </p>
+        <h1 class="pgo__title">{title}</h1>
+        <p class="pgo__sub">{subtitle}</p>
+        <p class="lead pgo__summary">{summary}</p>
+
+        <div class="pgo__meta">
+          <span class="chip">{kindLabel}</span>
+          <span class="chip"><code>{meta.symbol}</code></span>
+          <span class="chip"><code>{meta.record}</code></span>
+          {
+            meta.experimental ? (
+              <span class="chip pgo__chip--exp">{t(locale, 'pgo.detail.experimental')}</span>
+            ) : null
+          }
+        </div>
+      </header>
+
+      <section class="glance" aria-labelledby="glance-title">
+        <h2 id="glance-title" class="glance__title">{t(locale, 'pgo.detail.glance')}</h2>
+        <dl class="glance__grid">
+          <div>
+            <dt>{t(locale, 'pgo.site.samples')}</dt>
+            <dd>{meta.samples[locale]}</dd>
+          </div>
+          <div>
+            <dt>{t(locale, 'pgo.site.writes')}</dt>
+            <dd>{meta.writes[locale]}</dd>
+          </div>
+          <div>
+            <dt>{t(locale, 'pgo.site.feeds')}</dt>
+            <dd>{meta.feeds[locale]}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <div class="pgo__body prose">
+        <slot />
+      </div>
+
+      {
+        source && (
+          <p class="pgo__source">
+            {t(locale, 'pgo.detail.sourcePrefix')}
+            <a href={llvmSourceUrl(source)} target="_blank" rel="noopener noreferrer">
+              <code>{source}</code> ↗
+            </a>
+          </p>
+        )
+      }
+
+      {
+        meta.pages && meta.pages.length > 0 && (
+          <section class="related" aria-labelledby="related-title">
+            <h2 id="related-title">{t(locale, 'pgo.detail.passPages')}</h2>
+            <ul class="related__list">
+              {meta.pages.map((page) => (
+                <li>
+                  <a class="related__link" href={url(page.href, locale)}>
+                    <span>{page.label}</span>
+                    <span aria-hidden="true">→</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )
+      }
+
+      <nav class="other" aria-labelledby="other-title">
+        <h2 id="other-title">{t(locale, 'pgo.detail.otherSites')}</h2>
+        <ul class="other__list">
+          {
+            otherSites.map((item) => {
+              const itemMeta = pgoSite(pgoSlug(item));
+              return (
+                <li>
+                  <a href={url(`/pgo/${pgoSlug(item)}/`, locale)}>
+                    <span class="other__name">{item.data.title}</span>
+                    <span class="other__sub">{item.data.subtitle}</span>
+                    {itemMeta ? <code>{itemMeta.record}</code> : null}
+                  </a>
+                </li>
+              );
+            })
+          }
+        </ul>
+      </nav>
+
+      <nav class="pager" aria-label={t(locale, 'pgo.detail.pager')}>
+        {
+          prev ? (
+            <a class="pager__item pager__item--prev" href={url(`/pgo/${pgoSlug(prev)}/`, locale)}>
+              <span class="pager__dir">{t(locale, 'pgo.detail.prev')}</span>
+              <span class="pager__name">{prev.data.title}</span>
+            </a>
+          ) : (
+            <span />
+          )
+        }
+        {
+          next ? (
+            <a class="pager__item pager__item--next" href={url(`/pgo/${pgoSlug(next)}/`, locale)}>
+              <span class="pager__dir">{t(locale, 'pgo.detail.next')}</span>
+              <span class="pager__name">{next.data.title}</span>
+            </a>
+          ) : (
+            <span />
+          )
+        }
+      </nav>
+
+      <p class="pgo__edit">
+        <a href={editUrl} target="_blank" rel="noopener noreferrer">{t(locale, 'pgo.detail.edit')}</a>
+      </p>
+    </div>
+  </article>
+</BaseLayout>
+
+<style>
+  .pgo {
+    padding-top: 28px;
+  }
+
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+
+  .crumbs a {
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  .crumbs a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+  }
+
+  .pgo__head {
+    max-width: 860px;
+    margin-top: 26px;
+    padding-bottom: clamp(24px, 4vw, 36px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .pgo__title {
+    margin-top: 10px;
+    font-family: var(--font-mono);
+    font-size: clamp(32px, 5.6vw, 52px);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    color: var(--ink);
+  }
+
+  .pgo__sub {
+    margin-top: 6px;
+    font-family: var(--font-display);
+    font-size: clamp(17px, 2vw, 20px);
+    color: var(--muted);
+  }
+
+  .pgo__summary {
+    margin-top: 16px;
+    max-width: 740px;
+  }
+
+  .pgo__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  .pgo__meta code {
+    font-size: 11px;
+  }
+
+  .pgo__chip--exp {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--accent-strong);
+  }
+
+  .glance {
+    max-width: 860px;
+    margin-top: 26px;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 72%, transparent);
+  }
+
+  .glance__title {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .glance__grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px 24px;
+    margin: 12px 0 0;
+  }
+
+  .glance__grid dt {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .glance__grid dd {
+    margin: 5px 0 0;
+    font-size: 13.5px;
+    line-height: 1.65;
+    color: var(--ink-soft);
+  }
+
+  .pgo__body {
+    max-width: var(--wrap-narrow);
+    margin-top: clamp(34px, 5vw, 52px);
+  }
+
+  .pgo__source {
+    max-width: var(--wrap-narrow);
+    margin-top: 28px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .pgo__source code {
+    color: var(--accent-strong);
+    word-break: break-all;
+  }
+
+  .related,
+  .other {
+    max-width: var(--wrap-narrow);
+    margin-top: 36px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  .related h2,
+  .other h2 {
+    font-size: 18px;
+  }
+
+  .related__list,
+  .other__list {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .related__link {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .related__link:hover {
+    border-color: var(--line-strong);
+    color: var(--accent-strong);
+  }
+
+  .other__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .other__list a {
+    display: grid;
+    gap: 3px;
+    height: 100%;
+    padding: 11px 13px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    text-decoration: none;
+    color: var(--ink);
+  }
+
+  .other__list a:hover {
+    border-color: var(--line-strong);
+  }
+
+  .other__name {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .other__sub {
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .other__list code {
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: var(--accent-strong);
+  }
+
+  .pager {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    max-width: var(--wrap-narrow);
+    margin-top: 40px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  .pager__item {
+    display: grid;
+    gap: 4px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    text-decoration: none;
+    transition:
+      border-color 0.18s var(--ease),
+      transform 0.18s var(--ease);
+  }
+
+  .pager__item:hover {
+    border-color: var(--line-strong);
+    transform: translateY(-2px);
+  }
+
+  .pager__item--next {
+    text-align: right;
+  }
+
+  .pager__dir {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    color: var(--faint);
+  }
+
+  .pager__name {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    color: var(--ink);
+  }
+
+  .pgo__edit {
+    margin-top: 26px;
+    font-size: 12.5px;
+    color: var(--faint);
+  }
+
+  .pgo__edit a {
+    color: var(--muted);
+  }
+
+  @media (max-width: 720px) {
+    .glance__grid {
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .other__list {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .pager {
+      grid-template-columns: 1fr;
+    }
+
+    .pager__item--next {
+      text-align: left;
+    }
+  }
+</style>

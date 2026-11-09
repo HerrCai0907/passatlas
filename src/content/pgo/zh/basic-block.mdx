@@ -1,0 +1,193 @@
+---
+title: basic-block
+subtitle: 基本块与边计数
+summary: MST 只给部分 CFG 边插计数器，第二次编译再把它们解成每个块、每条边的计数，写成 branch_weights。之后所有问「这个块热不热」的 pass 都从这里出发。
+status: ready
+order: 20
+source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它采样什么
+
+基本块计数器采样的不是「每个块」，而是**一组能解出全部块计数的边**。`PGOInstrumentationGen` 在 CFG 上求最大权生成树：树上的边不插桩，树外的边插；对每条树外边，计数器放在源块（单后继）、目标块（非 critical edge）或新拆出的块（critical edge）里。这样计数器数量接近最少，同时让运行期只碰较少执行的边。
+
+入口块也是这套方程的一部分，所以 <I18nLink href="/pgo/function-entry/">function-entry</I18nLink> 和本页共用同一批计数。除此之外，每个 `select` 还有一个 `increment.step` 计数器，按条件真假累加 0/1；假分支的计数由所在块的计数减出来，索引排在块计数器之后。
+
+第二次编译时，`PGOInstrumentationUse` 做三件事：
+
+1. 用流量守恒把每个块、每条边的计数解出来（`populateCounters`）；
+2. 给每个函数写 `function_entry_count`；
+3. 给分支、`switch`、`select` 和带条件权重的 `call` 写 `branch_weights`。
+
+## IR 里的样子
+
+一个菱形，先看没有 profile 的样子：
+
+```llvm
+define i32 @classify(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+```
+
+`PGOInstrumentationGen` 之后，两个分支块各拿到一个计数器（实际数量取决于 MST；这里两个都是树外边的落点）：
+
+```llvm
+@__profn_classify = private constant [9 x i8] c"classify\00"
+declare void @llvm.instrprof.increment(ptr, i64, i32, i32)
+
+define i32 @classify(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+
+pos:
+  call void @llvm.instrprof.increment(ptr @__profn_classify, i64 146835647075900052, i32 2, i32 0)
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  call void @llvm.instrprof.increment(ptr @__profn_classify, i64 146835647075900052, i32 2, i32 1)
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+```
+
+`PGOInstrumentationUse` 读回 profile 后，`increment` 消失，分支上多出权重：
+
+```llvm
+define i32 @classify(i32 %x) !prof !0 {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg, !prof !1
+
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+
+!0 = !{!"function_entry_count", i64 1200000}
+!1 = !{!"branch_weights", i32 1180000, i32 20000}
+```
+
+`branch_weights` 的每个元素是 32 位权重。计数很大时 `setProfMetadata` 会按比例下采样；比例保住了，绝对计数不在元数据里。要看绝对值，回到 `.profdata`，不要从 `!prof` 反推。
+
+`select` 也吃同一套数据，但元数据挂在选择指令上：
+
+```llvm
+%r = select i1 %c, i32 %a, i32 %b, !prof !2
+!2 = !{!"branch_weights", i32 1180000, i32 20000}
+```
+
+## 后续优化点
+
+`branch_weights` 是原始边概率。`BranchProbabilityInfo`（BPI）和 `BlockFrequencyInfo`（BFI）把它们沿 CFG 传播成每个块的频率，之后的 pass 都通过这两个 analysis 提问。
+
+| 消费者 | 读什么 | 用来做什么 |
+| --- | --- | --- |
+| inliner | 调用点频率 | 与 callee cost 比较，决定是否内联 |
+| `LoopUnrollPass` | 循环头/回边频率、trip count 估计 | 选展开因子，避免展开冷循环 |
+| `LoopVectorize` | 循环体频率与分支概率 | 计算向量化收益，决定是否生成尾部 |
+| `LICM` | 循环块频率 | 判断外提/下沉是否值得 |
+| `SimplifyCFG` / `JumpThreading` | 边概率 | 折叠不可达块、复制热路径、合并冷块 |
+| `MachineBlockPlacement` / `MachineFunctionSplitter` | MBFI | 热块放一起，冷块拆到冷 section |
+| 寄存器分配 | 块频率 | 估计 spill 代价，热块里的溢出更贵 |
+
+两个细节：
+
+- **权重不是布尔值。** `90/10` 和 `99/1` 对 BPI 都是「大概率」，但 BFI 传播到循环里会放大差别；不要只看一条分支的比例。
+- **`llvm.expect` 可能和 profile 打架。** 源码里的 `likely` / `unlikely` 是程序员的先验，profile 是运行事实。二者矛盾时，`Misexpect` 会报 warning；最终以哪边为准取决于 pass 的读取顺序，不要假设 `expect` 永远赢。
+
+## 代价与坑
+
+- **循环里的 RMW 很贵。** 每次迭代都 load / add / store 计数器会破坏优化。`InstrProfiling` 会在安全时做 counter promotion：把计数器提升到寄存器，循环结束再写回。`DoCounterPromotion` 在 `-O0` 关闭；`-mllvm -do-counter-promotion=false` 可以强制关掉。
+- **多线程要原子更新。** `-fprofile-update=atomic` 把计数器更新变成 atomic RMW；默认的非原子更新更快，但并发执行会丢计数。选择取决于被测程序，不是编译器能猜的。
+- **gen 与 use 必须是同一个 CFG。** MST 的边集、critical edge 的拆分、`select` 的数量都会进入 CFG hash。源码、优化级别、pass 管线任何一处变化都可能让计数对不上；这时 use 会警告并跳过，不会硬套。
+- **零计数不等于不可达。** 某条边在这次负载里为 0，`branch_weights` 可能写成 0；BPI 会把它当成极低概率，但不会自动证明它死了。真正的不可达仍然要由 CFG 和常量分析证明。
+- **权重会被缩放。** 32 位存储意味着大计数会被按比例压缩；`branch_weights` 适合比较比例，不适合当精确计数器。
+- **不可约循环和 `indirectbr` 是边角。** 这些 CFG 上 MST 和 critical edge 拆分有额外规则；看 `-pgo-view-counts` / `-pgo-emit-branch-prob` 的输出比读代码可靠。
+
+## 自己跑一遍
+
+不用真的跑程序，先看生成侧插了什么：
+
+```bash
+cat > diamond.ll <<'EOF'
+define i32 @classify(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+declare i32 @inc(i32)
+declare i32 @dec(i32)
+EOF
+
+opt -passes='pgo-instr-gen,instrprof' -S diamond.ll -o diamond.instr.ll
+grep -n 'instrprof.increment\|__profc' diamond.instr.ll
+```
+
+想看 use 侧如何把权重变成 BFI，手写一个带 `!prof` 的版本：
+
+```bash
+cat > diamond.prof.ll <<'EOF'
+define i32 @classify(i32 %x) !prof !0 {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg, !prof !1
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+declare i32 @inc(i32)
+declare i32 @dec(i32)
+!0 = !{!"function_entry_count", i64 1200000}
+!1 = !{!"branch_weights", i32 1180000, i32 20000}
+EOF
+
+opt -passes='print<block-freq>' -disable-output diamond.prof.ll
+```
+
+第一条命令在 LLVM 23.1.4 上会把 `pgo-instr-gen` 与 `instrprof` 串起来；如果你用的构建没有 `instrprof` lowering，单独跑 `-passes=pgo-instr-gen` 也能看到没有降低的 intrinsic。

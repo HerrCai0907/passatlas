@@ -1,0 +1,122 @@
+---
+title: function-entry
+subtitle: 函数入口计数
+summary: 每次进入函数记一次，第二次编译变成函数上的 function_entry_count。它决定谁算热、谁算冷，是内联与代码布局最常查的那个数。
+status: ready
+order: 10
+source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它采样什么
+
+控制流进入函数体的次数。对没有递归、没有异常展开的普通函数，它近似等于调用次数；对被内联、被尾调用或被 `invoke` 进入的函数，它仍然是「入口块执行了多少次」。
+
+这个数不是单独插一根探针得来的。`PGOInstrumentationGen` 在 CFG 上选一棵最大权生成树，只给**树外**的边插计数器；入口块的计数由流量守恒解出来。所以默认情况下，函数入口不一定有专属计数器，`-mllvm -pgo-instrument-entry` 才会强制给入口块一个。第二次编译时，`PGOInstrumentationUse` 把解出来的入口计数写回函数：
+
+```llvm
+define i32 @classify(i32 %x) !prof !0 {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg, !prof !1
+
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+
+!0 = !{!"function_entry_count", i64 1200000}
+!1 = !{!"branch_weights", i32 1180000, i32 20000}
+```
+
+`!0` 挂在函数上，不是挂在某条指令上。`!1` 是同一套计数顺带导出的分支权重，下一页 <I18nLink href="/pgo/basic-block/">basic-block</I18nLink> 专门讲它。
+
+如果强制打开入口计数器，生成侧会多一条 `llvm.instrprof.increment`，`index` 为 0：
+
+```llvm
+@__profn_classify = private constant [9 x i8] c"classify\00"
+declare void @llvm.instrprof.increment(ptr, i64, i32, i32)
+
+define i32 @classify(i32 %x) {
+entry:
+  call void @llvm.instrprof.increment(ptr @__profn_classify, i64 146835647075900052, i32 3, i32 0)
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+  ; pos / neg 各有一个计数器，index 1 和 2
+}
+```
+
+`num-counters` 必须与实际计数器数一致；`InstrProfiling` 会把它们降低成 `__profc_classify` 数组上的 load / add / store。
+
+## 后续优化点
+
+入口计数先变成一个 `ProfileSummaryInfo` 能回答的问题：这个函数的计数落在 profile summary 的哪个分位区间。`PGOUseFunc::markFunctionAttributes` 只做两件事：热函数标 `inlinehint`，冷函数标 `cold`。
+
+| 消费者 | 读到什么 | 用来做什么 |
+| --- | --- | --- |
+| inliner | 调用点频率 + 函数入口计数 | 估算内联收益；`inlinehint` 会进一步抬高优先级 |
+| `pgo-force-function-attrs` | 冷函数 + 调用图 | 给冷函数加 `optsize` / `minsize` / `optnone`，把优化预算让给热路径 |
+| 代码布局 | 函数级计数与块频率 | 热函数/热块放近，冷块拆到冷 section |
+| 循环与向量化 | 由入口计数缩放出的 BFI | 决定展开因子、向量化是否划算 |
+
+几个容易说过头的地方：
+
+- **热函数得到的是 `inlinehint`，不是 `hot` 属性。** `cold` 是实打实加上的；热的奖励是内联提示，不是一个新的函数属性。
+- **入口计数本身不触发内联。** 它进入 `BlockFrequencyInfo`，内联器再拿调用点频率和 callee 的 cost 做比较。计数只改变「值不值得」的分子，不改变合法性。
+- **冷函数可以被降级优化。** PGO use 的驱动通常会打开冷函数优化；`pgo-force-function-attrs` 会把冷函数标成 `optsize`、`minsize` 或 `optnone`（`-mllvm -pgo-cold-func-opt=optsize|minsize|optnone` 可以覆盖）。这时它的 IR 会明显变短，不是 bug。
+- **代码布局不一定在 IR 层完成。** 函数拆分、块排序发生在 Machine IR；它们读的是同一套 profile 派生出来的频率，而不是回头再读 `.profdata`。
+
+## 代价与坑
+
+- **别把 `-fprofile-instr-generate` 当成 IR PGO。** 它走 Clang 前端插桩（coverage / Clang instrumentation），profile 格式相近，但 `PGOInstrumentationUse` 只接受 IR-level profile。IR PGO 的开关是 `-fprofile-generate` / `-fprofile-use`。
+- **入口计数器是可选的精度。** 默认用 MST 推导，省一根计数器和一次入口 RMW；强制入口计数能让复杂 CFG 的入口数更稳，但每个函数都多一次内存操作。`-pgo-instrument-entry` 要两边一致：gen 时打开，use 时 profile header 会告诉 reader 这个二进制带了入口计数。
+- **冷热是相对的。** `isHotCount` / `isColdCount` 的阈值来自 profile summary 的分位数，不是写死的 1000。换一份负载，同一个函数可能从热变冷。
+- **负载不代表性，元数据就是错的。** PGO 只记录你跑过的那条路径；测试集里没出现的错误处理会被标成 0，随后被 `cold` 对待。这不是编译器猜错，是输入错了。
+- **CFG 变了，计数就对不上。** 入口计数不是按源码行索引的，它和 CFG hash 绑定。改一行控制流、换优化级别，hash 变了，这个函数的 profile 会被跳过，函数上没有 `!prof`，而不是套一个旧数字。
+- **`optnone` 的冷函数不再参与优化。** 如果它其实会在生产负载里变热，这个决定会反过来伤害性能；冷函数优化适合「确定不会热」的代码，不适合「暂时没跑到」的代码。
+
+## 自己跑一遍
+
+```c
+// hotcold.c
+__attribute__((noinline)) int inc(int x) { return x + 1; }
+__attribute__((noinline)) int dec(int x) { return x - 1; }
+
+__attribute__((noinline)) int classify(int x) {
+  return x > 0 ? inc(x) : dec(x);
+}
+
+int main(void) {
+  int s = 0;
+  for (int i = 0; i < 100000; i++)
+    s += classify(i);
+  return s == 0;
+}
+```
+
+```bash
+clang -O2 -fprofile-generate hotcold.c -o hotcold
+./hotcold
+llvm-profdata merge -o hotcold.profdata default_*.profraw
+clang -O2 -fprofile-use=hotcold.profdata -S -emit-llvm hotcold.c -o hotcold.pgo.ll
+
+grep -n 'function_entry_count\|inlinehint\|cold' hotcold.pgo.ll
+```
+
+`dec` 一次都没被调用，预期是 `dec` 上出现 `cold`，`inc` 上出现 `inlinehint`；`classify` 的入口计数应该接近 100000。机器上的计数会受 `-O2` 把 `main` 的循环化简掉的影响；想看得更直白，可以给 `main` 加 `__attribute__((optnone))`，把循环留在 IR 里。
+
+想只看入口计数长什么样，不跑程序，也可以手写 `!prof` 后让 `opt` 打印 BFI：
+
+```bash
+opt -passes='print<block-freq>' -disable-output hotcold.pgo.ll
+```

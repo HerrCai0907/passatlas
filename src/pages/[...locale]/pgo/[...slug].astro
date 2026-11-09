@@ -1,0 +1,53 @@
+---
+import { getCollection, render } from 'astro:content';
+import PgoLayout from '../../../layouts/PgoLayout.astro';
+import { pgoSite } from '../../../data/pgo';
+import { defaultLocale, locales, type Locale } from '../../../i18n/config';
+import { pgoForLocale, pgoLocale, pgoSlug, type PgoEntry } from '../../../lib/pgo';
+
+export async function getStaticPaths() {
+  const all = await getCollection('pgo', ({ data }) => data.status === 'ready');
+
+  return locales.flatMap((locale) => {
+    const entries = pgoForLocale(all, locale);
+    return entries.map((entry, index) => ({
+      params: {
+        locale: locale === defaultLocale ? undefined : locale,
+        slug: pgoSlug(entry),
+      },
+      props: {
+        locale,
+        entry,
+        index: index + 1,
+        prev: entries[index - 1],
+        next: entries[index + 1],
+        sites: entries,
+      },
+    }));
+  });
+}
+
+const { entry, index, prev, next, sites, locale } = Astro.props as {
+  entry: PgoEntry;
+  index: number;
+  prev?: PgoEntry;
+  next?: PgoEntry;
+  sites: PgoEntry[];
+  locale: Locale;
+};
+
+if (pgoLocale(entry) !== locale) {
+  throw new Error(`PGO entry ${entry.id} is in the wrong locale folder for ${locale}`);
+}
+
+const meta = pgoSite(pgoSlug(entry));
+if (!meta) {
+  throw new Error(`PGO entry ${entry.id} has no metadata in src/data/pgo.ts`);
+}
+
+const { Content } = await render(entry);
+---
+
+<PgoLayout entry={entry} meta={meta} locale={locale} index={index} prev={prev} next={next} sites={sites}>
+  <Content />
+</PgoLayout>

@@ -1,0 +1,193 @@
+---
+title: basic-block
+subtitle: Basic-block and edge counts
+summary: The MST instruments only some CFG edges; the second build solves them into per-block and per-edge counts and writes branch_weights. Every pass that asks “is this block hot?” starts here.
+status: ready
+order: 20
+source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What does it sample
+
+Basic-block counters do not sample “every block”. They sample **a set of edges from which every block count can be solved**. `PGOInstrumentationGen` builds a maximum-weight spanning tree over the CFG: tree edges are not instrumented, non-tree edges are. For each non-tree edge the counter goes into the source block (single successor), the destination block (non-critical edge), or a newly split block (critical edge). The counter count stays close to minimal, and at runtime it touches the less frequently executed edges.
+
+The entry block is part of the same system of equations, which is why <I18nLink href="/pgo/function-entry/">function-entry</I18nLink> and this page share the counters. Each `select` also gets an `increment.step` counter that adds 0 or 1 from its condition; the false count is derived from the containing block’s count, and its index comes after the block counters.
+
+On the second build `PGOInstrumentationUse` does three things:
+
+1. solve every block and edge count through flow conservation (`populateCounters`);
+2. write `function_entry_count` on every function;
+3. write `branch_weights` on branches, switches, selects and calls with conditional weights.
+
+## What it looks like in IR
+
+A diamond without a profile:
+
+```llvm
+define i32 @classify(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+```
+
+After `PGOInstrumentationGen`, the two branch blocks each receive a counter (the real number depends on the MST; here both are landing points of non-tree edges):
+
+```llvm
+@__profn_classify = private constant [9 x i8] c"classify\00"
+declare void @llvm.instrprof.increment(ptr, i64, i32, i32)
+
+define i32 @classify(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+
+pos:
+  call void @llvm.instrprof.increment(ptr @__profn_classify, i64 146835647075900052, i32 2, i32 0)
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  call void @llvm.instrprof.increment(ptr @__profn_classify, i64 146835647075900052, i32 2, i32 1)
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+```
+
+After `PGOInstrumentationUse` reads the profile, the increments are gone and the branch carries weights:
+
+```llvm
+define i32 @classify(i32 %x) !prof !0 {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg, !prof !1
+
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+
+!0 = !{!"function_entry_count", i64 1200000}
+!1 = !{!"branch_weights", i32 1180000, i32 20000}
+```
+
+Each `branch_weights` element is a 32-bit weight. For very large counts `setProfMetadata` downscales the values proportionally; the ratio survives, the absolute count does not. If you need absolute counts, go back to `.profdata`; do not infer them from `!prof`.
+
+`select` consumes the same data, with the metadata on the select instruction:
+
+```llvm
+%r = select i1 %c, i32 %a, i32 %b, !prof !2
+!2 = !{!"branch_weights", i32 1180000, i32 20000}
+```
+
+## What consumes it
+
+`branch_weights` are raw edge probabilities. `BranchProbabilityInfo` (BPI) and `BlockFrequencyInfo` (BFI) propagate them through the CFG into a frequency per block; later passes ask those two analyses.
+
+| Consumer | Reads | Uses it for |
+| --- | --- | --- |
+| inliner | call-site frequency | compare against callee cost to decide on inlining |
+| `LoopUnrollPass` | loop-header / back-edge frequency, trip-count estimate | choose an unroll factor and avoid unrolling cold loops |
+| `LoopVectorize` | loop-body frequency and branch probabilities | compute vectorisation profit and decide on a tail |
+| `LICM` | loop block frequency | decide whether hoisting or sinking pays |
+| `SimplifyCFG` / `JumpThreading` | edge probabilities | fold unreachable blocks, duplicate hot paths, merge cold ones |
+| `MachineBlockPlacement` / `MachineFunctionSplitter` | MBFI | keep hot blocks together, split cold blocks into a cold section |
+| register allocation | block frequency | estimate spill cost; spills in hot blocks cost more |
+
+Two details:
+
+- **A weight is not a boolean.** `90/10` and `99/1` are both “likely” to BPI, but BFI amplifies the difference inside a loop. Do not read only one branch’s ratio.
+- **`llvm.expect` can disagree with the profile.** `likely` / `unlikely` in the source is the programmer’s prior; the profile is what happened. When they conflict, `Misexpect` warns. Which side wins depends on the pass’s read order; do not assume `expect` always wins.
+
+## Cost and pitfalls
+
+- **The RMW in a loop is expensive.** Load / add / store on every iteration blocks optimisation. `InstrProfiling` performs counter promotion when it is safe: keep the counter in a register and write it back after the loop. `DoCounterPromotion` is off at `-O0`; `-mllvm -do-counter-promotion=false` forces it off elsewhere.
+- **Multithreaded programs need atomic updates.** `-fprofile-update=atomic` turns the update into an atomic RMW. The default non-atomic update is faster but loses counts under concurrency. The choice depends on the program under test, not on what the compiler can guess.
+- **gen and use must be the same CFG.** The MST edge set, critical-edge splits and select count all feed the CFG hash. A change in source, optimisation level or pass pipeline can make the counts mismatch; use then warns and skips rather than forcing stale data.
+- **Zero is not unreachable.** An edge with a zero count in this workload may get a zero `branch_weights`; BPI treats it as very unlikely, but does not prove it dead. Real unreachability still needs CFG and constant analysis.
+- **Weights are scaled.** 32-bit storage means large counts are compressed proportionally; `branch_weights` is for ratios, not an exact counter.
+- **Irreducible loops and `indirectbr` are corner cases.** The MST and critical-edge splitting have extra rules there. Reading `-pgo-view-counts` / `-pgo-emit-branch-prob` output is more reliable than reading the code.
+
+## Run it yourself
+
+Without running a program, first see what generation inserts:
+
+```bash
+cat > diamond.ll <<'EOF'
+define i32 @classify(i32 %x) {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+declare i32 @inc(i32)
+declare i32 @dec(i32)
+EOF
+
+opt -passes='pgo-instr-gen,instrprof' -S diamond.ll -o diamond.instr.ll
+grep -n 'instrprof.increment\|__profc' diamond.instr.ll
+```
+
+To see how use turns weights into BFI, hand-write a version with `!prof`:
+
+```bash
+cat > diamond.prof.ll <<'EOF'
+define i32 @classify(i32 %x) !prof !0 {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg, !prof !1
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+declare i32 @inc(i32)
+declare i32 @dec(i32)
+!0 = !{!"function_entry_count", i64 1200000}
+!1 = !{!"branch_weights", i32 1180000, i32 20000}
+EOF
+
+opt -passes='print<block-freq>' -disable-output diamond.prof.ll
+```
+
+The first command chains `pgo-instr-gen` with `instrprof` lowering in LLVM 23.1.4. If your build lacks the lowering pass, `-passes=pgo-instr-gen` alone still shows the unlowered intrinsics.

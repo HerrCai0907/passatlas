@@ -1,0 +1,156 @@
+---
+title: indirect-call
+subtitle: Indirect call targets
+summary: Each indirect call site records the function it actually reaches, written as VP kind 0. ICP turns hot targets into guarded direct calls so the inliner has something to inline.
+status: ready
+order: 30
+source: llvm/lib/Transforms/Instrumentation/IndirectCallPromotion.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What does it sample
+
+Which function each indirect call site actually reaches. `findIndirectCalls` finds `call` / `invoke` instructions whose callee is loaded from a value rather than known statically; `PGOInstrumentationGen` inserts a value site before each one and passes the callee pointer as an `i64` to the runtime.
+
+The runtime records a **function address**. When `llvm-profdata merge` reads the raw profile, it uses the binary’s symbol table to map that address to a 64-bit MD5 hash (GUID) of the function name; the indexed profile keeps only the hash. That is why IR `!prof` never shows `@foo`, only a decimal integer.
+
+A function can have many indirect call sites. Each site is a value site, indexed from zero, and the `!prof` metadata is attached to the corresponding call instruction.
+
+## What it looks like in IR
+
+`PGOInstrumentationGen` inserts the intrinsic first. The name global is `__profn_*`, not `__profd_*`; the latter is the data structure created during lowering:
+
+```llvm
+@__profn_dispatch = private constant [9 x i8] c"dispatch\00"
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %target = ptrtoint ptr %fn to i64
+  call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %target, i32 0, i32 0)
+  %r = call i32 %fn(i32 %x)
+  ret i32 %r
+}
+```
+
+`InstrProfiling` lowers it to a runtime call and adds the function’s block counter:
+
+```llvm
+@__profc_dispatch = private global [1 x i64] zeroinitializer, section "__llvm_prf_cnts", align 8
+@__profd_dispatch = private global { i64, i64, i64, i64, ptr, ptr, i32, [3 x i16], i32 } zeroinitializer, section "__llvm_prf_data", align 8
+declare void @__llvm_profile_instrument_target(i64, ptr, i32)
+
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %c = load i64, ptr @__profc_dispatch, align 8
+  %c1 = add i64 %c, 1
+  store i64 %c1, ptr @__profc_dispatch, align 8
+  %target = ptrtoint ptr %fn to i64
+  call void @__llvm_profile_instrument_target(i64 %target, ptr nonnull @__profd_dispatch, i32 0)
+  %r = call i32 %fn(i32 %x)
+  ret i32 %r
+}
+```
+
+On the second build, `PGOInstrumentationUse` writes the hot targets back onto the call. The two hashes below are the GUIDs of `foo` and `bar`:
+
+```llvm
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %r = call i32 %fn(i32 %x), !prof !0
+  ret i32 %r
+}
+
+!0 = !{!"VP", i32 0, i64 1000000, i64 6699318081062747564, i64 750000, i64 -2012135647395072713, i64 200000}
+```
+
+Read it as: the call site ran 1,000,000 times; `foo` was reached 750,000 times and `bar` 200,000 times; the remaining 50,000 went to targets outside the top N. VP counts do not have to sum to the total; LangRef explicitly allows recording only the hottest values.
+
+After `PGOIndirectCallPromotion`, a hot target becomes a guard plus a direct call:
+
+```llvm
+entry:
+  %is.foo = icmp eq ptr %fn, @foo
+  br i1 %is.foo, label %direct.foo, label %indirect, !prof !1
+
+direct.foo:
+  %r.foo = call i32 @foo(i32 %x)
+  br label %merge
+
+indirect:
+  %r.other = call i32 %fn(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %r.foo, %direct.foo ], [ %r.other, %indirect ]
+  ret i32 %r
+
+!1 = !{!"branch_weights", i32 750000, i32 250000}
+```
+
+This is simplified: when `bar` also clears the thresholds, the `indirect` block gains another guard. ICP does not delete the indirect call; it carves out the “probably direct” path. The later inliner is what actually expands `foo` into the caller.
+
+## What consumes it
+
+| Consumer | Reads | Uses it for |
+| --- | --- | --- |
+| `PGOIndirectCallPromotion` (`pgo-icall-prom`) | target hashes and counts from VP | build callee comparisons, guarded direct calls and branch weights |
+| inliner | the resulting direct call | inline a known callee; an indirect call cannot be inlined |
+| GlobalOpt / IPSCCP | direct call + visible definition | propagate constants and attributes back into the caller |
+| vtable ICP | VP kind 2 | compare the vptr directly and skip a function-pointer load; see <I18nLink href="/pgo/vtable/">vtable</I18nLink> |
+
+ICP does not promote everything the profile mentions. The default thresholds are:
+
+- the call site total must be hot (`-icp-allow-hot-only=true`); an IR without a profile summary skips this check;
+- each candidate must reach at least 5% of the **total** count (`-icp-total-percent-threshold`) and at least 30% of the **remaining unpromoted** count (`-icp-remaining-percent-threshold`);
+- a single call site promotes at most three targets (`-icp-max-prom`);
+- the target must have a definition, unless declarations are explicitly allowed (`-icp-allow-decls`).
+
+In the pipeline it usually runs right after `PGOInstrumentationUse`, before the main inliner. In ThinLTO postlink it runs before GlobalOpt, otherwise imported `available_externally` functions look unreferenced and get deleted.
+
+## Cost and pitfalls
+
+- **A guard is not free.** Every promoted target adds a compare and a branch; a flat distribution or a mispredicting CPU can cancel the gain. ICP only touches hot call sites to avoid inserting guards everywhere.
+- **The target must be visible.** A callee that only has a declaration in a shared library is not promoted with `-icp-allow-decls=false`; ThinLTO import has to make it visible first.
+- **Hashes depend on names.** A VP GUID is the MD5 of the function name. Renaming, changing mangling, or merging across modules can break the match. That is not “weaker optimisation”; it is a dead profile.
+- **Top N truncates the tail.** A value site records only the hottest few targets; the rest live in the difference between the total and the known counts. A 40% / 30% / 30% three-peak distribution may promote only the first two.
+- **A `noinline` target is still not inlined.** ICP still creates the direct call, but `InlineCost` refuses to expand it; the remaining gain is one skipped indirect jump.
+- **Stale profiles are the dangerous case.** The number and order of call sites, plus the CFG hash, must match generation. A mismatch makes use warn and skip; if you silence the warning you get IR that looks profiled but is not.
+
+## Run it yourself
+
+Hand-write a module with VP metadata and watch ICP rewrite it:
+
+```bash
+cat > icall.ll <<'EOF'
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @foo(i32 %x) {
+entry:
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @bar(i32 %x) {
+entry:
+  %r = add i32 %x, 2
+  ret i32 %r
+}
+
+define i32 @dispatch(ptr %fn, i32 %x) {
+entry:
+  %r = call i32 %fn(i32 %x), !prof !0
+  ret i32 %r
+}
+
+!0 = !{!"VP", i32 0, i64 1000000, i64 6699318081062747564, i64 750000, i64 -2012135647395072713, i64 200000}
+EOF
+
+opt -passes=pgo-icall-prom -pass-remarks=pgo-icall-prom -S icall.ll -o -
+```
+
+If the GUIDs for `foo` and `bar` are wrong, ICP will not find the targets and the output will contain no direct calls at all. That is a useful demonstration of “the profile is matched by name hash”. A debug build with `opt -passes=pgo-icall-prom -debug-only=pgo-icall-prom` shows the candidate-by-candidate comparison.
+
+To compare with sample PGO, read <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>: it also consumes VP, but its decision is “call context + sample count”, not “total count + percentage thresholds”.

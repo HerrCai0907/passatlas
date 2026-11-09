@@ -21,6 +21,7 @@ const zh = {
 
   'footer.nav': '页脚导航',
   'footer.passes': '图鉴目录',
+  'footer.pgo': 'IR PGO',
   'footer.lab': 'CFG 实验室',
   'footer.about': '关于本站',
   'footer.docs': 'LLVM Pass 官方文档',
@@ -74,6 +75,8 @@ const zh = {
   'passes.pipeline.title': 'LLVM 管线地图',
   'passes.pipeline.body':
     '按新版 PassManager 的 IR 层级组织：Module 通过 adaptor 进入 CGSCC，再下到 Function 与 Loop。彩色节点已经有页面，点进去就能看；灰色节点还在排队。',
+  'passes.pipeline.pgo': 'Profile 是优化管线的输入，不是管线里的一个 pass。',
+  'passes.pipeline.pgoLink': '看 IR PGO 的 5 个采样点',
   'passes.pipeline.legendLabel': '图例',
   'passes.pipeline.legendReady': '已收录，可进入',
   'passes.pipeline.legendPlanned': '待绘制',
@@ -115,6 +118,71 @@ const zh = {
   'pass.next': '下一篇 →',
   'pass.edit': '发现错误？在 GitHub 上编辑这一页 ↗',
   'pass.cfgTitle': '{title} 的控制流图',
+
+  'pgo.metaTitle': 'IR PGO',
+  'pgo.metaDescription':
+    'IR PGO 的五个采样点：函数入口、基本块、间接调用、内存操作长度与 vtable。每个采样点讲清它观察什么、写成什么元数据、后续喂给哪些优化。',
+  'pgo.eyebrow': 'Profile · IR PGO',
+  'pgo.heading': '把运行事实写进 IR',
+  'pgo.lead':
+    'PGO 不改变 IR 的形状，它改变优化的判断。第一次编译插入采样点，跑完把计数合并成 profile；第二次编译时，同样的计数变成 !prof 元数据，内联器、ICP 和内存操作特化才开始看见热与冷。',
+  'pgo.start': '从函数入口开始',
+  'pgo.browse': '对照图鉴',
+  'pgo.count': '{count} 个采样点',
+  'pgo.why':
+    'Profile 本身不是 pass。PGOInstrumentationUse 只做翻译：把 .profdata 变成 !prof。真正做优化的是后面那些查询 BranchProbabilityInfo / BlockFrequencyInfo 的 pass。',
+  'pgo.flow.eyebrow': 'Pipeline',
+  'pgo.flow.title': '一次采集，五次翻译',
+  'pgo.flow.lead':
+    '从插桩到优化，中间隔着一份文件和一个 pass。把这条链拆开，就知道每个数字是在哪一步失去精度的。',
+  'pgo.sites.eyebrow': 'Sampling points',
+  'pgo.sites.title': '五个采样点',
+  'pgo.sites.lead':
+    '按 IR PGO 实际插入的位置分组。前两个是计数器，后三个是值采样；它们写出的元数据不同，消费它们的 pass 也不同。',
+  'pgo.site.samples': '采样',
+  'pgo.site.writes': '写成',
+  'pgo.site.feeds': '喂给',
+  'pgo.site.open': '打开采样点',
+  'pgo.merge.eyebrow': 'From raw to metadata',
+  'pgo.merge.title': '.profraw 只是原料',
+  'pgo.merge.lead':
+    'raw profile 里是地址、计数和二进制签名；llvm-profdata 把它们合并、映射成函数名 hash，再按 CFG hash 索引。第二次编译拿到的已经是可查询的计数表。',
+  'pgo.merge.note':
+    'gen 与 use 必须看到同一套 CFG。源码、优化级别或 pass 管线一变，CFG hash 就对不上；这时 use 会警告并跳过这个函数，而不是硬套旧计数。',
+  'pgo.merge.hint':
+    'gen 与 use 之间只差一个 .profdata；但 PGOInstrumentationGen 与 PGOInstrumentationUse 必须落在管线的同一位置。',
+  'pgo.compare.eyebrow': 'Two profiles',
+  'pgo.compare.title': 'IR PGO 与 sample PGO',
+  'pgo.compare.lead':
+    '两者都把「热」带进编译器，但事实来源完全不同。IR PGO 相信计数器，sample PGO 相信采样。',
+  'pgo.compare.dimension': '维度',
+  'pgo.compare.ir': 'IR PGO',
+  'pgo.compare.sample': 'Sample PGO',
+  'pgo.compare.foot':
+    'sample PGO 的内联按调用上下文排队；IR PGO 的内联只看 BFI 与 inlinehint。两者的决策模型不要混着读。',
+  'pgo.related.title': '继续读',
+  'pgo.related.passes': '图鉴里的消费者',
+  'pgo.related.sample': 'sample-profile-inline：样本上下文内联',
+  'pgo.related.inliner': 'inliner：SCC 内联的代价模型',
+
+  'pgo.detail.crumbs': '面包屑',
+  'pgo.detail.atlas': 'IR PGO',
+  'pgo.detail.eyebrow': 'IR PGO · 采样点 {index}',
+  'pgo.detail.glance': '一眼看',
+  'pgo.detail.kind': '类型',
+  'pgo.detail.symbol': '插入点',
+  'pgo.detail.meta': '写成',
+  'pgo.detail.sourcePrefix': '在 LLVM 源码中：',
+  'pgo.detail.related': '相关页面',
+  'pgo.detail.passPages': '图鉴里的消费者',
+  'pgo.detail.otherSites': '其它采样点',
+  'pgo.detail.pager': '上一个 / 下一个采样点',
+  'pgo.detail.prev': '← 上一个',
+  'pgo.detail.next': '下一个 →',
+  'pgo.detail.edit': '发现错误？在 GitHub 上编辑这一页 ↗',
+  'pgo.detail.experimental': '实验性',
+  'pgo.kind.counter': '计数器',
+  'pgo.kind.value': '值采样',
 
   'card.difficultyTitle': '难度：{level}',
   'card.read': '阅读 →',
@@ -245,6 +313,7 @@ const en: Messages = {
 
   'footer.nav': 'Footer navigation',
   'footer.passes': 'Pass index',
+  'footer.pgo': 'IR PGO',
   'footer.lab': 'CFG lab',
   'footer.about': 'About this site',
   'footer.docs': 'LLVM pass documentation',
@@ -302,6 +371,8 @@ const en: Messages = {
   'passes.pipeline.title': 'LLVM pipeline map',
   'passes.pipeline.body':
     'Organised by the new pass manager’s IR hierarchy: Module adapts into CGSCC, then down to Function and Loop. Colour means the page exists and is clickable; grey means it is still queued.',
+  'passes.pipeline.pgo': 'A profile is an input to the optimisation pipeline, not a pass inside it.',
+  'passes.pipeline.pgoLink': 'See the five IR PGO sampling points',
   'passes.pipeline.legendLabel': 'Legend',
   'passes.pipeline.legendReady': 'In the atlas — click to open',
   'passes.pipeline.legendPlanned': 'Not drawn yet',
@@ -346,6 +417,71 @@ const en: Messages = {
   'pass.next': 'Next →',
   'pass.edit': 'Found an error? Edit this page on GitHub ↗',
   'pass.cfgTitle': 'Control-flow graph of {title}',
+
+  'pgo.metaTitle': 'IR PGO',
+  'pgo.metaDescription':
+    'Five sampling points in IR PGO: function entry, basic blocks, indirect calls, memory-operation sizes and vtables. Each page covers what it observes, which metadata it becomes, and which optimisations consume it.',
+  'pgo.eyebrow': 'Profile · IR PGO',
+  'pgo.heading': 'Write runtime facts into the IR',
+  'pgo.lead':
+    'PGO does not change the shape of the IR; it changes the optimiser’s judgement. The first build inserts sampling points, a run turns them into a profile, and the second build turns the same counts into !prof metadata. Only then do the inliner, ICP and memory-operation specialisation see hot and cold.',
+  'pgo.start': 'Start with function entry',
+  'pgo.browse': 'Open the atlas',
+  'pgo.count': '{count} sampling points',
+  'pgo.why':
+    'A profile is not a pass. PGOInstrumentationUse only translates .profdata into !prof. The passes that query BranchProbabilityInfo / BlockFrequencyInfo are the ones that actually optimise.',
+  'pgo.flow.eyebrow': 'Pipeline',
+  'pgo.flow.title': 'One collection, five translations',
+  'pgo.flow.lead':
+    'From instrumentation to optimisation there is a file and a pass in between. Split the chain apart and you can see where each number loses precision.',
+  'pgo.sites.eyebrow': 'Sampling points',
+  'pgo.sites.title': 'Five sampling points',
+  'pgo.sites.lead':
+    'Grouped by where IR PGO actually inserts them. The first two are counters; the last three are value sites. They write different metadata and feed different passes.',
+  'pgo.site.samples': 'Samples',
+  'pgo.site.writes': 'Becomes',
+  'pgo.site.feeds': 'Feeds',
+  'pgo.site.open': 'Open sampling point',
+  'pgo.merge.eyebrow': 'From raw to metadata',
+  'pgo.merge.title': '.profraw is only the raw material',
+  'pgo.merge.lead':
+    'A raw profile holds addresses, counts and a binary signature. llvm-profdata merges them, maps addresses to function-name hashes, and indexes records by CFG hash. The second build gets a queryable count table.',
+  'pgo.merge.note':
+    'gen and use must see the same CFG. Change the source, optimisation level or pass pipeline and the CFG hash no longer matches; use then warns and skips the function instead of forcing stale counts.',
+  'pgo.merge.hint':
+    'Only a .profdata separates gen from use. PGOInstrumentationGen and PGOInstrumentationUse must still sit at the same point in the pipeline.',
+  'pgo.compare.eyebrow': 'Two profiles',
+  'pgo.compare.title': 'IR PGO and sample PGO',
+  'pgo.compare.lead':
+    'Both bring hotness into the compiler, but the facts come from different places. IR PGO trusts counters; sample PGO trusts samples.',
+  'pgo.compare.dimension': 'Dimension',
+  'pgo.compare.ir': 'IR PGO',
+  'pgo.compare.sample': 'Sample PGO',
+  'pgo.compare.foot':
+    'Sample PGO inlines in call-context order; IR PGO inlining only sees BFI and inlinehint. Do not read the two decision models as one.',
+  'pgo.related.title': 'Keep reading',
+  'pgo.related.passes': 'Consumers in the atlas',
+  'pgo.related.sample': 'sample-profile-inline: context-sensitive inlining',
+  'pgo.related.inliner': 'inliner: the SCC inline cost model',
+
+  'pgo.detail.crumbs': 'Breadcrumbs',
+  'pgo.detail.atlas': 'IR PGO',
+  'pgo.detail.eyebrow': 'IR PGO · sampling point {index}',
+  'pgo.detail.glance': 'At a glance',
+  'pgo.detail.kind': 'Kind',
+  'pgo.detail.symbol': 'Inserted by',
+  'pgo.detail.meta': 'Becomes',
+  'pgo.detail.sourcePrefix': 'In the LLVM source:',
+  'pgo.detail.related': 'Related pages',
+  'pgo.detail.passPages': 'Consumers in the atlas',
+  'pgo.detail.otherSites': 'Other sampling points',
+  'pgo.detail.pager': 'Previous / next sampling point',
+  'pgo.detail.prev': '← Previous',
+  'pgo.detail.next': 'Next →',
+  'pgo.detail.edit': 'Found a mistake? Edit this page on GitHub ↗',
+  'pgo.detail.experimental': 'Experimental',
+  'pgo.kind.counter': 'Counter',
+  'pgo.kind.value': 'Value profile',
 
   'card.difficultyTitle': 'Difficulty: {level}',
   'card.read': 'Read →',
