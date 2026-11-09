@@ -59,7 +59,7 @@ src/
 │   ├── url.ts             base path + 语言前缀安全的链接助手
 │   ├── passes.ts          内容 id → slug / locale 的助手
 │   └── ir/                parse.ts（IR → 基本块）· layout.ts（分层布局）
-├── data/                  pipeline.ts · cfg-samples.ts（实验室示例）
+├── data/                  pipeline.ts · pass-registry.ts · cfg-samples.ts（实验室示例）
 └── styles/                tokens.css（设计令牌）· global.css（基础 + prose）
 ```
 
@@ -194,11 +194,16 @@ npx serve dist   # 或任意静态服务器，访问 /passatlas/
 ## 管线图
 
 图鉴目录底部是一张按 LLVM 新版 PassManager 的 IR 层级组织的管线图：Module → CGSCC →
-Function → Loop，最后切到 Machine IR。已经写好的 pass 是彩色链接，点进去就是对应页面；
-还没写的节点是灰色虚线，等待补页。
+Function → Loop，最后切到 Machine IR。主图覆盖默认优化管线的主干（100+ 个节点，带 `*` 的
+pass 只在特定优化级别 / PGO / target 下启用）；已经写好的 pass 是彩色链接，点进去就是对应
+页面，还没写的节点是灰色虚线。
 
-数据在 [`src/data/pipeline.ts`](src/data/pipeline.ts)。节点名与 `src/content/passes/<locale>/`
-里的 slug 相同就会自动点亮，不需要第二份清单。想加速某一个，直接提 PR。
+主图下方还有一个默认折叠的完整注册表：LLVM 23.1.4 的 `PassRegistry.def` 里 367 个
+pass 注册项，按 Module / CGSCC / Function / Loop / Loop nest 分组。主图数据在
+[`src/data/pipeline.ts`](src/data/pipeline.ts)，注册表快照在
+[`src/data/pass-registry.ts`](src/data/pass-registry.ts)。节点名与
+`src/content/passes/<locale>/` 里的 slug 相同就会自动点亮，不需要第二份清单。想加速某一个，
+直接提 PR。
 
 ## 许可
 

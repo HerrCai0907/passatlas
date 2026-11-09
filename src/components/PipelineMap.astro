@@ -2,6 +2,8 @@
 import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import type { PipelineStage } from '../data/pipeline';
+import { passRegistry } from '../data/pass-registry';
+import { llvmSourceUrl } from '../site';
 import { passSlug, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
 
@@ -25,6 +27,15 @@ const levelKeys = {
 ---
 
 <div class="map-shell">
+  <p class="stats">
+    {
+      t(locale, 'passes.pipeline.stats', {
+        pipeline: stages.reduce((count, stage) => count + stage.passes.length, 0),
+        registry: passRegistry.length,
+      })
+    }
+  </p>
+
   <div class="legend" role="group" aria-label={t(locale, 'passes.pipeline.legendLabel')}>
     <span class="legend__item">
       <span class="legend__sample legend__sample--ready" aria-hidden="true"></span>
@@ -33,6 +44,10 @@ const levelKeys = {
     <span class="legend__item">
       <span class="legend__sample legend__sample--planned" aria-hidden="true"></span>
       {t(locale, 'passes.pipeline.legendPlanned')}
+    </span>
+    <span class="legend__item">
+      <span class="legend__flag" aria-hidden="true">*</span>
+      {t(locale, 'passes.pipeline.legendConditional')}
     </span>
   </div>
 
@@ -75,12 +90,13 @@ const levelKeys = {
             <ul class="nodes">
               {stage.passes.map((item) => {
                 const page = pagesBySlug.get(item.page ?? item.name);
+                const category = page?.data.category;
                 const name = item.label ?? item.name;
                 return (
                   <li
                     class:list={[
                       'node',
-                      `cat-${item.category}`,
+                      category ? `cat-${category}` : null,
                       {
                         'node--ready': Boolean(page),
                         'node--planned': !page,
@@ -95,6 +111,17 @@ const levelKeys = {
                       >
                         <span class="node__dot" aria-hidden="true" />
                         <span class="node__name">{name}</span>
+                        {item.conditional ? (
+                          <span
+                            class="node__flag"
+                            title={t(locale, 'passes.pipeline.conditional')}
+                          >
+                            <span aria-hidden="true">*</span>
+                            <span class="sr-only">
+                              {t(locale, 'passes.pipeline.conditional')}
+                            </span>
+                          </span>
+                        ) : null}
                         {item.kind === 'helper' ? (
                           <span class="node__kind">{t(locale, 'passes.pipeline.helper')}</span>
                         ) : null}
@@ -112,6 +139,17 @@ const levelKeys = {
                       <span class="node__inner">
                         <span class="node__dot" aria-hidden="true" />
                         <span class="node__name">{name}</span>
+                        {item.conditional ? (
+                          <span
+                            class="node__flag"
+                            title={t(locale, 'passes.pipeline.conditional')}
+                          >
+                            <span aria-hidden="true">*</span>
+                            <span class="sr-only">
+                              {t(locale, 'passes.pipeline.conditional')}
+                            </span>
+                          </span>
+                        ) : null}
                         {item.kind === 'helper' ? (
                           <span class="node__kind">{t(locale, 'passes.pipeline.helper')}</span>
                         ) : null}
@@ -137,12 +175,30 @@ const levelKeys = {
     }
   </ol>
 
-  <p class="footnote">{t(locale, 'passes.pipeline.footnote')}</p>
+  <p class="footnote">
+    {t(locale, 'passes.pipeline.footnote')}
+    <a
+      class="footnote__source"
+      href={llvmSourceUrl('llvm/lib/Passes/PassBuilderPipelines.cpp')}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {t(locale, 'passes.pipeline.source')} ↗
+    </a>
+  </p>
 </div>
 
 <style>
   .map-shell {
     margin-top: 8px;
+  }
+
+  .stats {
+    margin-bottom: 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    color: var(--muted);
   }
 
   /* ---------- 图例 ---------- */
@@ -182,6 +238,12 @@ const levelKeys = {
   .legend__sample--planned {
     border: 1px dashed var(--line-strong);
     background: transparent;
+  }
+
+  .legend__flag {
+    color: var(--faint);
+    font-size: 13px;
+    line-height: 1;
   }
 
   /* ---------- 管线 ---------- */
@@ -393,6 +455,12 @@ const levelKeys = {
     font-size: 11px;
   }
 
+  .node__flag {
+    color: var(--faint);
+    font-size: 11px;
+    line-height: 1;
+  }
+
   /* 已收录：正常颜色，可点，hover 时轻微抬起 */
   .node--ready {
     border-color: color-mix(in srgb, var(--cat) 34%, var(--line));
@@ -441,6 +509,14 @@ const levelKeys = {
     font-size: 12.5px;
     line-height: 1.7;
     color: var(--faint);
+  }
+
+  .footnote__source {
+    margin-left: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-strong);
+    white-space: nowrap;
   }
 
   @media (max-width: 760px) {

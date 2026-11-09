@@ -69,7 +69,8 @@ src/
   lib/                  url() / passes.ts / categories / 站点常量
     ir/parse.ts         IR → 函数 / 基本块 / 边（纯函数，无依赖）
     ir/layout.ts        分层布局 + 回边识别（纯函数，输出坐标）
-  data/pipeline.ts      LLVM 管线层级（Module → CGSCC → Function → Loop → CodeGen）与待绘制节点
+  data/pipeline.ts      LLVM 默认管线（Module → CGSCC → Function → Loop → CodeGen）与待绘制节点
+  data/pass-registry.ts  LLVM 23.1.4 PassRegistry.def 的静态快照（完整注册表）
   styles/               tokens.css（设计令牌）· global.css（基础与 prose）
 ```
 
@@ -190,6 +191,9 @@ updated: 2026-11-01
   Loop / CodeGen). The pipeline map links a node automatically when its `name` (or explicit
   `page`) matches the new content slug; nodes without a page stay grey. If the pass is not on the
   map yet, add a `PipelinePass` rather than creating a separate list.
+- `src/data/pass-registry.ts` is a generated snapshot of the pinned LLVM version's
+  `PassRegistry.def`. It powers the collapsed “full registry” under the map. Do not hand-edit it
+  unless the pinned LLVM commit moves; regenerate it from the source file instead.
 
 ### 5.3 Definition of done
 

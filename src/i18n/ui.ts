@@ -83,7 +83,7 @@ const zh = {
   'passes.pipeline.planned': '待绘制',
   'passes.pipeline.repeat': '在管线中会重复运行',
   'passes.pipeline.footnote':
-    '这是一张示意图，以 -O2 主流程为骨架，省略了部分 PGO、coroutine 与 target-specific pass；同一个 pass 可能在多个阶段重复出现。',
+    '主图按默认优化管线整理：带 * 的 pass 只在特定优化级别、PGO 或 target 下启用；完整注册表见下方。',
   'passes.pipeline.cta': '怎么贡献一篇',
   'passes.pipeline.level.module': 'Module',
   'passes.pipeline.level.cgscc': 'CGSCC',
@@ -91,6 +91,16 @@ const zh = {
   'passes.pipeline.level.loop': 'Loop',
   'passes.pipeline.level.vectorize': 'Function / Loop',
   'passes.pipeline.level.codegen': 'Machine IR',
+  'passes.pipeline.stats': '主图 {pipeline} 个节点 · LLVM 注册表 {registry} 项',
+  'passes.pipeline.legendConditional': '条件启用',
+  'passes.pipeline.source': 'PassBuilderPipelines.cpp',
+  'passes.pipeline.conditional': '条件启用：取决于优化级别、PGO 或 target',
+  'passes.registry.title': '完整 pass 注册表',
+  'passes.registry.count': '{count} 个注册项',
+  'passes.registry.note':
+    'LLVM 23.1.4 的 PassRegistry.def 快照，不含 analysis 和 pipeline alias。包含 print / dot / verify / no-op 等调试入口，因此比主图多；主图只画默认优化管线。',
+  'passes.registry.level.loopnest': 'Loop nest',
+  'passes.registry.source': '查看 LLVM 源码',
 
   'pass.crumbs': '面包屑',
   'pass.atlas': '图鉴',
@@ -301,7 +311,7 @@ const en: Messages = {
   'passes.pipeline.planned': 'not drawn yet',
   'passes.pipeline.repeat': 'runs more than once in the pipeline',
   'passes.pipeline.footnote':
-    'This is a schematic built around the -O2 main pipeline. Some PGO, coroutine and target-specific passes are omitted, and some passes run more than once.',
+    'The map follows the default optimisation pipeline; passes marked * only run under a specific optimisation level, PGO or target. The full registry is below.',
   'passes.pipeline.cta': 'How to contribute a page',
   'passes.pipeline.level.module': 'Module',
   'passes.pipeline.level.cgscc': 'CGSCC',
@@ -309,6 +319,18 @@ const en: Messages = {
   'passes.pipeline.level.loop': 'Loop',
   'passes.pipeline.level.vectorize': 'Function / Loop',
   'passes.pipeline.level.codegen': 'Machine IR',
+
+  'passes.pipeline.stats': 'Map: {pipeline} nodes · LLVM registry: {registry} entries',
+  'passes.pipeline.legendConditional': 'Conditional',
+  'passes.pipeline.source': 'PassBuilderPipelines.cpp',
+  'passes.pipeline.conditional':
+    'Conditional: depends on the optimisation level, PGO or target',
+  'passes.registry.title': 'Full pass registry',
+  'passes.registry.count': '{count} registrations',
+  'passes.registry.note':
+    'A snapshot of LLVM 23.1.4’s PassRegistry.def, excluding analyses and pipeline aliases. It includes debugging entries such as print / dot / verify / no-op, so it is larger than the map above, which only shows the default optimisation pipeline.',
+  'passes.registry.level.loopnest': 'Loop nest',
+  'passes.registry.source': 'View the LLVM source',
 
   'pass.crumbs': 'Breadcrumb',
   'pass.atlas': 'Passes',

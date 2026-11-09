@@ -3,6 +3,7 @@ import { getCollection } from 'astro:content';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import PassRow from '../../../components/PassRow.astro';
 import PipelineMap from '../../../components/PipelineMap.astro';
+import PassRegistry from '../../../components/PassRegistry.astro';
 import { pipelineStages } from '../../../data/pipeline';
 import { defaultLocale, locales, type Locale } from '../../../i18n/config';
 import { t } from '../../../i18n/ui';
@@ -94,6 +95,7 @@ const groups = categoryOrder
       </header>
 
       <PipelineMap stages={pipelineStages} pages={passes} locale={locale} />
+      <PassRegistry pages={passes} locale={locale} />
 
       <p class="pipeline__cta">
         <a class="btn btn--ghost" href={url('/about/', locale)}>
