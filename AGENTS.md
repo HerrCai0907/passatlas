@@ -50,7 +50,7 @@ src/
   pages/
     [...locale]/        路由：一次生成中文（无前缀）与英文（/en/）
       index.astro       首页：hero + 分步演示 + 精选卡片
-      passes/index.astro  图鉴目录（按 category 分组 + 路线图）
+      passes/index.astro  图鉴目录（按 category 分组 + 管线图）
       passes/[...slug].astro  pass 详情（getStaticPaths）
       ir/index.astro    CFG 实验室（可编辑 IR + 实时图）
       about.astro
@@ -69,7 +69,7 @@ src/
   lib/                  url() / passes.ts / categories / 站点常量
     ir/parse.ts         IR → 函数 / 基本块 / 边（纯函数，无依赖）
     ir/layout.ts        分层布局 + 回边识别（纯函数，输出坐标）
-  data/roadmap.ts       尚未上线的 pass（不生成页面）
+  data/pipeline.ts      LLVM 管线层级（Module → CGSCC → Function → Loop → CodeGen）与待绘制节点
   styles/               tokens.css（设计令牌）· global.css（基础与 prose）
 ```
 
@@ -91,7 +91,7 @@ truth is `src/i18n/config.ts` (`locales`, `defaultLocale`, `localeMeta`). Routes
   match across locales so prev/next and the language selector pair correctly. `subtitle` and
   `summary` are written in the language of the file.
 - **Data with copy is localized.** Demos take `{ en: { steps: [...] } }` as the fourth argument of
-  `makeDemo`; categories, roadmap and CFG samples use `Record<Locale, string>`; the SCC lab copy
+  `makeDemo`; categories, the pipeline map and CFG samples use `Record<Locale, string>`; the SCC lab copy
   lives in `src/i18n/lab-scc.ts`; `parseIR(ir, locale)` localizes parser messages.
 - **Head metadata follows the locale.** `BaseLayout` emits `<html lang>`, `og:locale`, the canonical
   URL and `hreflang` alternates; the sitemap integration emits the same alternates.
@@ -186,8 +186,10 @@ updated: 2026-11-01
 - Code fences: use ```llvm for IR, ```bash for commands, ```text for pseudo-code.
 - Every page ends with a runnable `opt` command. If you cannot verify it, say so in the text
   rather than inventing flags.
-- Add the pass to `src/data/roadmap.ts`: when it ships, delete its roadmap entry and add both
-  content files.
+- Add the pass to `src/data/pipeline.ts` at the right IR level (Module / CGSCC / Function /
+  Loop / CodeGen). The pipeline map links a node automatically when its `name` (or explicit
+  `page`) matches the new content slug; nodes without a page stay grey. If the pass is not on the
+  map yet, add a `PipelinePass` rather than creating a separate list.
 
 ### 5.3 Definition of done
 

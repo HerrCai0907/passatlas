@@ -38,7 +38,7 @@ src/
 ├── pages/
 │   ├── [...locale]/       路由：一次生成中文（无前缀）与英文（/en/）
 │   │   ├── index.astro    首页：hero 动画 + 精选图鉴
-│   │   ├── passes/index.astro 图鉴目录（分类 + 路线图）
+│   │   ├── passes/index.astro 图鉴目录（分类 + 管线图）
 │   │   ├── passes/[...slug].astro  pass 详情（构建期生成）
 │   │   ├── ir/index.astro CFG 实验室：贴 IR 看控制流
 │   │   └── about.astro    方法论与贡献说明
@@ -59,7 +59,7 @@ src/
 │   ├── url.ts             base path + 语言前缀安全的链接助手
 │   ├── passes.ts          内容 id → slug / locale 的助手
 │   └── ir/                parse.ts（IR → 基本块）· layout.ts（分层布局）
-├── data/                  roadmap.ts · cfg-samples.ts（实验室示例）
+├── data/                  pipeline.ts · cfg-samples.ts（实验室示例）
 └── styles/                tokens.css（设计令牌）· global.css（基础 + prose）
 ```
 
@@ -155,7 +155,7 @@ source: llvm/lib/Transforms/.../X.cpp
 - 文案在 `src/i18n/ui.ts`，用 `t(locale, key, vars)` 取；英文表按中文表的键做类型约束，漏键会让 `npm run check` 失败。
 - 所有站内链接走 `url(path, locale)`；MDX 里用 `I18nLink`，它从当前 URL 推断语言。
 - 内容按语言放在 `src/content/passes/<locale>/<id>.mdx`，两个语言的文件名必须一致，上一篇/下一篇和语言选择器靠它配对。
-- 分类、路线图、CFG 示例、SCC 实验台和演示标题都有中英文两套；解析器错误信息也接受 locale 参数。
+- 分类、管线图、CFG 示例、SCC 实验台和演示标题都有中英文两套；解析器错误信息也接受 locale 参数。
 - `BaseLayout` 输出 `<html lang>`、`og:locale`、canonical 与 `hreflang`，sitemap 同样声明两种语言的对应关系。
 
 ## 部署到 GitHub Pages
@@ -191,11 +191,14 @@ npx serve dist   # 或任意静态服务器，访问 /passatlas/
 
 更完整的约束、动画规范与「完成定义」见 [`AGENTS.md`](AGENTS.md)。
 
-## 路线图
+## 管线图
 
-已上线：`mem2reg`、`instcombine`、`dce`。
+图鉴目录底部是一张按 LLVM 新版 PassManager 的 IR 层级组织的管线图：Module → CGSCC →
+Function → Loop，最后切到 Machine IR。已经写好的 pass 是彩色链接，点进去就是对应页面；
+还没写的节点是灰色虚线，等待补页。
 
-排期中的见 [`src/data/roadmap.ts`](src/data/roadmap.ts)：SROA、GVN、SCCP、LICM、loop-unroll、inline、SLPVectorizer、loop-vectorize、isel。想加速某一个，直接提 PR。
+数据在 [`src/data/pipeline.ts`](src/data/pipeline.ts)。节点名与 `src/content/passes/<locale>/`
+里的 slug 相同就会自动点亮，不需要第二份清单。想加速某一个，直接提 PR。
 
 ## 许可
 
