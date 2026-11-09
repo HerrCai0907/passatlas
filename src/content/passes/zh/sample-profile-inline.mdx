@@ -1,0 +1,207 @@
+---
+title: sample-profile-inline
+subtitle: 样本上下文内联决策
+summary: 按 profile 调用图自顶向下、按调用点热度排队：热调用点直接展开，展开后新暴露的调用点带着更长的上下文继续排队。真正的 pass 是 sample-profile。
+category: interproc
+difficulty: 3
+status: ready
+order: 6
+stage: ['-O2', '-O3']
+tags: ['CSSPGO', 'SamplePGO', 'PseudoProbe', 'Context']
+demo: sample-profile-inline
+source: llvm/lib/Transforms/IPO/SampleProfile.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+import SampleProfileInlinerLabIsland from '../../../components/SampleProfileInlinerLabIsland.astro';
+
+## 它解决什么问题
+
+内联的收益取决于这条 call edge 在真实负载里走多少次。`InlineCost` 知道 IR 长什么样，不知道 `foo` 是被一个跑十万次的循环调用，还是只在错误处理里被调了三次。
+
+AutoFDO 补上了「热」，却没补上「在哪个上下文热」：同一个 `foo`，从 `main` 调用和从 `parse` 调用，热度可能差三个数量级。只看函数级计数，内联器只能二选一。
+
+CSSPGO 的做法是让样本带着调用栈进来。pseudo probe 或 DILocation 的 inline stack 记录了「谁内联了谁」，profile 于是变成一棵 context 树：`foo@main` 和 `foo@parse` 是两个节点，各有自己的计数。有了上下文，内联就必须**先展开 caller**——否则 callee 的 call site 永远不会落进 `main:foo` 这个前缀里。
+
+这正是 SCC inliner 做不了的事：它是自底向上的（见 <I18nLink href="/passes/inliner/">inliner</I18nLink>），而上下文是前缀，只能自顶向下物化。LLVM 因此把内联搬进了 `SampleProfileLoader`。
+
+名字需要说清楚：管线里它是 `-passes=sample-profile`（`SampleProfileLoaderPass`，一个 ModulePass），而 LLVM 给这个内联驱动的名字是 `sample-profile-inline`（`InlinePass::SampleProfileInliner`），remark 和 `-debug-only` 都用这个名字。这一页讲决策；接受之后的克隆与 CFG 缝合仍然归 <I18nLink href="/passes/inline-function/">inline-function</I18nLink>。
+
+## 算法
+
+一句话：**顺序由 profile 调用图决定，候选由调用点样本数排队，判定由热度阈值与合法性决定，记账在 context 树里。**
+
+<div class="pa-sp-bleed">
+  <SampleProfileInlinerLabIsland />
+</div>
+
+实验台只跑 5 帧：入队 → 展开 foo → 展开 bar → 处理 baz → 收尾。把「冷调用点上限」拖过 60，或者关掉「内联冷调用点」，看 baz 的判定、左边的内联栈和下面的结果怎么一起变。
+
+### 一个 sample 是什么
+
+profile 里的 98000 不是「调用 98000 次」，而是**被采样到 98000 次**：剖析器按固定周期打断程序，把当时的 PC（AutoFDO 还会带上分支栈）记下来，再按 debug info 或 pseudo probe 归因到「函数 + 行 + 内联栈」。所以：
+
+- **计数是时间，不是次数。** 样本数 × 采样周期 ≈ 这段代码消耗的 CPU 时间；1 kHz 采样下，98000 个样本大约 98 秒。换个采样频率，量级就跟着变。
+- **冷热看比例。** `PSI->getHotCountThreshold()` 来自 profile summary 的分位数，不是固定数字；demo 里 98000/100000 落在热区，所以 cost 上限是 3000。
+- **头部的两个数不一样。** 文本 profile 的头是 `函数名:total:head`：`total` 是函数体样本总和（含内联进来的部分），`head` 是入口处的分支目标样本，近似调用次数；文本格式里常写 0。为 0 时 `getHeadSamplesEstimate()` 退而用行号最小的那条 body sample（或第一个调用点）估算，所以 `CallsiteCount` 只是入口频率的估计。
+- **重复调用点要分摊。** 同一个 call site 被复制成几份时，`Factor` 把样本按比例切开，避免同一段时间被算两遍。
+
+40 个样本在 1 kHz 下只有约 40 毫秒，统计噪声很大——冷热边界上的小数字不必抠。
+
+### 输入：一棵 context 树
+
+pseudo probe 模式下，每条 probe 带三样东西：函数 GUID、probe id，以及一个 `Factor`。前两者定位「这是哪个函数里的哪一行」，`Factor` 记录重复调用点：同一个 call site 在 LTO prelink 里被复制成两份时，两份各拿一部分样本，避免重复计数。
+
+profile 文本是一棵 trie，每个节点是 `(call site 位置, callee)`，根到节点的路径就是上下文。`main:foo:bar` 表示「`bar` 被 `foo` 调用，而 `foo` 位于 `main` 的上下文里」。内联决策本质上是在这棵树上做剪枝。
+
+### 顺序：profile 图的 SCC，反着走
+
+`buildFunctionOrder` 构造一个 `ProfiledCallGraph`：**只用 profile 里的调用边，故意忽略静态调用边**。理由在源码注释里列了四条，核心是 LTO prelink 之后静态图已经和真实执行顺序脱节——被内联掉的 callee 从静态图里消失，header 里重复定义的函数还会留下误导性的边。
+
+然后在 profile 图上跑 `scc_iterator`，SCC 内部用 `scc_member_iterator` 按边权排序（`-sort-profiled-scc-member`，默认开），最后把整个列表 `reverse`，得到 caller 在前的 top-down 顺序。
+
+注意这里的 SCC 只是**排序工具**，不是 pass manager 的 CGSCC：没有 `ModuleToPostOrderCGSCCPassAdaptor`，没有「进入一个 SCC 就必须处理完」的约束，函数是一个接一个单独处理的。
+
+### 候选：优先队列 + BFS
+
+处理一个函数时，先把它的每条 call 变成 `InlineCandidate`：
+
+一个候选是一个四元组：
+
+- `CallInstr`：这条 call；
+- `CalleeSamples`：callee 在**当前上下文**下的 profile 节点；
+- `CallsiteCount`：callee 的 head samples × probe `Factor`；
+- `CallsiteDistribution`：重复调用点的分摊系数，默认 1.0。
+
+按 `CallsiteCount` 建最大堆。取出的候选通过合法性检查后直接内联，`IFI.InlinedCallSites` 里新暴露的 call site 再入队——所以它是一个**带优先级的 BFS**，不是单纯把函数扫一遍。
+
+分数相同时先挑「样本行数少」的（更小的函数），最后按 GUID 排，保证不同 build 之间顺序稳定。
+
+```text
+queue = 按 CallsiteCount 排序的全部 call site
+while queue 非空 and 函数指令数 < 预算:
+  c = queue.pop_max()
+  if c 不可内联: continue
+  if c.CallsiteCount > hot 阈值: cost 上限 = 3000
+  elif 允许冷调用点:            cost 上限 = 45
+  else:                         continue
+  if InlineFunction(c):
+    markContextSamplesInlined(c.CalleeSamples)
+    queue.push(新暴露的 call site)   // 上下文比原来长一层
+```
+
+### 判定：四道闸门
+
+`shouldInlineCandidate` 的顺序值得背下来：
+
+1. **replay advisor**：`-sample-profile-inline-replay` 时，重放文件说了算，直接返回 `Always` / `Never`。
+2. **热度分流**：`CallsiteCount > PSI->getHotCountThreshold()` 才算热调用点，cost 上限抬到 3000；否则冷调用点，上限 45（CSSPGO 下 `-sample-profile-inline-size` 默认打开，所以冷但极小的调用点也会被收）。
+3. **代价只判合法性**：`getInlineCost` 带 `ComputeFullInlineCost = true`，把 callee 整个扫完，但只认 `isNever()` 和 `isAlways()`——`noinline`、`optnone`、可变参数、`blockaddress` 之类的硬拒绝在这里被挡下。数值本身只是和 3000 / 45 比一下，防止巨型函数被塞进来。
+4. **preinliner 重放**：`llvm-profgen --csspgo-preinliner`（默认开）在生成 profile 时就用机器码字节大小做过一遍全局决策，结论以 `ContextShouldBeInlined` 写进 profile；编译时 `-sample-profile-use-preinliner` 直接把它翻译成 `Always`。
+
+把这几条竖着排，就是判定的全部优先级：
+
+- **`alwaysinline` / `noinline` / `optnone`**：`InlineCost` 直接给出 `isAlways()` / `isNever()`，不再看热度。
+- **热调用点**（高于 PSI 热阈值）：cost 上限 3000。
+- **冷调用点**：上限 45；`-sample-profile-inline-size` 关掉时直接跳过。
+- **preinliner 标了 `ContextShouldBeInlined`**：`Always`，不看 cost。
+- **函数体积超出预算**：这个函数剩下的候选全部放弃。
+
+### 预算：每个函数一个总量
+
+自顶向下会连续展开很多层，单条 call 的 cost 都合格，加起来却能把 caller 撑爆。所以每处理一个函数先算一个预算：
+
+```text
+SizeLimit = clamp(函数指令数 × 12, 100, 10000)
+```
+
+`12` 来自 `-sample-profile-inline-growth-limit`，上下界来自 `-sample-profile-inline-limit-min` / `-sample-profile-inline-limit-max`。循环条件里检查 `F.getInstructionCount() < SizeLimit`，撞线就停，`NumCSInlinedHitGrowthLimit` 加一。`-sample-profile-inline-replay` 时预算被设成无上限，因为重放必须和记录一致。
+
+### 记账：context 树必须同步更新
+
+内联成功的第一件事不是改 IR，是改 profile：
+
+- `markContextSamplesInlined` 给这个 context 节点打上 `InlinedContext`，它不会再被合并进 base；
+- 重复调用点按 `Factor` 逐层相乘，写回新指令的 `PseudoProbe`（`setProbeDistributionFactor`）；
+- 没被内联的调用点先留在树上。轮到 callee 自己时，`getBaseSamplesFor(F, MergeContext=true)` 会调用 `promoteMergeContextSamplesTree`，把 `main:foo` 这类残留上下文提升到根下、合并进 `foo` 的 base profile。
+
+非 CS profile 没有 context 树，对应的是 `-sample-profile-merge-inlinee`（默认开）：loader 放弃的调用点，其 inlinee 样本被合并回 outline 版本。两种路径的目的相同——**保证每个保留在 IR 里的函数，都还有一份能对得上的 profile**。
+
+### 内联之后：权重从 inline stack 来
+
+内联完才标注权重（`computeAndPropagateWeights` → `generateMDProfMetadata`）。内联进来的指令不需要复制 profile：`findFunctionSamples` 沿指令的 DILocation inline stack 往上走，在 profile 树里找到对应节点；probe 模式更直接，`FS->findSamplesAt(Probe->Id, Probe->Discriminator)`。
+
+这也是 CSSPGO 相对「按行号 + 函数名」的老 AutoFDO 最本质的变化：**上下文是 key，内联只是把 key 变长了**。
+
+## 代价与坑
+
+- **自顶向下很容易把 caller 撑爆。** 单条 call 层层都划算，累积起来是灾难；`× 12` 的预算就是硬刹车，撞线后这个函数剩下的候选全部放弃，不做任何局部最优补救。
+- **阈值是经验值。** 3000 / 45 / 12 都会随版本和 target 调整，`-pass-remarks=sample-profile-inline` 的实际输出比背数字可靠。
+- **递归默认是允许的。** CSSPGO 下 `-sample-profile-recursive-inline` 默认开，`AllowRecursiveCall` 会传给代价分析；但直接自递归（callee 就是 caller）仍然在队列里被跳过。
+- **outline 副本会突然变冷。** 唯一调用点被内联后，`main:foo` 被标记 inlined，outline 的 `foo` 拿不到样本，可能被当成冷函数优化。这正是 `-sample-profile-merge-inlinee` 存在的原因；也是 CSSPGO 里「明明没删函数，它却变冷了」的常见来源。
+- **没有样本的函数完全不参与。** `runOnFunction` 发现 base profile 为空就直接返回，不会有任何内联——不是「保守地按代价内联」，而是彻底跳过。
+- **profile 过期比没有 profile 更危险。** probe 校验失败时默认 `SalvageStaleProfile` 去救，救不动就整模块拒绝（`rejectHighStalenessProfile`），而不是硬套。
+- **它和 SCC inliner 是共存的。** prelink 的 sample PGO 会把 SCC inliner 的 `HotCallSiteThreshold` 设成 0，避免后端 profile annotation 失真；其余情况 SCC inliner 继续处理没被 profile 选中的中等调用点。想完全交还给 SCC inliner，用 `-disable-sample-loader-inlining`。
+
+## 在管线里的位置
+
+生成侧，`-fprofile-sample-generate` 会在管线最前面插入 `pseudo-probe`（`SampleProfileProbePass`），把 probe 打进 IR；运行一次拿到 profile 之后，`llvm-profgen` 的 `CSPreInliner` 再做一遍全局预内联，把决策写回 profile。
+
+消费侧，`SampleProfileLoaderPass` 位于 simplification pipeline 前部、early FPM 之后。源码注释写得很直白：必须在 debug info 还新鲜的时候标注，否则 inline stack 对不上。它后面依次是 ICP、OpenMPOpt、attributor、IPSCCP，再往后才是 optimization pipeline 里的 `ModuleInlinerWrapperPass`（`cgscc-inline`）。
+
+ThinLTO 下要注意两段式：prelink 只能「记录」外部内联候选（`findExternalInlineCandidate`），真正加载 profile 并内联发生在 postlink；用了 flattened profile 时 postlink 不再重读。
+
+LLVM 的其它内联变体（`always-inline`、`module-inline`、`partial-inliner`）都复用 `InlineCost`，但只有这一条走「上下文 + 热度」的判据。想看它和 SCC inliner 的对比，回到 <I18nLink href="/passes/inliner/">inliner</I18nLink>。
+
+## 自己跑一遍
+
+```c
+// demo.c
+__attribute__((noinline)) int bar(int v) {
+  return v * 2;
+}
+
+int foo(int v) {
+  return bar(v) + 1;
+}
+
+int main(void) {
+  return foo(7);
+}
+```
+
+profile 的行号不是源码行号，而是 `line - 函数起始行` 的偏移：`main` 从第 9 行开始、第 10 行调用 `foo`，所以记的是 `1`。
+
+```text
+# demo.prof
+main:100000:0
+ 1: 98000
+ 1: foo:98000
+  1: 95000
+  1: bar:95000
+```
+
+```bash
+# 用 -disable-llvm-passes 留住调用点，否则 clang 自己的内联会先吃掉 foo
+clang -O1 -g -fprofile-sample-use=demo.prof -Xclang -disable-llvm-passes \
+      -S -emit-llvm demo.c -o demo.ll
+
+opt -passes=sample-profile -sample-profile-file=demo.prof \
+    -pass-remarks=sample-profile-inline \
+    -pass-remarks-missed=sample-profile-inline \
+    -S demo.ll -o /dev/null
+```
+
+第二条命令在 LLVM 23.1.4 上的输出：
+
+```text
+remark: demo.c:10:10: 'foo' inlined into 'main' to match profiling context with (cost=20, threshold=3000) at callsite main:1:10;
+```
+
+`bar` 不会跟进来：它带 `noinline`，`getInlineCost` 直接返回 `isNever()`。想看冷调用点那一档，把 `foo` 的样本改成 40 左右，加上 `-sample-profile-prioritized-inline -sample-profile-inline-size`，阈值会从 3000 变成 45；去掉 `-sample-profile-inline-size` 则直接拒绝。
+
+手工写 IR 时还有两个坑：
+
+- 函数上没有 `"use-sample-profile"` 属性时，`skipProfileForFunction` 会把它整个跳过，表现是「profile 读进来了，但一条 `!prof` 都没有」。clang 的 `-fprofile-sample-use` 会自动加这个属性。
+- `getInlineCost` 返回 `isNever()` 时打的是 analysis remark，要加 `-pass-remarks-analysis=sample-profile-inline` 才看得到 `incompatible inlining`；`-pass-remarks-missed` 只覆盖 `NotInline` 那一路。

@@ -21,7 +21,7 @@ The decision layer only says "this call is worth inlining". Actually moving a ca
 
 It is not copy and paste. Cloned SSA values need new names, arguments must replace parameters, the caller's block must be split at the call, every callee `ret` must jump to the same continuation block, several return values must be merged with a `phi`, `invoke` must bring its landingpad along, and debug info needs an `inlinedAt` chain. After all that, the call graph, worklist and dead-function list must be updated too.
 
-This page only covers "how the rewrite happens". Which call is worth inlining is covered by <I18nLink href="/passes/inliner/">inliner</I18nLink>.
+This page only covers "how the rewrite happens". Which call is worth inlining is covered by <I18nLink href="/passes/inliner/">inliner</I18nLink>; with sample context the criteria change, see <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>.
 
 ## Algorithm
 

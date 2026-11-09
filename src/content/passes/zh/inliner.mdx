@@ -106,7 +106,7 @@ return Cost < std::max(1, Threshold) ? success : failure("Cost over threshold");
 - **callee 先变胖，caller 再做决定。** 这是后序的代价，也是实验台里阈值调高反而拒绝 `main → render` 的原因。
 - **递归不会无限展开。** 直接递归在 `isInlineViable` 就被拒绝；互递归靠 `!inline_history` 截断。
 - **SCC 内部要额外设防。** `intra-scc-cost-multiplier` 和 `InlinedInternalEdges` 都是为「高度互连的 SCC」准备的，否则成本分析看起来每一步都划算，最后却会超线性增长。
-- **profile 会改变结论。** 热调用点、冷 callee、cost-benefit 分析都可能绕过普通阈值；没有 profile 时，这些路径根本不会触发。
+- **profile 会改变结论。** 热调用点、冷 callee、cost-benefit 分析都可能绕过普通阈值；没有 profile 时，这些路径根本不会触发。而带调用上下文的样本内联换了一套判据，见 <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>。
 
 ## 在管线里的位置
 

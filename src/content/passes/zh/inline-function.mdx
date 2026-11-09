@@ -21,7 +21,7 @@ import I18nLink from '../../../components/I18nLink.astro';
 
 它不是复制粘贴。克隆出来的 SSA 值要改名，实参要替换形参，caller 的基本块要在 call 处拆开，callee 的每个 `ret` 都要接到同一个 continuation 块，多个返回值要用 `phi` 合并；`invoke` 还要带着 landingpad 一起搬，调试信息要补 `inlinedAt` 链。做完这些，调用图、worklist 和死函数列表也要更新。
 
-这一页只看「怎么改」。哪条 call 值得内联，见 <I18nLink href="/passes/inliner/">inliner</I18nLink>。
+这一页只看「怎么改」。哪条 call 值得内联，见 <I18nLink href="/passes/inliner/">inliner</I18nLink>；带样本上下文时，判据换成 <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>。
 
 ## 算法
 
