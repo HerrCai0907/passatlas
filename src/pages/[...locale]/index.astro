@@ -4,11 +4,11 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import PassCard from '../../components/PassCard.astro';
 import StepPlayer from '../../components/StepPlayer';
 import { getDemo } from '../../demos/registry';
-import { roadmap } from '../../data/roadmap';
+import { pipelinePasses } from '../../data/pipeline';
 import { defaultLocale, locales, type Locale } from '../../i18n/config';
 import { t } from '../../i18n/ui';
 import { categoryOrder, categoryName } from '../../lib/categories';
-import { passesForLocale } from '../../lib/passes';
+import { passSlug, passesForLocale } from '../../lib/passes';
 import { url } from '../../lib/url';
 
 export function getStaticPaths() {
@@ -23,6 +23,10 @@ const { locale } = Astro.props as { locale: Locale };
 const allPasses = await getCollection('passes', ({ data }) => data.status === 'ready');
 const passes = passesForLocale(allPasses, locale);
 const featured = passes.slice(0, 3);
+const documented = new Set(passes.map((pass) => passSlug(pass)));
+const plannedCount = pipelinePasses.filter(
+  (item) => !documented.has(item.page ?? item.name),
+).length;
 const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale);
 ---
 
@@ -135,9 +139,9 @@ const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale
       </div>
 
       <p class="atlas__more">
-        {t(locale, 'home.atlas.roadmap', { count: roadmap.length })}
-        <a href={`${url('/passes/', locale)}#roadmap`}>
-          {t(locale, 'home.atlas.roadmapLink')} <span aria-hidden="true">→</span>
+        {t(locale, 'home.atlas.pipeline', { count: plannedCount })}
+        <a href={`${url('/passes/', locale)}#pipeline`}>
+          {t(locale, 'home.atlas.pipelineLink')} <span aria-hidden="true">→</span>
         </a>
       </p>
       <p class="atlas__more">

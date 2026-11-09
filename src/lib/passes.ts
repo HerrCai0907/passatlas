@@ -27,3 +27,13 @@ export function sortPasses(passes: PassEntry[]): PassEntry[] {
 export function passesForLocale(passes: PassEntry[], locale: Locale): PassEntry[] {
   return sortPasses(passes.filter((pass) => passLocale(pass) === locale));
 }
+
+/**
+ * PassRegistry.def 里的注册名与页面 slug 不一定相同。
+ * 例如 CGSCC inliner 注册为 `inline`，页面叫 `inliner`；
+ * sample-profile 的决策页叫 `sample-profile-inline`。
+ */
+export const passPageAlias: Record<string, string> = {
+  inline: 'inliner',
+  'sample-profile': 'sample-profile-inline',
+};

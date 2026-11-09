@@ -1,0 +1,236 @@
+---
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import {
+  passRegistry,
+  registryLevelOrder,
+  type RegistryLevel,
+} from '../data/pass-registry';
+import { llvmSourceUrl } from '../site';
+import { passPageAlias, passSlug, type PassEntry } from '../lib/passes';
+import { url } from '../lib/url';
+
+interface Props {
+  pages: PassEntry[];
+  locale: Locale;
+}
+
+const { pages, locale } = Astro.props;
+const pagesBySlug = new Map(pages.map((pass) => [passSlug(pass), pass]));
+
+const levelKeys = {
+  module: 'passes.pipeline.level.module',
+  cgscc: 'passes.pipeline.level.cgscc',
+  function: 'passes.pipeline.level.function',
+  loop: 'passes.pipeline.level.loop',
+  loopnest: 'passes.registry.level.loopnest',
+} as const satisfies Record<RegistryLevel, string>;
+
+const groups = registryLevelOrder
+  .map((level) => ({
+    level,
+    items: passRegistry.filter((item) => item.level === level),
+  }))
+  .filter((group) => group.items.length > 0);
+---
+
+<details class="registry">
+  <summary class="registry__summary">
+    <span class="registry__chevron" aria-hidden="true"></span>
+    <span class="registry__title">{t(locale, 'passes.registry.title')}</span>
+    <span class="registry__count">
+      {t(locale, 'passes.registry.count', { count: passRegistry.length })}
+    </span>
+  </summary>
+
+  <div class="registry__body">
+    <p class="registry__note">{t(locale, 'passes.registry.note')}</p>
+
+    <div class="registry__groups">
+      {
+        groups.map((group) => (
+          <section class="registry__group" aria-labelledby={`registry-${group.level}`}>
+            <h4 id={`registry-${group.level}`}>
+              {t(locale, levelKeys[group.level])}
+              <span class="registry__n">{group.items.length}</span>
+            </h4>
+            <ul class="registry__list">
+              {group.items.map((item) => {
+                const page = pagesBySlug.get(passPageAlias[item.name] ?? item.name);
+                return (
+                  <li>
+                    {page ? (
+                      <a href={url(`/passes/${passSlug(page)}/`, locale)}>{item.name}</a>
+                    ) : (
+                      <span>{item.name}</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))
+      }
+    </div>
+
+    <p class="registry__source">
+      <a
+        href={llvmSourceUrl('llvm/lib/Passes/PassRegistry.def')}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {t(locale, 'passes.registry.source')} ↗
+      </a>
+    </p>
+  </div>
+</details>
+
+<style>
+  .registry {
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .registry__summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    cursor: pointer;
+    list-style: none;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+
+  .registry__summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .registry__summary:hover .registry__title {
+    color: var(--accent-strong);
+  }
+
+  .registry__chevron {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1;
+    color: var(--muted);
+    flex: none;
+    align-self: center;
+  }
+
+  .registry__chevron::before {
+    content: '+';
+  }
+
+  .registry[open] .registry__chevron::before {
+    content: '−';
+  }
+
+  .registry__title {
+    font-weight: 600;
+    color: var(--ink);
+    transition: color 0.16s var(--ease);
+  }
+
+  .registry__count {
+    padding: 1px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+
+  .registry__body {
+    margin-top: 14px;
+  }
+
+  .registry__note {
+    max-width: 86ch;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+
+  .registry__groups {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    margin-top: 18px;
+  }
+
+  .registry__group h4 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 0 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .registry__n {
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    color: var(--faint);
+  }
+
+  .registry__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 1px 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .registry__list li {
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--faint);
+    overflow-wrap: anywhere;
+  }
+
+  .registry__list :global(span) {
+    padding-inline: 2px;
+  }
+
+  .registry__list :global(a) {
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .registry__list :global(a:hover) {
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+  }
+
+  .registry__source {
+    margin-top: 18px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .registry__source :global(a) {
+    color: var(--accent-strong);
+  }
+</style>

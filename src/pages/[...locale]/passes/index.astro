@@ -2,7 +2,9 @@
 import { getCollection } from 'astro:content';
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import PassRow from '../../../components/PassRow.astro';
-import { roadmap } from '../../../data/roadmap';
+import PipelineMap from '../../../components/PipelineMap.astro';
+import PassRegistry from '../../../components/PassRegistry.astro';
+import { pipelineStages } from '../../../data/pipeline';
 import { defaultLocale, locales, type Locale } from '../../../i18n/config';
 import { t } from '../../../i18n/ui';
 import { categories, categoryDescription, categoryName, categoryOrder } from '../../../lib/categories';
@@ -30,8 +32,6 @@ const groups = categoryOrder
     return group;
   })
   .filter((group) => group.items.length > 0);
-
-const planned = roadmap;
 ---
 
 <BaseLayout
@@ -54,6 +54,10 @@ const planned = roadmap;
             </a>
           ))
         }
+        <a class="chip" href="#pipeline">
+          {t(locale, 'passes.pipeline.jump')}
+          <span class="jump__count" aria-hidden="true">↓</span>
+        </a>
       </nav>
     </div>
   </header>
@@ -81,30 +85,21 @@ const planned = roadmap;
       ))
     }
 
-    <section class="roadmap" id="roadmap" aria-labelledby="roadmap-title">
-      <header class="roadmap__head">
-        <p class="eyebrow">{t(locale, 'passes.roadmap.eyebrow')}</p>
-        <h2 id="roadmap-title">{t(locale, 'passes.roadmap.title')}</h2>
-        <p class="muted">{t(locale, 'passes.roadmap.body')}</p>
+    <section class="pipeline" id="pipeline" aria-labelledby="pipeline-title">
+      <header class="pipeline__head">
+        <div class="pipeline__intro">
+          <p class="eyebrow">{t(locale, 'passes.pipeline.eyebrow')}</p>
+          <h2 id="pipeline-title">{t(locale, 'passes.pipeline.title')}</h2>
+        </div>
+        <p class="muted pipeline__lead">{t(locale, 'passes.pipeline.body')}</p>
       </header>
 
-      <ol class="roadmap__list">
-        {
-          planned.map((item, index) => (
-            <li class={`roadmap__item cat-${item.category}`}>
-              <span class="roadmap__no">{String(index + 1).padStart(2, '0')}</span>
-              <span class="roadmap__name">{item.name}</span>
-              <span class="roadmap__zh">{item.title[locale]}</span>
-              <span class="roadmap__note">{item.note[locale]}</span>
-              <span class="chip roadmap__status">{t(locale, 'passes.roadmap.status')}</span>
-            </li>
-          ))
-        }
-      </ol>
+      <PipelineMap stages={pipelineStages} pages={passes} locale={locale} />
+      <PassRegistry pages={passes} locale={locale} />
 
-      <p class="roadmap__cta">
+      <p class="pipeline__cta">
         <a class="btn btn--ghost" href={url('/about/', locale)}>
-          {t(locale, 'passes.roadmap.cta')} <span class="btn__arrow" aria-hidden="true">→</span>
+          {t(locale, 'passes.pipeline.cta')} <span class="btn__arrow" aria-hidden="true">→</span>
         </a>
       </p>
     </section>
@@ -188,104 +183,36 @@ const planned = roadmap;
     margin-top: 6px;
   }
 
-  /* ---------- 路线图 ---------- */
-  .roadmap {
+  /* ---------- 管线地图 ---------- */
+  .pipeline {
     padding-block: clamp(40px, 6vw, 64px);
   }
 
-  .roadmap__head {
-    max-width: 640px;
+  .pipeline__head {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: end;
+    gap: 10px clamp(24px, 4vw, 56px);
     margin-bottom: 26px;
   }
 
-  .roadmap__head h2 {
+  .pipeline__intro h2 {
     margin-top: 8px;
     font-size: clamp(26px, 3vw, 34px);
   }
 
-  .roadmap__head p {
-    margin-top: 10px;
+  .pipeline__lead {
+    max-width: 66ch;
     font-size: 14.5px;
   }
 
-  .roadmap__list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    border-top: 1px solid var(--line);
-  }
-
-  .roadmap__item {
-    display: grid;
-    grid-template-columns: 44px minmax(90px, 0.9fr) minmax(90px, 1fr) minmax(0, 2.4fr) auto;
-    align-items: center;
-    gap: 14px;
-    padding: 13px 4px;
-    border-bottom: 1px solid var(--line);
-    font-size: 14px;
-  }
-
-  .roadmap__no {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--faint);
-  }
-
-  .roadmap__name {
-    font-family: var(--font-mono);
-    font-weight: 600;
-    color: var(--ink);
-  }
-
-  .roadmap__zh {
-    color: var(--ink-soft);
-  }
-
-  .roadmap__note {
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .roadmap__status {
-    border-style: dashed;
-    color: var(--faint);
-  }
-
-  .roadmap__item::before {
-    content: '';
-    position: absolute;
-    left: -12px;
-    width: 3px;
-    height: 18px;
-    border-radius: 2px;
-    background: var(--cat);
-    opacity: 0.5;
-  }
-
-  .roadmap__item {
-    position: relative;
-  }
-
-  .roadmap__cta {
+  .pipeline__cta {
     margin-top: 26px;
   }
 
-  @media (max-width: 980px) {
-    .roadmap__item {
-      grid-template-columns: 32px 1fr auto;
-      gap: 6px 12px;
-    }
-
-    .roadmap__zh {
-      grid-column: 2;
-    }
-
-    .roadmap__note {
-      grid-column: 2 / -1;
-    }
-
-    .roadmap__status {
-      display: none;
+  @media (max-width: 760px) {
+    .pipeline__head {
+      grid-template-columns: 1fr;
     }
   }
 </style>
