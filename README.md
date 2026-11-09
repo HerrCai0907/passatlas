@@ -38,14 +38,16 @@ src/
 ├── pages/
 │   ├── [...locale]/       路由：一次生成中文（无前缀）与英文（/en/）
 │   │   ├── index.astro    首页：hero 动画 + 精选图鉴
-│   │   ├── passes/index.astro 图鉴目录（分类 + 管线图）
+│   │   ├── passes/index.astro 图鉴目录（IR PGO 分组 + 分类 + 管线图）
 │   │   ├── passes/[...slug].astro  pass 详情（构建期生成）
+│   │   ├── passes/pgo-instr-gen/[...slug].astro PGO 采样点详情（挂在本页下）
 │   │   ├── ir/index.astro CFG 实验室：贴 IR 看控制流
 │   │   └── about.astro    方法论与贡献说明
 │   └── 404.astro / robots.txt.ts   根路径专用
 ├── i18n/                  config.ts（语言）· ui.ts（文案）· paths.ts · lab-scc.ts
 ├── layouts/               BaseLayout（head / meta / hreflang / 页头页脚）
 │                          PassLayout（详情页骨架 + 上一篇/下一篇）
+│                          PgoLayout（采样点骨架 + 消费者/相关页）
 ├── components/
 │   ├── StepPlayer.tsx     分步 IR 播放器
 │   ├── CFGViewer.tsx      IR → 基本块有向图（纯前端解析 + 分层布局）
@@ -54,12 +56,15 @@ src/
 │   └── ...                页头、页脚、管线标记
 ├── content/passes/zh/     每篇一个中文 .mdx
 ├── content/passes/en/     同一 id 的英文 .mdx
+├── content/passes/{zh,en}/pgo-instr-gen.mdx  IR PGO 插桩 pass 页
+├── content/pgo/zh/        每个采样点一个中文 .mdx
+├── content/pgo/en/        同一 id 的英文 .mdx
 ├── demos/                 演示数据：types.ts（diff 引擎）+ 每个 pass 一份
 ├── lib/
 │   ├── url.ts             base path + 语言前缀安全的链接助手
 │   ├── passes.ts          内容 id → slug / locale 的助手
 │   └── ir/                parse.ts（IR → 基本块）· layout.ts（分层布局）
-├── data/                  pipeline.ts · pass-registry.ts · cfg-samples.ts（实验室示例）
+├── data/                  pipeline.ts · pass-registry.ts · cfg-samples.ts · pgo.ts（采样点事实）
 └── styles/                tokens.css（设计令牌）· global.css（基础 + prose）
 ```
 
@@ -138,6 +143,14 @@ source: llvm/lib/Transforms/.../X.cpp
 
 - **测试**：`npm run test:ir`，覆盖菱形分支、循环回边、switch 多路、不可达块、跨行指令、错误提示，以及中英文路径与演示文案。
 
+## IR PGO 分组
+
+图鉴顶部新增 **IR PGO** 分组，不再有独立的顶层栏目。先读插桩 pass `pgo-instr-gen`：它解释 IR 里插了哪些值、第二次编译把它们变成什么元数据，并指向消费这些值的 pass（`pgo-icall-prom`、`pgo-memop-opt`、`inliner` 等）。
+
+- 插桩 pass：`/passes/pgo-instr-gen/`；五个采样点详情：`/passes/pgo-instr-gen/function-entry/`、`.../basic-block/`、`.../indirect-call/`、`.../memop-size/`、`.../vtable/`。
+- 插桩 pass 在 `src/content/passes/<locale>/pgo-instr-gen.mdx`，带分步演示；采样点正文在 `src/content/pgo/<locale>/<id>.mdx`，结构化事实在 `src/data/pgo.ts`，渲染骨架是 `src/layouts/PgoLayout.astro`。
+- 采样点不是 pass，因此没有分步动画，也不进入 `passes` 集合；它们作为 `pgo-instr-gen` 的子页出现在图鉴的 IR PGO 分组里，并通过面包屑与父页互链。
+
 ## 多语言（i18n）
 
 默认语言是中文，URL 没有前缀；英文在 `/en/` 下：
@@ -147,6 +160,8 @@ source: llvm/lib/Transforms/.../X.cpp
 | 首页 | `/` | `/en/` |
 | 图鉴 | `/passes/` | `/en/passes/` |
 | pass 详情 | `/passes/mem2reg/` | `/en/passes/mem2reg/` |
+| IR PGO 插桩 pass | `/passes/pgo-instr-gen/` | `/en/passes/pgo-instr-gen/` |
+| PGO 采样点 | `/passes/pgo-instr-gen/function-entry/` | `/en/passes/pgo-instr-gen/function-entry/` |
 | CFG 实验室 | `/ir/` | `/en/ir/` |
 | 关于 | `/about/` | `/en/about/` |
 

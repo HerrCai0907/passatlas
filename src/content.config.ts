@@ -37,4 +37,30 @@ const passes = defineCollection({
   schema: passSchema,
 });
 
-export const collections = { passes };
+/**
+ * IR PGO 的采样点不是 pass，单独用一个集合：
+ *   src/content/pgo/zh/basic-block.mdx  → /pgo/basic-block/
+ *   src/content/pgo/en/basic-block.mdx  → /en/pgo/basic-block/
+ * 结构化的事实（采样什么、写成什么、喂给谁）在 src/data/pgo.ts；
+ * 这里只放正文与每页自己的标题、摘要、排序。
+ */
+const pgoSchema = z.object({
+  /** 采样点的标识符，如 function-entry */
+  title: z.string(),
+  /** 当前语言的短名，如「函数入口计数」 */
+  subtitle: z.string(),
+  /** 列表与 meta description 用的一句话 */
+  summary: z.string(),
+  status: z.enum(['ready', 'draft']).default('ready'),
+  order: z.number().default(100),
+  /** LLVM 源码路径，页面底部给出固定 commit 的链接 */
+  source: z.string().optional(),
+  updated: z.coerce.date().optional(),
+});
+
+const pgo = defineCollection({
+  loader: glob({ base: './src/content/pgo', pattern: '**/*.{md,mdx}' }),
+  schema: pgoSchema,
+});
+
+export const collections = { passes, pgo };

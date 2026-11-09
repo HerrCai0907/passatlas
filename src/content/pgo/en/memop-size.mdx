@@ -1,0 +1,151 @@
+---
+title: memop-size
+subtitle: Memory-operation sizes
+summary: Records the size a memcpy / memset / memcmp actually receives in a run and writes VP kind 1. Hot sizes are split into a switch by pgo-memop-opt, then expanded into constant-size loads and stores.
+status: ready
+order: 40
+source: llvm/lib/Transforms/Instrumentation/PGOMemOPSizeOpt.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What does it sample
+
+The size a variable-length memory operation actually receives in a run. The sites are memory intrinsics such as `llvm.memcpy` / `llvm.memset` / `llvm.memcmp`, plus `memcmp` / `bcmp` libcalls. **Constant sizes are not instrumented**: the compiler already knows them, and no profile is needed to specialise.
+
+`MemIntrinsicPlugin` only handles a `MemIntrinsic` whose length is not a `ConstantInt`; `memcmp` / `bcmp` go through `TargetLibraryInfo`’s `LibFunc` check. Each site has its own index, and the value kind in `!prof` is `1`. After lowering, the runtime call is `__llvm_profile_instrument_memop(length, data, site)`, separate from the indirect-call `__llvm_profile_instrument_target`.
+
+A note on `memmove`: it is sampled, but `PGOMemOPSizeOpt::perform` explicitly skips it. Being sampled does not guarantee being optimised.
+
+## What it looks like in IR
+
+A function with one variable-length `memcpy`:
+
+```llvm
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+
+define void @copy(ptr %dst, ptr %src, i64 %n) {
+entry:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false)
+  ret void
+}
+```
+
+Generation inserts the intrinsic (again with a `__profn_*` name global):
+
+```llvm
+@__profn_copy = private constant [5 x i8] c"copy\00"
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+define void @copy(ptr %dst, ptr %src, i64 %n) {
+entry:
+  call void @llvm.instrprof.value.profile(ptr @__profn_copy, i64 742261418966908927, i64 %n, i32 1, i32 0)
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false)
+  ret void
+}
+```
+
+Use writes `!prof` onto the memory operation:
+
+```llvm
+define void @copy(ptr %dst, ptr %src, i64 %n) !prof !0 {
+entry:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false), !prof !1
+  ret void
+}
+
+!0 = !{!"function_entry_count", i64 10000}
+!1 = !{!"VP", i32 1, i64 10000, i64 4, i64 6000, i64 16, i64 3000}
+```
+
+Read it as: the call site ran 10,000 times; `n = 4` 6,000 times, `n = 16` 3,000 times, and the remaining 1,000 had other sizes.
+
+`PGOMemOPSizeOpt` splits the two hottest sizes into cases, keeping the variable call on the default path:
+
+```llvm
+define void @copy(ptr %dst, ptr %src, i64 %n) {
+entry:
+  switch i64 %n, label %MemOP.Default [
+    i64 4, label %MemOP.Case.4
+    i64 16, label %MemOP.Case.16
+  ]
+
+MemOP.Case.4:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 4, i1 false)
+  br label %MemOP.Merge
+
+MemOP.Case.16:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 16, i1 false)
+  br label %MemOP.Merge
+
+MemOP.Default:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false)
+  br label %MemOP.Merge
+
+MemOP.Merge:
+  ret void
+}
+```
+
+This step only makes the sizes constant. SelectionDAG is what turns them into a handful of loads and stores; for `memcmp`, constant lengths expand into integer comparisons. When only one size clears the thresholds, `PGOMemOPSizeOpt` still builds a one-case switch first; a later `SimplifyCFG` folds it into one comparison and one constant path. The number of `MemOP.Case.*` blocks follows the number of selected sizes.
+
+## What consumes it
+
+| Consumer | Reads | Uses it for |
+| --- | --- | --- |
+| `PGOMemOPSizeOpt` (`pgo-memop-opt`) | the size distribution in VP kind 1 | build a size switch and make hot sizes constant |
+| SelectionDAG / TargetLowering | constant-size memcpy / memset | expand small copies into loads and stores; use a libcall or vectors for large ones |
+| memcmp / bcmp specialisation | constant length | expand into word-sized integer comparisons |
+| later CFG passes | the switch shape | fold duplicate cases and lay out hot/cold blocks |
+
+`PGOMemOPSizeOpt` runs only in the **IR PGO use** pipeline, and not at `-Os`. The hidden defaults are:
+
+- a call site needs at least 1,000 executions (`-pgo-memop-count-threshold`);
+- each candidate must cover at least 40% of the remaining count (`-pgo-memop-percent-threshold`);
+- at most three versions (`-pgo-memop-max-version`);
+- only sizes up to 128 bytes are specialised (`-memop-value-prof-max-opt-size`);
+- `memmove` is skipped outright; `memcmp` / `bcmp` specialisation is controlled by `-pgo-memop-optimize-memcmp-bcmp`, on by default.
+
+Promoted records are removed from `!prof`; the sizes that were not chosen stay in the metadata for a later round or another optimisation.
+
+## Cost and pitfalls
+
+- **Constant sizes never enter the profile.** That is not a gap: `memcpy(p, q, 16)` has a constant in the IR, so `PGOMemOPSizeOpt` does not need a count to specialise it, and SelectionDAG expands it directly.
+- **Not every `memcpy` is a `MemIntrinsic`.** The plugin only recognises memory intrinsics and `memcmp` / `bcmp` libcalls. A call already lowered to `__memcpy_chk` or a target-specific libcall is not sampled. Plain `memcpy` at `-O0` often hits this; `__builtin_memcpy` is more likely to stay an `llvm.memcpy`.
+- **The switch has a cost.** One more indirect branch and several blocks. Only hot, concentrated sites pay off; the 40% threshold and three-version cap exist to keep cold sites out.
+- **`memmove` is not optimised.** Even when sampled, `perform` returns false. Overlap semantics make size specialisation a poor trade.
+- **The count needs BFI.** With the default `-pgo-memop-scale-count=true`, value counts are scaled by the block count. If BFI cannot get a block count — for example, hand-written IR with no `function_entry_count` — the site is skipped.
+- **A stale profile breaks site numbering.** Value sites are numbered in function order. Add or remove one `memcpy` and every later index shifts. Use warns and skips that function’s value sites instead of applying them to the wrong instruction.
+
+## Run it yourself
+
+Hand-write a module with `!prof` and watch the switch appear:
+
+```bash
+cat > memop.ll <<'EOF'
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)
+
+define void @copy(ptr %dst, ptr %src, i64 %n) !prof !0 {
+entry:
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %src, i64 %n, i1 false), !prof !1
+  ret void
+}
+
+!0 = !{!"function_entry_count", i64 10000}
+!1 = !{!"VP", i32 1, i64 10000, i64 4, i64 6000, i64 16, i64 3000}
+EOF
+
+opt -passes=pgo-memop-opt -pass-remarks=pgo-memop-opt -S memop.ll -o -
+```
+
+Expect `MemOP.Case.4`, `MemOP.Case.16`, `MemOP.Default` and `MemOP.Merge`, plus a remark like `optimized memcpy with count 9000 out of 10000 for 2 versions`. Change the count for `i64 4` to 100 and watch the 40% threshold leave only one version.
+
+To see a real profile, use `__builtin_memcpy` rather than plain `memcpy`:
+
+```bash
+clang -O2 -fprofile-generate memop.c -o memop
+./memop
+llvm-profdata merge -o memop.profdata default_*.profraw
+llvm-profdata show --all-functions memop.profdata | grep -A3 copy
+```

@@ -6,6 +6,7 @@ import { heroDemo } from './hero.ts';
 import { inlineFunctionDemo } from './inline-function.ts';
 import { instcombineDemo } from './instcombine.ts';
 import { mem2regDemo } from './mem2reg.ts';
+import { pgoInstrGenDemo } from './pgo-instr-gen.ts';
 import { sampleProfileInlineDemo } from './sample-profile-inline.ts';
 
 /**
@@ -18,6 +19,7 @@ export const demos: Record<string, Demo> = {
   'inline-function': inlineFunctionDemo,
   instcombine: instcombineDemo,
   mem2reg: mem2regDemo,
+  'pgo-instr-gen': pgoInstrGenDemo,
   'sample-profile-inline': sampleProfileInlineDemo,
 };
 

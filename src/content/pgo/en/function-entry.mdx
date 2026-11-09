@@ -1,0 +1,122 @@
+---
+title: function-entry
+subtitle: Function entry count
+summary: One record every time control enters the function, turned into function_entry_count on the second build. It decides who is hot and who is cold, and it is the number the inliner and code layout ask for first.
+status: ready
+order: 10
+source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What does it sample
+
+How many times control enters the function body. For an ordinary function with no recursion and no exception unwinding that is roughly its call count; for a function reached through an `invoke`, a tail call or an inlined copy, it is still “how many times the entry block ran”.
+
+The count does not come from a dedicated entry probe. `PGOInstrumentationGen` builds a maximum-weight spanning tree over the CFG and instruments only the edges **outside** the tree; the entry count is solved from flow conservation. So by default a function entry does not necessarily own a counter; `-mllvm -pgo-instrument-entry` forces one. On the second build, `PGOInstrumentationUse` writes the solved entry count back onto the function:
+
+```llvm
+define i32 @classify(i32 %x) !prof !0 {
+entry:
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg, !prof !1
+
+pos:
+  %a = call i32 @inc(i32 %x)
+  br label %merge
+
+neg:
+  %b = call i32 @dec(i32 %x)
+  br label %merge
+
+merge:
+  %r = phi i32 [ %a, %pos ], [ %b, %neg ]
+  ret i32 %r
+}
+
+!0 = !{!"function_entry_count", i64 1200000}
+!1 = !{!"branch_weights", i32 1180000, i32 20000}
+```
+
+`!0` sits on the function, not on an instruction. `!1` is the branch weight derived from the same counters; the next page, <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink>, is about that.
+
+Force the entry counter on and the generation side gains one `llvm.instrprof.increment` with `index` 0:
+
+```llvm
+@__profn_classify = private constant [9 x i8] c"classify\00"
+declare void @llvm.instrprof.increment(ptr, i64, i32, i32)
+
+define i32 @classify(i32 %x) {
+entry:
+  call void @llvm.instrprof.increment(ptr @__profn_classify, i64 146835647075900052, i32 3, i32 0)
+  %c = icmp sgt i32 %x, 0
+  br i1 %c, label %pos, label %neg
+  ; pos and neg each get a counter, index 1 and 2
+}
+```
+
+`num-counters` must agree with the real number of counters. `InstrProfiling` lowers them into load / add / store operations on the `__profc_classify` array.
+
+## What consumes it
+
+The entry count first becomes a question `ProfileSummaryInfo` can answer: which quantile of the profile summary does this function land in. `PGOUseFunc::markFunctionAttributes` then does only two things: mark a hot function `inlinehint`, mark a cold function `cold`.
+
+| Consumer | Reads | Uses it for |
+| --- | --- | --- |
+| inliner | call-site frequency + entry count | estimate inline profit; `inlinehint` raises the priority further |
+| `pgo-force-function-attrs` | cold functions + call graph | attach `optsize` / `minsize` / `optnone` and give the budget back to hot code |
+| code layout | function counts and block frequencies | keep hot functions and blocks close; split cold blocks into a cold section |
+| loops and vectorisation | BFI scaled from entry counts | choose unroll factors and decide whether vectorising pays |
+
+A few things that are easy to overstate:
+
+- **A hot function gets `inlinehint`, not the `hot` attribute.** `cold` is really attached; the reward for hotness is an inline hint, not a new function attribute.
+- **The entry count does not trigger inlining by itself.** It feeds `BlockFrequencyInfo`; the inliner then compares the call-site frequency with the callee cost. The count changes the numerator of “is it worth it”, not legality.
+- **Cold functions can be optimised less.** PGO-use drivers often enable cold-function optimisation; `pgo-force-function-attrs` marks cold functions `optsize`, `minsize` or `optnone` (`-mllvm -pgo-cold-func-opt=optsize|minsize|optnone` overrides it). Their IR gets visibly smaller; that is the feature, not a bug.
+- **Layout may happen outside the IR.** Function splitting and block ordering happen in Machine IR, but they read the same profile-derived frequencies; they do not go back to `.profdata`.
+
+## Cost and pitfalls
+
+- **Do not mistake `-fprofile-instr-generate` for IR PGO.** It uses Clang’s frontend instrumentation (coverage / Clang instrumentation). The profile format looks similar, but `PGOInstrumentationUse` only accepts an IR-level profile. The IR PGO switches are `-fprofile-generate` / `-fprofile-use`.
+- **The entry counter is optional precision.** The default MST inference saves one counter and one entry RMW; forcing it makes the entry count more robust on complicated CFGs but adds a memory operation to every function. `-pgo-instrument-entry` has to agree on both sides: when generation enables it, the profile header tells the reader that the binary carries entry counters.
+- **Hot and cold are relative.** The thresholds behind `isHotCount` / `isColdCount` come from the profile summary’s quantiles, not from a hard-coded 1000. A different workload can move the same function from hot to cold.
+- **An unrepresentative workload produces wrong metadata.** PGO records only the paths you ran. Error handling that never appears in the test set gets a zero and is then treated as cold. The compiler did not guess wrong; the input was wrong.
+- **A changed CFG stops matching.** The entry count is not indexed by source line; it is tied to the CFG hash. Change control flow or the optimisation level and the hash changes; that function’s profile is skipped, leaving no `!prof` rather than a stale number.
+- **An `optnone` cold function stops being optimised.** If it becomes hot in production, that decision hurts. Cold-function optimisation is for code that is certain not to be hot, not for code that merely has not run yet.
+
+## Run it yourself
+
+```c
+// hotcold.c
+__attribute__((noinline)) int inc(int x) { return x + 1; }
+__attribute__((noinline)) int dec(int x) { return x - 1; }
+
+__attribute__((noinline)) int classify(int x) {
+  return x > 0 ? inc(x) : dec(x);
+}
+
+int main(void) {
+  int s = 0;
+  for (int i = 0; i < 100000; i++)
+    s += classify(i);
+  return s == 0;
+}
+```
+
+```bash
+clang -O2 -fprofile-generate hotcold.c -o hotcold
+./hotcold
+llvm-profdata merge -o hotcold.profdata default_*.profraw
+clang -O2 -fprofile-use=hotcold.profdata -S -emit-llvm hotcold.c -o hotcold.pgo.ll
+
+grep -n 'function_entry_count\|inlinehint\|cold' hotcold.pgo.ll
+```
+
+`dec` is never called, so expect `cold` on `dec` and `inlinehint` on `inc`; `classify` should be near 100000 entries. The exact numbers depend on `-O2` folding parts of `main`; add `__attribute__((optnone))` to `main` if you want the loop to survive in the IR.
+
+To inspect the entry count without running anything, write the `!prof` metadata by hand and ask `opt` for BFI:
+
+```bash
+opt -passes='print<block-freq>' -disable-output hotcold.pgo.ll
+```

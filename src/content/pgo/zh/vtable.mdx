@@ -1,0 +1,134 @@
+---
+title: vtable
+subtitle: 虚表地址点（实验）
+summary: 记录虚调用前加载的 vtable 地址点，写成 VP kind 2。ICP 可以直接比较 vptr，省掉一次函数指针加载；默认关闭，只在 ELF + ThinLTO + WPD 的组合里完整可用。
+status: ready
+order: 50
+source: llvm/lib/Transforms/Instrumentation/IndirectCallPromotion.cpp
+updated: 2026-11-09
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它采样什么
+
+C++ 虚调用前，从对象里加载出来的 **vtable 地址点**。不是函数指针，也不是类名。`VTableProfilingPlugin` 用 `findVTableAddrs` 找到产生 vtable 地址的指令，在它后面插一个值采样；value kind 是 `2`，和间接调用（0）、内存长度（1）分开。
+
+raw profile 里存的是 vtable 地址、地址范围以及 vtable 名字；`llvm-profdata merge` 用这些信息把地址映射成 vtable 的 GUID。indexed profile 里还会保留 vtable 名字，`llvm-profdata show` 能看到。
+
+这条路径默认关闭，需要显式打开：
+
+```bash
+-mllvm -enable-vtable-value-profiling=1   # 生成侧
+-mllvm -enable-vtable-profile-use=1       # 使用侧
+```
+
+源码里的约束很明确：只在 ELF 上启用；`enable-vtable-profile-use` 的说明还要求 ThinLTO + WPD。非 ELF target 打开生成侧会直接报错，而不是静默降级。
+
+## IR 里的样子
+
+一个典型的虚调用：
+
+```llvm
+define i32 @dispatch(ptr %obj, i32 %x) {
+entry:
+  %vptr = load ptr, ptr %obj, align 8
+  %fn = load ptr, ptr %vptr, align 8
+  %r = call i32 %fn(ptr %obj, i32 %x)
+  ret i32 %r
+}
+```
+
+生成侧在 `%vptr` 之后、`%fn` 之前插采样：
+
+```llvm
+@__profn_dispatch = private constant [9 x i8] c"dispatch\00"
+declare void @llvm.instrprof.value.profile(ptr, i64, i64, i32, i32)
+
+define i32 @dispatch(ptr %obj, i32 %x) {
+entry:
+  %vptr = load ptr, ptr %obj, align 8
+  %vp = ptrtoint ptr %vptr to i64
+  call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 170957022131388415, i64 %vp, i32 2, i32 0)
+  %fn = load ptr, ptr %vptr, align 8
+  %r = call i32 %fn(ptr %obj, i32 %x)
+  ret i32 %r
+}
+```
+
+use 侧把 VP 挂在 **vptr 加载**上，而不是调用上：
+
+```llvm
+%vptr = load ptr, ptr %obj, align 8, !prof !0
+!0 = !{!"VP", i32 2, i64 100000, i64 -1234567890123456789, i64 80000, i64 1234567890123456789, i64 15000}
+```
+
+这里的整数是 vtable 的 GUID，不是函数名的 GUID。ICP 拿它去匹配模块里带 `!type` 元数据的 vtable 全局变量。
+
+匹配成功后，guard 比较的是 vptr，而不是先加载函数指针：
+
+```llvm
+@_ZTV3Foo = external constant i8
+
+%vt.foo = getelementptr inbounds i8, ptr @_ZTV3Foo, i64 16
+%is.foo = icmp eq ptr %vptr, %vt.foo
+br i1 %is.foo, label %direct.foo, label %fallback, !prof !1
+
+direct.foo:
+  %r.foo = call i32 @Foo3foo(ptr %obj, i32 %x)
+  br label %merge
+
+!1 = !{!"branch_weights", i32 80000, i32 20000}
+```
+
+`+16` 是 64 位 Itanium ABI 上常见的 address point 偏移；实际偏移取决于 vtable 布局和继承关系，源码用 `getAddressPointOffset` 从 vtable 的类型元数据里算，不是固定值。这里只画结构。
+
+## 后续优化点
+
+| 消费者 | 读到什么 | 用来做什么 |
+| --- | --- | --- |
+| `PGOIndirectCallPromotion` | VP kind 2 的 vtable GUID | 判断用 vtable 比较还是退回函数指针比较 |
+| `isProfitableToCompareVTables` | vtable 计数 / 函数计数 | 只有 vtable 覆盖足够高时才走 vtable 比较（`-icp-vtable-percentage-threshold`，默认 0.995） |
+| 直调 + inliner | 比较成功后的 direct call | 去虚化，随后按普通直调内联 |
+| WPD / ThinLTO | 模块里的 `!type` 元数据 | 先缩小可能的类型集合，profile 再在里面挑热的 vtable |
+
+和普通的 <I18nLink href="/passes/pgo-instr-gen/indirect-call/">indirect-call</I18nLink> 相比，收益来自少一次 load：普通 ICP 需要先 `load ptr, ptr %vptr` 拿到函数指针再比较；vtable ICP 直接比较已经在寄存器里的 `%vptr`。代价是多了一层类型匹配和 address point 计算。
+
+## 代价与坑
+
+- **实验性、默认关闭。** 两个 flag 都默认 false，而且生成侧只在 ELF 上工作；不要把它当成跨平台默认能力。
+- **它依赖 WPD 的结果。** 没有 ThinLTO + `-fwhole-program-vtables`，类型集合收不窄，vtable 比较的收益和合法性都会打折。选项说明把这三个条件写在一起，不是建议，是前提。
+- **profile 过期时类型也会过期。** 类层次、vtable 布局、虚函数表项一变，GUID 和 address point 都可能对不上；use 会警告并跳过，而不是把旧类型硬套到新二进制。
+- **一个 vtable 可能对应多个 address point。** 多继承、虚继承下同一个类的对象可能指向不同的 address point 偏移；源码用 `-icp-max-num-vtable-last-candidate` 限制最后一个候选最多比较几个 vtable。
+- **不是所有 vtable 都值得比较。** `-icp-vtable-percentage-threshold` 默认 0.995：vtable 计数必须几乎覆盖函数计数，否则退回函数指针比较。一个热 vtable + 长尾函数的分布不会触发。
+- **`-fstrict-vtable-pointers` 有交互。** 开启后同一个 vtable 可能被用来加载多个虚函数，源码里的 FIXME 明确说 vtable profile 的更新还没完全处理这种情况；在这个组合下要更保守。
+- **它解决的是「比较谁」，不是「一定去虚化」。** 比较成功仍然是一个运行时分支；最终能不能内联，还要看 callee 的可见性和 `InlineCost`。
+
+## 自己跑一遍
+
+生成和使用要分两遍，而且都要带 `-mllvm`：
+
+```bash
+# 1. 生成：ELF 目标，打开 vtable 值采样
+clang++ -O2 -fprofile-generate -mllvm -enable-vtable-value-profiling=1 \
+        app.cc -o app
+./app
+llvm-profdata merge -o app.profdata default_*.profraw
+
+# 2. 使用：ThinLTO + WPD，打开 vtable profile use
+clang++ -O2 -fprofile-use=app.profdata -flto=thin -fwhole-program-vtables \
+        -mllvm -enable-vtable-profile-use=1 app.cc -o app.pgo
+
+# 3. 看 profile 里的 vtable 名字
+llvm-profdata show --all-functions app.profdata | grep -i vtable
+```
+
+LLVM 23.1.4 的 `llvm-profdata` 会把 vtable 名字放在单独的 VNames 区；`show` 的输出格式可能随版本变化，找不到时用 `llvm-profdata show --all-functions` 全量看。
+
+只看 ICP 的改写，可以手写一个带 kind 2 VP 的模块，把 GUID 换成本地 vtable 的 GUID：
+
+```bash
+opt -passes=pgo-icall-prom -S vtable.ll -o -
+```
+
+没有 `-enable-vtable-profile-use=1` 时，ICP 会忽略 kind 2 的记录，退回普通的函数指针比较——这正好演示了它是 opt-in 的。
