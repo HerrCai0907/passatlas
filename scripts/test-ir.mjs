@@ -4,6 +4,8 @@
  */
 import assert from 'node:assert/strict';
 import { cfgSamples, localizeSample } from '../src/data/cfg-samples.ts';
+import { machineSnapshots, machineStages } from '../src/data/machine.ts';
+import { pipelineStages } from '../src/data/pipeline.ts';
 import { getDemo } from '../src/demos/registry.ts';
 import { makeDemo, makeStep } from '../src/demos/types.ts';
 import { localizedPath, pathWithoutLocale } from '../src/i18n/paths.ts';
@@ -339,4 +341,51 @@ entry:
   assert.ok(brokenEn.issues.some((issue) => issue.message.includes('has no terminator')));
 }
 
-console.log('IR parser, CFG layout & i18n: all assertions passed');
+// ---- Machine IR：两条目标线、管线接入与 MIR 演示 ----
+{
+  const ids = machineStages.map((stage) => stage.id);
+  assert.deepEqual(ids, ['isel', 'ssa', 'pre-ra', 'ra', 'post-ra', 'emit']);
+
+  for (const stage of machineStages) {
+    assert.ok(stage.shared.length > 0, `${stage.id} 应有共享 pass`);
+    assert.ok(stage.lanes['x86-64'].length > 0, `${stage.id} 应有 x86-64 lane`);
+    assert.ok(stage.lanes.aarch64.length > 0, `${stage.id} 应有 AArch64 lane`);
+  }
+
+  const byId = (id) => machineStages.find((stage) => stage.id === id);
+  assert.ok(byId('isel').lanes['x86-64'].some((item) => item.name === 'x86-isel' && item.label === 'X86DAGToDAGISel'));
+  assert.ok(byId('isel').lanes.aarch64.some((item) => item.name === 'aarch64-isel' && item.label === 'AArch64DAGToDAGISel'));
+  assert.ok(byId('ra').shared.some((item) => item.name === 'greedy' && item.page === 'regalloc'));
+  assert.ok(byId('pre-ra').shared.some((item) => item.name === 'phi-node-elimination' && item.page === 'phi-elim'));
+
+  const codegenStages = pipelineStages.filter((stage) => stage.level === 'codegen');
+  assert.ok(codegenStages.some((stage) => stage.id === 'codegen-isel'));
+  assert.ok(codegenStages.some((stage) => stage.id === 'codegen-ra'));
+  const machineNodes = codegenStages.flatMap((stage) => stage.passes).filter((item) => item.mir);
+  assert.ok(machineNodes.length > 40, '主图应接入完整的 Machine IR 阶段');
+  assert.ok(
+    machineNodes.every((item) => !item.targets || item.targets.every((t) => t === 'x86-64' || t === 'aarch64')),
+    'target 徽标只能是 x86-64 或 aarch64',
+  );
+
+  const isel = machineSnapshots.find((snapshot) => snapshot.id === 'isel');
+  assert.ok(isel.before.includes('define i32 @scale'));
+  assert.match(isel.targets['x86-64'], /LEA32r/);
+  assert.match(isel.targets.aarch64, /ADDWrs/);
+  assert.match(machineSnapshots.find((snapshot) => snapshot.id === 'ra').targets['x86-64'], /\$eax/);
+  assert.match(machineSnapshots.find((snapshot) => snapshot.id === 'ra').targets.aarch64, /\$w0/);
+
+  for (const id of ['isel', 'phi-elim', 'regalloc']) {
+    const zh = getDemo(id, 'zh');
+    const en = getDemo(id, 'en');
+    assert.ok(zh && en, `${id} 演示应存在`);
+    assert.equal(zh.format, 'mir', `${id} 应标记为 MIR，播放器不解析 CFG`);
+    assert.ok(zh.steps.length >= 2, `${id} 至少两步`);
+    assert.equal(zh.steps.length, en.steps.length, `${id} 中英文步骤数一致`);
+    assert.ok(zh.steps.every((step) => step.before.length > 0 && step.after.length > 0));
+    assert.match(zh.steps[0].title, /第 1 步/);
+    assert.match(en.steps[0].title, /^Step 1/);
+  }
+}
+
+console.log('IR parser, CFG layout, Machine IR & i18n: all assertions passed');

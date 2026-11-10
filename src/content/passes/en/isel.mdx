@@ -1,0 +1,146 @@
+---
+title: isel
+subtitle: "Instruction selection: IR to Machine IR"
+summary: "Lower target-independent LLVM IR into machine instructions with register classes. SelectionDAG legalises and matches DAG patterns; GlobalISel works on generic MIR. Either way, the question is the same: what does each IR instruction become on x86-64 and AArch64?"
+category: codegen
+difficulty: 3
+status: ready
+order: 20
+stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
+tags: ['SelectionDAG', 'GlobalISel', 'Legalization', 'MIR']
+demo: isel
+source: llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp
+updated: 2026-11-10
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+LLVM IR is target-independent: `add i32`, `load i32` and `getelementptr` describe semantics, not instructions, registers or addressing modes. Machine IR is the opposite: it has machine basic blocks (MBBs), virtual registers, register classes, target opcodes, and operands that only exist at the machine level, such as `implicit $eflags`.
+
+Instruction selection sits exactly on that boundary and does three jobs at once:
+
+- **Legalise**: split types or operations the target does not support. If a target has no `i128` add, it becomes two 64-bit adds plus a carry.
+- **Select**: map IR operations such as `add`, `mul` and `load` to target instructions such as `LEA32r`, `ADDWrs` and `MOV32rm`.
+- **Emit MIR**: give every value a virtual register and a register class, add implicit defs and uses, and write out `MachineInstr`s.
+
+Selection is not a lookup table. The same IR produces a different instruction count, register pressure and addressing mode on x86-64 and AArch64; reading the MIR is the most direct way to see what actually happened.
+
+## Algorithm
+
+LLVM has two instruction-selection paths. SelectionDAG is the default; GlobalISel is the newer path that works on MIR. Both end in Machine IR, but their intermediate representations differ.
+
+### SelectionDAG: one DAG per basic block
+
+`SelectionDAGISel::runOnMachineFunction` builds a DAG per basic block. Nodes are SDNodes such as `ISD::ADD`, `ISD::LOAD` and `ISD::MUL`; edges are data dependencies. The order is roughly:
+
+1. **Build**: `SelectionDAGBuilder` translates IR instructions into SDNodes. Types are still IR types (`i32`, `i64`, `ptr`).
+2. **Legalise types**: `DAGTypeLegalizer` follows the `LegalizeTypeAction` from `TargetLowering`. Typical actions are Promote (`i8` to `i32`), Expand (`i128` into two `i64`s), SoftenFloat and LibCall.
+3. **Legalise operations**: `DAGLegalize` handles opcodes the target lacks. No hardware divide becomes a libcall; a shift may become `and + shift`.
+4. **Combine**: `DAGCombiner` performs target-independent algebra, such as turning `x * 2` into `x << 1` or folding a load address.
+5. **Select**: the target's `X86DAGToDAGISel::Select` / `AArch64DAGToDAGISel::Select` matches TableGen patterns. `ComplexPattern` matches `base + index*scale + disp` into one memory operand.
+6. **Schedule and emit**: the DAG is scheduled into an instruction sequence and `InstrEmitter` writes `MachineInstr`s. Values are now virtual registers with register classes (`gr32`, `gpr64`, `fpr`).
+
+### GlobalISel: four steps on MIR
+
+GlobalISel does not select on a DAG. It treats MIR itself as the intermediate representation:
+
+```text
+IRTranslator      IR → generic MIR (G_LOAD, G_MUL…)
+Legalizer         legalise generic MIR operations and types
+RegBankSelect     choose a register bank for each virtual register (gpr / fpr)
+InstructionSelect generic MIR → target MIR (MOV32rm, ADDWrs…)
+```
+
+The advantage is that each step can be printed as MIR; the disadvantage is that coverage still trails SelectionDAG, and some target features or intrinsics fall back. The demo uses GlobalISel's instruction selection because it exposes the generic-to-target mapping most clearly; the final MIR shape is the same as the SelectionDAG path.
+
+### The same IR on two target lanes
+
+Start with the input. `scale` reads an `int` array element, multiplies by 3 and adds 1:
+
+```llvm
+define i32 @scale(ptr %p, i32 %i) {
+entry:
+  %idx = sext i32 %i to i64
+  %addr = getelementptr inbounds i32, ptr %p, i64 %idx
+  %v = load i32, ptr %addr, align 4
+  %mul = mul nsw i32 %v, 3
+  %add = add nsw i32 %mul, 1
+  ret i32 %add
+}
+```
+
+After selection on x86-64 (excerpt from `-stop-after=finalize-isel`):
+
+```text
+bb.0:
+  liveins: $rdi, $esi
+  %0:gr64 = COPY $rdi
+  %1:gr32 = COPY $esi
+  %2:gr64 = MOVSX64rr32 %1
+  %3:gr32 = MOV32rm %0, 4, %2, 0, _
+  %4:gr32 = LEA32r %3, 2, %3, 0, _
+  %5:gr32 = INC32r %4, implicit-def dead $eflags
+  $eax = COPY %5
+  RET64 $eax
+```
+
+After selection on AArch64:
+
+```text
+bb.0:
+  liveins: $x0, $w1
+  %0:gpr64 = COPY $x0
+  %1:gpr32 = COPY $w1
+  %2:gpr32 = LDRWroW %0, %1, 6
+  %3:gpr32 = ADDWrs %2, %2, 1
+  %4:gpr32 = ADDWri %3, 1, 0
+  $w0 = COPY %4
+  RET_ReallyLR implicit $w0
+```
+
+Both do the same thing with the address: fold it into the load. On x86, `MOV32rm %0, 4, %2, 0, _` reads as `base=%0, scale=4, index=%2, disp=0`, which is `p[i]`; on AArch64, `LDRWroW %0, %1, 6` sign-extends `w1` and shifts it left by 2, which is the same `getelementptr`.
+
+The difference is in “multiply by 3 and add 1”:
+
+- **x86** is a two-address machine. `LEA32r %3, 2, %3, 0, _` computes `3 * %3` as `base + index*scale` without touching `eflags`; `INC32r` adds one and explicitly writes `implicit-def dead $eflags`.
+- **AArch64** is a three-address machine. `ADDWrs %2, %2, 1` means `w2 + (w2 << 1)`, and `ADDWri` adds an immediate. There are no implicit flags and no COPY inserted to satisfy a two-address constraint.
+
+These are not “optimisation tricks”; they are target constraints that selection must satisfy. `%0:gr64` is virtual register 0 with register class `gr64`; `$rdi` is a physical register. The function is still SSA at this point; only types and operations have moved to the target.
+
+## Cost and pitfalls
+
+- **The DAG is per basic block.** Cross-block address reuse and constant propagation are already handled by IR passes; SelectionDAG cannot see a loop and does not do global scheduling. Very large blocks make legalisation and combining a compile-time hot spot.
+- **Legalisation produces surprising code.** `i128`, non-native floats, missing hardware divide and atomics can become libcalls or long instruction sequences. Read `-debug-only=isel` or `-print-after` before blaming selection.
+- **Pattern order matters.** Several patterns may match the same DAG; TableGen `AddedComplexity` and target `Select` code decide which wins. Changing one pattern can regress another.
+- **GlobalISel is not a drop-in replacement.** It needs legalizer and selector coverage; `-global-isel-abort=2` reports a fallback instead of silently using SelectionDAG. Real pipelines still send many combinations through SelectionDAG.
+- **`finalize-isel` is not optional.** It cleans up PHIs, `undef`, `IMPLICIT_DEF` and frame indices left by selection. Skipping it produces MIR the verifier rejects.
+- **MIR is not a stable API.** Virtual register numbers, block numbers and selection details change between versions; it is fine for teaching, not for cross-version assertions.
+
+## Where it sits in the pipeline
+
+`isel` is the gate between IR optimisation and machine optimisation. Before it sit `codegenprepare` and target pre-isel passes (for example x86's `atomic-expand` or AArch64's `aarch64-promote-const`); after it comes `finalize-isel`, then <I18nLink href="/passes/phi-elim/">phi-node-elimination</I18nLink>, two-address, coalescing, scheduling and <I18nLink href="/passes/regalloc/">register allocation</I18nLink>.
+
+Note that after `isel` there is still SSA, still virtual registers, and still no stack frame. It has only replaced target-independent instructions with machine instructions that carry register classes; resource assignment is still ahead.
+
+## Run it yourself
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=finalize-isel demo.ll -o x86.mir
+llc -mtriple=aarch64-linux-gnu -O2 -simplify-mir \
+  -stop-after=finalize-isel demo.ll -o arm.mir
+```
+
+Open both `.mir` files, find `liveins`, then `MOV32rm` / `LDRWroW`, then compare the multiply-by-3 region. Replace `demo.c` with a function that has an `if/else`, and a `PHI` will appear in the merge block — that is the input to the next page.
+
+To watch SelectionDAG selection, use an asserts build:
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -debug-only=isel demo.ll -o /dev/null 2>&1 | head
+```
+
+A release build has no `-debug-only`; use `-print-after=finalize-isel` to inspect the final MIR. Either way, finish with `-verify-machineinstrs`.

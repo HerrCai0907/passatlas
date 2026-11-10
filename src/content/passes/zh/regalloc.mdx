@@ -1,0 +1,177 @@
+---
+title: regalloc
+subtitle: 寄存器分配：虚拟寄存器 → 物理寄存器
+summary: 指令选择给每个值一个虚拟寄存器，CPU 只有固定数量的物理寄存器。greedy 按 spill weight 处理活跃区间，分配、拆分、驱逐或溢出；virtregrewriter 把决定写成物理寄存器，并插入 spill / reload。
+category: codegen
+difficulty: 3
+status: ready
+order: 22
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Live Interval', 'Greedy', 'Spill', 'Coalescing']
+demo: regalloc
+source: llvm/lib/CodeGen/RegAllocGreedy.cpp
+updated: 2026-11-10
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+指令选择之后，每个值都有自己的虚拟寄存器，数量没有上限；目标机器只有固定数量的物理寄存器。x86-64 通常有 14 个可分配的通用寄存器，AArch64 有 31 个。两个值的活跃区间一旦重叠，它们就不能共用同一个寄存器。
+
+寄存器分配要同时满足三件事：
+
+- **正确**：重叠的活跃区间不能拿到同一个寄存器；
+- **约束**：x86 的除法要求 `rax` / `rdx`，移位要求 `cl`，函数调用有固定的参数寄存器；AArch64 有 `x0–x7` 的参数约定和 `x16/x17` 的链接器暂存；
+- **不太差**：尽量减少 spill，尽量消掉 COPY，别让热循环里出现 load / store。
+
+这是一个图着色问题，NP-hard。LLVM 的默认分配器 `greedy` 不追求全局最优，而是用活跃区间、spill weight 和一组拆分/驱逐启发式，在编译时间和代码质量之间取平衡。
+
+## 算法
+
+### 第一步：活跃区间
+
+`LiveIntervals` 把每个虚拟寄存器展开成若干段 `[start, end)` 的活跃区间，slot index 按基本块布局编号。PHI 的入边、early-clobber 的定义、子寄存器（`sub_32`）都会影响区间形状。
+
+两个区间重叠，就构成一条 interference。分配器不需要显式的干涉图：`LiveRegMatrix` 在分配时按 slot index 查询“这个物理寄存器在这段区间里有没有被占用”。
+
+### 第二步：greedy 的优先级
+
+`RAGreedy::runOnMachineFunction` 把所有虚拟寄存器放进优先队列，优先级来自 **spill weight**：
+
+- 使用次数越多、循环深度越大，weight 越高，越应该拿到寄存器；
+- 和物理寄存器有 COPY 关系的值会得到 hint（例如参数 `$edi`、返回值 `$eax`），分配器会优先满足；
+- 一个区间如果已经很难分配，weight 会被调低，避免它拖累其它值。
+
+### 第三步：selectOrSplit
+
+对每个区间，`selectOrSplit` 按大致顺序尝试：
+
+```text
+1. tryAssign          有 hint 且寄存器空闲 → 直接分配
+2. tryRegionSplit     在干涉区域附近把区间拆成几段，让每段单独分配
+3. tryBlockSplit      按基本块边界拆
+4. tryLoopSplit       沿循环边界做全局拆分（可能插入 spill）
+5. tryEvict           驱逐一个邻居，把寄存器让给 weight 更高的区间
+6. spill              都不行 → 溢出到 %stack.N，插入 spill / reload
+```
+
+拆分不是免费的：每拆一次就多一个区间、多一次潜在的 COPY。`greedy` 会估算拆分的代价，只有在比直接 spill 更划算时才拆。
+
+### 第四步：coalescing 与 rewriter
+
+分配前，`register-coalescer` 已经尝试把 `COPY` 两端的虚拟寄存器合并；能合并的复制直接消失，不能合并的保留。分配后，`virtregrewriter` 做三件事：
+
+1. 把每个虚拟寄存器替换成 `greedy` 选定的物理寄存器；
+2. 删掉已经无意义的 COPY；
+3. 对溢出值插入 `MOV32mr` / `MOV32rm`（x86）或 `STRWui` / `LDRWui`（AArch64）。
+
+最后 `stack-slot-coloring` 会把生命周期不重叠的 spill slot 合并到同一个栈位置，减少栈帧大小。
+
+### 在 MIR 里看
+
+x86-64 的 `lea` 函数，分配前：
+
+```text
+bb.0:
+  liveins: $edi, $esi
+  %0:gr32 = COPY $edi
+  %1:gr32 = COPY $esi
+  %2:gr32 = LEA32r %0, 2, %1, 0, _
+  %3:gr32 = COPY %2
+  %4:gr32 = ADD32ri %3, 1
+  $eax = COPY %4
+  RET64 $eax
+```
+
+`register-coalescer` 先把 `%2` 和 `%3` 合并，去掉中间那条 COPY；`greedy` 再把 `%0` 分到 `$edi`、`%1` 分到 `$esi`、`%4` 分到 `$eax`。`%2` 在 `ADD` 之后死亡，可以复用 `$eax`。`virtregrewriter` 之后：
+
+```text
+bb.0:
+  liveins: $edi, $esi
+  $eax = LEA32r $edi, 2, $esi, 0, _
+  $eax = ADD32ri $eax, 1
+  RET64 $eax
+```
+
+AArch64 的同一段逻辑更短，因为它是三地址机器，不需要为两地址约束插入 COPY：
+
+```text
+bb.0:
+  liveins: $w0, $w1
+  %0:gpr32 = COPY $w0
+  %1:gpr32 = COPY $w1
+  %2:gpr32 = ADDWrr %0, %1
+  $w0 = COPY %2
+  RET_ReallyLR implicit $w0
+```
+
+分配后：
+
+```text
+bb.0:
+  liveins: $w0, $w1
+  $w0 = ADDWrr $w0, $w1
+  RET_ReallyLR implicit $w0
+```
+
+### 溢出长什么样
+
+当所有候选都失败，`greedy` 会给区间一个栈槽。MIR 里会出现 `%stack.N` 和显式的 load / store：
+
+```text
+%12:gr32 = MOV32ri 42
+MOV32mr %stack.0, 1, _, 0, _, %12:gr32   ; spill
+...
+%13:gr32 = MOV32rm %stack.0, 1, _, 0, _  ; reload
+```
+
+这不是“多了一条指令”这么简单：spill 会改变活跃区间、增加内存流量，还可能把热循环变成 load / store 密集的代码。`-stats` 里的 `spills` 和 `folded-spills` 是观察它的直接指标。
+
+## 代价与坑
+
+- **greedy 不是最优的。** 图着色是 NP-hard；greedy 的启发式在大多数函数上很好，但在极端压力下会做出比 basic 分配器更差的决定。`-regalloc=basic` 可以作为对照。
+- **coalescing 可能抬高压力。** 合并两个虚拟寄存器会消掉 COPY，但也可能把两条本来可以分开的活跃区间绑在一起。LLVM 的 coalescer 会做代价检查，但“消掉 COPY”和“减少 spill”并不总是同向。
+- **目标约束是硬约束。** x86 的 `idiv` 固定用 `rax` / `rdx`，`shl` 的计数固定用 `cl`；AArch64 的调用约定固定 `x0–x7`。这些位置会产生额外的 COPY 或 spill，不能靠“多给一个寄存器”解决。
+- **`-O0` 走另一条路。** `fast` 分配器不做 coalescing 和预分配调度，编译快，代码质量差；它和 `greedy` 的输出没有可比性。
+- **spill slot 不是免费的。** 栈帧变大、对齐要求变化、prologue / epilogue 的保存恢复都会受影响；`stack-slot-coloring` 只能合并生命周期不重叠的槽。
+- **MIR 里的物理寄存器名是 target 事实。** `$eax` 和 `$w0` 不是“随便选的”，它们同时受 ABI、指令约束和活跃区间影响；换 target 或换 `-mcpu`，分配结果会变。
+
+## 在管线里的位置
+
+`greedy` 在两地址改写、coalescing 和预分配调度之后，在 `virtregrewriter`、`stack-slot-coloring`、`machine-cp` 和 post-RA 调度之前：
+
+```text
+phi-node-elimination → twoaddressinstruction → register-coalescer
+  → machine-scheduler → greedy → virtregrewriter
+  → stack-slot-coloring → machine-cp → prolog-epilog
+```
+
+`-O0` 时 `addFastRegAlloc` 只跑 `phi-node-elimination`、`twoaddressinstruction` 和 `fast` 分配器，不跑 coalescing 和调度。想看 `greedy` 的决策，用 `-stop-after=greedy`；想看最终物理寄存器，用 `-stop-after=virtregrewriter`。
+
+## 自己跑一遍
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+# 分配决策之后，但 MIR 里还印虚拟寄存器
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=greedy demo.ll -o greedy.mir
+
+# virtregrewriter 之后，物理寄存器与 spill 都落地
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=virtregrewriter demo.ll -o rewritten.mir
+
+# 对照 AArch64：三地址、31 个 GPR
+llc -mtriple=aarch64-linux-gnu -O2 -simplify-mir \
+  -stop-after=virtregrewriter demo.ll -o rewritten-arm.mir
+```
+
+把 `demo.c` 写成一个在循环里累加的函数，再对比两个 `.mir` 的 `spill` 数量。加上 `-stats` 可以看到 `greedy` 的拆分与溢出次数；加上 `-verify-machineinstrs` 可以确认 rewrite 后的 MIR 仍然合法。
+
+强制换分配器做对照：
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -regalloc=basic \
+  -stop-after=virtregrewriter demo.ll -o basic.mir
+```

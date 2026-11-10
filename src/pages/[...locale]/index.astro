@@ -27,6 +27,7 @@ const documented = new Set(passes.map((pass) => passSlug(pass)));
 const plannedCount = pipelinePasses.filter(
   (item) => !documented.has(item.page ?? item.name),
 ).length;
+const machinePasses = passes.filter((pass) => pass.data.category === 'codegen').length;
 const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale);
 ---
 
@@ -56,8 +57,8 @@ const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale
             <dd>{String(categoryOrder.length).padStart(2, '0')}</dd>
           </div>
           <div>
-            <dt>{t(locale, 'home.stats.backend')}</dt>
-            <dd>00</dd>
+            <dt>{t(locale, 'home.stats.codegen')}</dt>
+            <dd>{String(machinePasses).padStart(2, '0')}</dd>
           </div>
         </dl>
       </div>

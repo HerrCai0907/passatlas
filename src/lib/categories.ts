@@ -56,11 +56,11 @@ export const categories: Record<CategoryId, Category> = {
     },
   },
   codegen: {
-    zh: '代码生成准备',
-    en: 'Codegen Prep',
+    zh: 'Machine IR',
+    en: 'Machine IR',
     description: {
-      zh: 'SelectionDAG 之前的规范化、合法化与指令选择辅助。',
-      en: 'Normalisation, legalisation and instruction-selection support before SelectionDAG.',
+      zh: '从指令选择到寄存器分配、栈帧与发射：IR 之后真正落到 x86-64 与 AArch64 的那一段。',
+      en: 'From instruction selection to register allocation, frame lowering and emission: the path from IR to real x86-64 and AArch64 instructions.',
     },
   },
 };

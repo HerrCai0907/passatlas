@@ -5,8 +5,11 @@ import { dceDemo } from './dce.ts';
 import { heroDemo } from './hero.ts';
 import { inlineFunctionDemo } from './inline-function.ts';
 import { instcombineDemo } from './instcombine.ts';
+import { iselDemo } from './isel.ts';
 import { mem2regDemo } from './mem2reg.ts';
 import { pgoInstrGenDemo } from './pgo-instr-gen.ts';
+import { phiElimDemo } from './phi-elim.ts';
+import { regallocDemo } from './regalloc.ts';
 import { sampleProfileInlineDemo } from './sample-profile-inline.ts';
 
 /**
@@ -18,8 +21,11 @@ export const demos: Record<string, Demo> = {
   hero: heroDemo,
   'inline-function': inlineFunctionDemo,
   instcombine: instcombineDemo,
+  isel: iselDemo,
   mem2reg: mem2regDemo,
   'pgo-instr-gen': pgoInstrGenDemo,
+  'phi-elim': phiElimDemo,
+  regalloc: regallocDemo,
   'sample-profile-inline': sampleProfileInlineDemo,
 };
 

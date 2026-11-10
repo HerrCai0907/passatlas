@@ -63,13 +63,15 @@ src/
     CFGCanvas.tsx       纯渲染层：节点 + SVG 连边，被 viewer 与播放器复用
     CFGLab.tsx          实验室：textarea + CFGViewer，实时解析
     ViewModeSwitch.tsx  「CFG | IR」切换控件
+    MachineTrack.astro  机器 IR 的 x86-64 / AArch64 两条目标线
   content/passes/zh/    每篇一个中文 .mdx（frontmatter 由 content.config.ts 校验）
   content/passes/en/    同一 id 的英文 .mdx
   demos/                分步演示数据：types.ts + 每个 pass 一个文件 + registry.ts
   lib/                  url() / passes.ts / categories / 站点常量
     ir/parse.ts         IR → 函数 / 基本块 / 边（纯函数，无依赖）
     ir/layout.ts        分层布局 + 回边识别（纯函数，输出坐标）
-  data/pipeline.ts      LLVM 默认管线（Module → CGSCC → Function → Loop → CodeGen）与待绘制节点
+  data/pipeline.ts      LLVM 默认管线（Module → CGSCC → Function → Loop → Machine IR）与待绘制节点
+  data/machine.ts       Machine IR 六阶段、target-specific pass lane 与 MIR 快照
   data/pass-registry.ts  LLVM 23.1.4 PassRegistry.def 的静态快照（完整注册表）
   styles/               tokens.css（设计令牌）· global.css（基础与 prose）
 ```
@@ -143,10 +145,14 @@ define i32 @f(i32 %x) {
 - `before` / `after` are **raw IR strings**; indentation is dedented automatically.
 - Do **not** hand-write diff marks. `makeStep()` computes an LCS line diff at build time and
   marks added / removed lines.
-- Keep each step focused on one change. 2–4 steps per pass, 5–16 lines per side.
+- Keep each step focused on one change. 2–4 steps per pass, 5–16 lines per side. Machine IR demos
+  may run to ~30 lines because each step needs its MBB/PHI context; still change one thing per step.
 - The `after` of step *n* should be the `before` of step *n + 1* — the reader may replay it.
 - Register it once in `src/demos/registry.ts` under the same id; `getDemo(id, locale)` picks the
   localized title and note.
+- **Machine IR demos** pass `{ format: 'mir' }` as the fifth argument of `makeDemo()`. MIR is not
+  LLVM IR: `StepPlayer` skips the CFG parser, fixes the text view, and shows a MIR-specific note.
+  Do not put `define`-based IR in a MIR demo or vice versa.
 - The fourth argument to `makeDemo` supplies English copy. It is indexed by step, so the number of
   translated steps must match the number of source steps. IR comments are shared by both locales —
   keep them language-neutral or in English.
@@ -185,8 +191,8 @@ updated: 2026-11-01
 - `##` headings are auto-numbered by CSS (01, 02, …). Do not type numbers into headings.
 - Keep the five sections, in that order. A missing section is a content bug, not a style choice.
 - Code fences: use ```llvm for IR, ```bash for commands, ```text for pseudo-code.
-- Every page ends with a runnable `opt` command. If you cannot verify it, say so in the text
-  rather than inventing flags.
+- Every IR pass page ends with a runnable `opt` command; Machine IR pages use `llc`. If you cannot
+  verify it, say so in the text rather than inventing flags.
 - Add the pass to `src/data/pipeline.ts` at the right IR level (Module / CGSCC / Function /
   Loop / CodeGen). The pipeline map links a node automatically when its `name` (or explicit
   `page`) matches the new content slug; nodes without a page stay grey. If the pass is not on the
@@ -200,6 +206,8 @@ updated: 2026-11-01
 - [ ] `npm run build` passes, page appears under `/passes/<id>/` and `/en/passes/<id>/`
 - [ ] local review server is running and the URLs are reported (see §11)
 - [ ] animation has ≥ 2 steps, each step's IR is valid-looking LLVM (opaque `ptr`, `phi`, …)
+- [ ] Machine IR pages set `format: 'mir'`, show real MIR (MBBs, virtual registers, register
+      classes), and end with `llc` commands instead of `opt`
 - [ ] frontmatter `demo` matches a registry key, and English step titles / notes exist
 - [ ] prev/next navigation works in both locales (automatic via `order`)
 - [ ] page renders at 390px, 768px and 1440px without horizontal scroll
@@ -216,10 +224,11 @@ not a per-page choice: `StepPlayer` and `CFGViewer` both use `ViewModeSwitch` an
 `defaultMode="cfg"`. If you add a new IR surface, wire the same switch and keep CFG as default.
 
 The one exception is `StepPlayer`: CFG mode draws a single function, so a demo whose before or
-after IR defines more than one function has no CFG mode. The player disables the CFG option (with
-an explanatory note) and stays in IR mode, because the graph would silently drop every function
-but the first. `CFGViewer` keeps its per-function tabs and still supports multi-function input.
-Use `canRenderCFG()` from `src/lib/ir/parse.ts` for this check.
+after IR defines more than one function has no CFG mode. A demo with `format: 'mir'` has no CFG
+mode either: MIR is not LLVM IR and must not be fed to the CFG parser. In both cases the player
+disables the CFG option (with an explanatory note) and stays in IR mode, because the graph would
+silently drop every function but the first. `CFGViewer` keeps its per-function tabs and still
+supports multi-function input. Use `canRenderCFG()` from `src/lib/ir/parse.ts` for this check.
 
 - `src/lib/ir/parse.ts`: functions → blocks → instructions → edges (`br`, `br i1`, `switch`,
   `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via `issues`.

@@ -1,0 +1,146 @@
+---
+title: isel
+subtitle: 指令选择：IR 到 Machine IR
+summary: 把 target-independent 的 LLVM IR 降到带寄存器类的机器指令。SelectionDAG 走 DAG 合法化与 pattern 匹配，GlobalISel 走泛化 MIR；两条路都要回答同一个问题：每条 IR 指令在 x86-64 和 AArch64 上到底长什么样。
+category: codegen
+difficulty: 3
+status: ready
+order: 20
+stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
+tags: ['SelectionDAG', 'GlobalISel', 'Legalization', 'MIR']
+demo: isel
+source: llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp
+updated: 2026-11-10
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+LLVM IR 是 target-independent 的：`add i32`、`load i32`、`getelementptr` 只描述语义，不承诺用哪条指令、哪个寄存器、什么寻址方式。Machine IR 则相反：它有机器基本块（MBB）、虚拟寄存器、寄存器类、target opcode，以及 `implicit $eflags` 这类只在机器层存在的操作数。
+
+指令选择就站在这条分界线上。它必须同时做三件事：
+
+- **合法化**：目标不直接支持的类型或操作要拆开。例如某些目标没有 `i128` 加法，就拆成两条 64 位加法加进位；
+- **选择**：把 `add`、`mul`、`load` 这类 IR 操作映射成 `LEA32r`、`ADDWrs`、`MOV32rm` 这类 target 指令；
+- **落成 MIR**：给每个值一个虚拟寄存器和寄存器类，给每条指令补上隐式定义/使用，写出 `MachineInstr`。
+
+“选择”不是一个查表函数。同一段 IR 在 x86-64 和 AArch64 上会得到不同的指令数、不同的寄存器压力和不同的寻址方式；读 MIR 是检查它到底做了什么的最直接办法。
+
+## 算法
+
+LLVM 有两条指令选择路径。默认是 SelectionDAG；GlobalISel 是较新的、在 MIR 上工作的路径。两者最终都产出 Machine IR，但中间表示不同。
+
+### SelectionDAG：每个基本块一张 DAG
+
+`SelectionDAGISel::runOnMachineFunction` 按基本块构造 DAG，节点是 `ISD::ADD`、`ISD::LOAD`、`ISD::MUL` 这样的 SDNode，边是数据依赖。之后的顺序大致是：
+
+1. **Build**：`SelectionDAGBuilder` 把 IR 指令翻译成 SDNode。此时类型还是 IR 类型（`i32`、`i64`、`ptr`）。
+2. **Legalize types**：`DAGTypeLegalizer` 按 `TargetLowering` 的 `LegalizeTypeAction` 处理。常见动作是 Promote（`i8` 提升到 `i32`）、Expand（`i128` 拆成两个 `i64`）、SoftenFloat（软浮点）、LibCall（调用运行时函数）。
+3. **Legalize operations**：`DAGLegalize` 处理目标没有的 opcode，例如没有硬件除法就换成 libcall，或者把 `shift` 变成 `and + shift`。
+4. **Combine**：`DAGCombiner` 做目标无关的代数化简，例如 `x * 2` 变成 `x << 1`、`load` 的地址折叠。
+5. **Select**：target 的 `X86DAGToDAGISel::Select` / `AArch64DAGToDAGISel::Select` 按 TableGen 生成的 pattern 匹配。`ComplexPattern` 负责把 `base + index*scale + disp` 匹成一条 memory operand。
+6. **Schedule & emit**：DAG 被调度成指令序列，`InstrEmitter` 写出 `MachineInstr`。这时值已经是虚拟寄存器，且带寄存器类（`gr32`、`gpr64`、`fpr`）。
+
+### GlobalISel：在 MIR 上分四步
+
+GlobalISel 不在 DAG 上做选择，而是把 MIR 本身当作中间表示：
+
+```text
+IRTranslator     IR → 泛化 MIR（G_LOAD、G_MUL…）
+Legalizer        泛化 MIR 合法化（G_* 操作与类型）
+RegBankSelect    给每个虚拟寄存器选寄存器组（gpr / fpr）
+InstructionSelect 泛化 MIR → target MIR（MOV32rm、ADDWrs…）
+```
+
+这四步的好处是每一步都能单独打印 MIR，坏处是覆盖范围仍不如 SelectionDAG，某些 target feature 或 intrinsic 会触发 fallback。演示用的是 GlobalISel 的指令选择，因为它把“泛化指令 → 目标指令”的映射暴露得最清楚；SelectionDAG 的最终 MIR 形态是一样的。
+
+### 同一段 IR，两条目标线
+
+先看输入。`scale` 读一个 `int` 数组元素，乘 3 再加 1：
+
+```llvm
+define i32 @scale(ptr %p, i32 %i) {
+entry:
+  %idx = sext i32 %i to i64
+  %addr = getelementptr inbounds i32, ptr %p, i64 %idx
+  %v = load i32, ptr %addr, align 4
+  %mul = mul nsw i32 %v, 3
+  %add = add nsw i32 %mul, 1
+  ret i32 %add
+}
+```
+
+x86-64 选择后（节选自 `-stop-after=finalize-isel`）：
+
+```text
+bb.0:
+  liveins: $rdi, $esi
+  %0:gr64 = COPY $rdi
+  %1:gr32 = COPY $esi
+  %2:gr64 = MOVSX64rr32 %1
+  %3:gr32 = MOV32rm %0, 4, %2, 0, _
+  %4:gr32 = LEA32r %3, 2, %3, 0, _
+  %5:gr32 = INC32r %4, implicit-def dead $eflags
+  $eax = COPY %5
+  RET64 $eax
+```
+
+AArch64 选择后：
+
+```text
+bb.0:
+  liveins: $x0, $w1
+  %0:gpr64 = COPY $x0
+  %1:gpr32 = COPY $w1
+  %2:gpr32 = LDRWroW %0, %1, 6
+  %3:gpr32 = ADDWrs %2, %2, 1
+  %4:gpr32 = ADDWri %3, 1, 0
+  $w0 = COPY %4
+  RET_ReallyLR implicit $w0
+```
+
+两边都做了同一件事：把地址计算折进 load。x86 的 `MOV32rm %0, 4, %2, 0, _` 读作 `base=%0, scale=4, index=%2, disp=0`，对应 `p[i]`；AArch64 的 `LDRWroW %0, %1, 6` 用 `w1` 做符号扩展并左移 2 位，对应同一条 `getelementptr`。
+
+差别在“乘 3 加 1”：
+
+- **x86** 是两地址机器。`LEA32r %3, 2, %3, 0, _` 用 `base + index*scale` 算 `3 * %3`，不需要 `eflags`；`INC32r` 再补 1，并显式写出 `implicit-def dead $eflags`。
+- **AArch64** 是三地址机器。`ADDWrs %2, %2, 1` 表示 `w2 + (w2 << 1)`，`ADDWri` 加立即数；没有隐式 flags，也没有为了满足两地址约束而插入的 COPY。
+
+这些不是“优化技巧”，而是指令选择必须兑现的目标约束。MIR 里的 `%0:gr64` 是虚拟寄存器 0、寄存器类 `gr64`；`$rdi` 是物理寄存器。到这个阶段函数仍然是 SSA，只是类型和操作已经落到 target 上。
+
+## 代价与坑
+
+- **DAG 是基本块级的。** 跨基本块的地址复用、常量传播已经由 IR pass 做过；SelectionDAG 看不到循环，也不做全局调度。基本块特别大时，DAG 的合法化和 combine 会成为编译时间热点。
+- **合法化会生成意料之外的代码。** `i128`、非原生浮点、没有硬件除法、原子操作，都可能变成 libcall 或一长串展开指令。看 MIR 之前先看 `-debug-only=isel` 或 `-print-after`，否则容易把合法化产物误认为选择错误。
+- **pattern 是有顺序的。** 同一个 DAG 可能匹配多条 pattern，TableGen 的 `AddedComplexity` 和 target 的 `Select` 代码决定谁先命中；改一条 pattern 可能让另一段代码退化。
+- **GlobalISel 不是 Drop-in Replacement。** 它需要 target 的 legalizer/selector 覆盖，`-global-isel-abort=2` 会在 fallback 时直接报错。生产管线里仍有大量组合走 SelectionDAG。
+- **`finalize-isel` 不能省。** 它处理 PHI、`undef`、`IMPLICIT_DEF`、frame index 等选择阶段留下的尾巴；跳过它会得到 verifier 不接受的 MIR。
+- **MIR 不是稳定 API。** 虚拟寄存器编号、基本块编号和指令选择细节都随版本变化；拿它做教学可以，拿它做跨版本断言不行。
+
+## 在管线里的位置
+
+`isel` 是 IR 优化和机器优化之间的门。它前面是 `codegenprepare` 以及 target 的 pre-isel pass（例如 x86 的 `atomic-expand`、AArch64 的 `aarch64-promote-const`）；它后面紧接 `finalize-isel`，然后才进入 <I18nLink href="/passes/phi-elim/">phi-node-elimination</I18nLink>、two-address、coalescing、调度和 <I18nLink href="/passes/regalloc/">regalloc</I18nLink>。
+
+要注意：`isel` 之后仍然有 SSA，仍然有虚拟寄存器，仍然没有栈帧。它只是把“目标无关的指令”换成了“带寄存器类的机器指令”；真正的资源分配还在后面。
+
+## 自己跑一遍
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=finalize-isel demo.ll -o x86.mir
+llc -mtriple=aarch64-linux-gnu -O2 -simplify-mir \
+  -stop-after=finalize-isel demo.ll -o arm.mir
+```
+
+打开两个 `.mir`，先找 `liveins`，再找 `MOV32rm` / `LDRWroW`，最后对比乘 3 那一段。把 `demo.c` 换成一个带 `if/else` 的函数，你会看到 `PHI` 出现在 merge 块，这就是下一页的输入。
+
+想看 SelectionDAG 的选择过程，需要 asserts build：
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -debug-only=isel demo.ll -o /dev/null 2>&1 | head
+```
+
+release build 没有 `-debug-only`，用 `-print-after=finalize-isel` 看最终 MIR 即可。无论哪条路径，最后都用 `-verify-machineinstrs` 过一遍。

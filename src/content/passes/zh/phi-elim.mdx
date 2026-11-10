@@ -1,0 +1,166 @@
+---
+title: phi-elim
+subtitle: SSA 拆除：φ 变成 COPY
+summary: PHI 是 SSA 的汇合点，不是机器指令。phi-node-elimination 把每个 φ 改写成前驱末尾的 COPY，必要时拆开 critical edge；完成后函数不再是 SSA，寄存器分配才真正开始。
+category: codegen
+difficulty: 2
+status: ready
+order: 21
+stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
+tags: ['SSA', 'PHI', 'Critical Edge', 'MIR']
+demo: phi-elim
+source: llvm/lib/CodeGen/PHIElimination.cpp
+updated: 2026-11-10
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+指令选择之后，MIR 还是 SSA：每个虚拟寄存器只定义一次，控制流汇合处用 `PHI` 表示“从哪条边来，就取哪个值”。
+
+```text
+bb.3.merge:
+  %2:gpr32 = PHI %0:gpr32, %bb.1.then, %1:gpr32, %bb.2.else
+  $w0 = COPY %2:gpr32
+```
+
+`PHI` 是一个伪指令：它没有机器编码，也不对应任何一条 CPU 指令。AArch64 和 x86-64 都没有“按前驱选值”的指令。寄存器分配、两地址改写和 coalescing 面对的必须是真实的 COPY 和数据流，而不是一个悬浮在基本块开头的 φ。
+
+所以这一步的目标很明确：**把 φ 的“并行赋值”语义落到每条入边的前驱里，然后删掉 φ。** 完成后 `%2` 可能在多个基本块里各定义一次——SSA 形式结束。
+
+## 算法
+
+`PHIElimination::runOnMachineFunction` 分两遍：先找需要拆的 critical edge，再逐个降低 PHI。
+
+### 第一遍：critical edge 要不要拆
+
+一条边 `P → B` 是 **critical edge**，当且仅当：
+
+- `P` 有多条出边（不止一个后继）；
+- `B` 有多个前驱。
+
+如果直接把 `COPY` 插在 `P` 的末尾，它会同时作用于 `P` 的所有出边。对于 `B` 之外的其它后继，这是一次多余的写；更糟的是，它可能把某个值一直延长到另一条路径上，增加寄存器压力甚至改变语义。
+
+标准的做法是拆边：新建一个只含跳转的基本块 `C`，把 `P → B` 改成 `P → C → B`，再把复制放进 `C`。
+
+```text
+before:  P --(critical)--> B
+after:   P --> C --> B
+         C: COPY ...
+```
+
+LLVM 不会无条件拆所有 critical edge。`SplitPHIEdges` 只在复制真的可能和别的路径冲突、或者这是循环出口时拆；`-phi-elim-split-all-critical-edges=1` 可以强制拆所有边，主要用于测试。循环回边默认不拆——把一个小块塞进循环里通常会破坏布局。
+
+### 第二遍：逐个降低 PHI
+
+对 `B` 开头的每个 PHI：
+
+1. 记下目的虚拟寄存器 `D`；
+2. 对每个入边 `(src, P)`，在 `P` 的终结指令之前插入 `D = COPY src`；
+3. 如果入边是 `undef`，插入 `IMPLICIT_DEF D`，而不是一条读未定义值的 COPY；
+4. 所有入边处理完后，删除 PHI。
+
+多个 PHI 的复制在语义上是并行的；LLVM 先为每个 φ 建好目的寄存器，再逐条插入 COPY，之后的 two-address 和 coalescer 会消掉大部分复制，消不掉的才留到寄存器分配。
+
+### 在 MIR 里看
+
+AArch64 的 `pick`：`else` 有两条出边，`merge` 有两个前驱，所以 `else → merge` 是 critical edge。
+
+拆边后：
+
+```text
+bb.2.else:
+  %1:gpr32 = MOVi32imm 2
+  CBNZW $w1, %bb.5.crit
+  B %bb.4.other
+...
+bb.5.crit:
+  successors: %bb.3.merge
+  B %bb.3.merge
+```
+
+降低 PHI 后：
+
+```text
+bb.1.then:
+  %0:gpr32 = MOVi32imm 1
+  %2:gpr32 = COPY %0:gpr32
+  B %bb.3.merge
+...
+bb.5.crit:
+  %2:gpr32 = COPY %1:gpr32
+  B %bb.3.merge
+bb.3.merge:
+  $w0 = COPY %2:gpr32
+  RET_ReallyLR implicit $w0
+```
+
+`%2` 在一个基本块里定义一次、在另一个基本块里也定义一次；`bb.3.merge` 不再有 φ。x86-64 的形态完全对应，只是指令换成 `TEST32rr` / `JCC_1` / `MOV32ri`：
+
+```text
+bb.2.else:
+  %1:gr32 = MOV32ri 2
+  TEST32rr $esi, $esi, implicit-def $eflags
+  JCC_1 %bb.5.crit, 4, implicit $eflags
+  JMP_1 %bb.4.other
+...
+bb.5.crit:
+  %2:gr32 = COPY %1:gr32
+  JMP_1 %bb.3.merge
+```
+
+## 代价与坑
+
+- **拆边会增加基本块。** 每个 critical edge 多一个只含跳转的块，可能伤害 I-cache 和分支预测；所以 LLVM 只在必要时拆。
+- **COPY 不一定消失。** coalescer 会尝试把 `%2` 和 `%0` / `%1` 合并，但两个前驱同时定义 `%2` 时，至少有一边可能留下复制；寄存器压力高时还会变成 spill。
+- **循环回边默认不拆。** 这是布局考虑，不是遗漏。强制拆所有边（`-phi-elim-split-all-critical-edges=1`）只适合测试和调试。
+- **调试信息和 live interval 要跟着改。** PHI 的 debug location 不能原样复制到前驱；LLVM 会删掉复制上的 location，避免调试器把值归到错误的行。
+- **它必须和 LiveVariables / LiveIntervals 保持一致。** 这也是 `phi-node-elimination` 在优化管线里依赖 `live-vars`、`machine-loop-info` 等分析的原因；单独跑这个 pass 时，MIR 里要有 `tracksRegLiveness: true`。
+- **verifier 会抓错。** 少更新一条 PHI 入边、把 COPY 插在终结指令之后，都会在 `-verify-machineinstrs` 下暴露。
+
+## 在管线里的位置
+
+`phi-node-elimination` 在机器级 SSA 化简之后、两地址改写和 coalescing 之前：
+
+```text
+isel → finalize-isel → machinelicm / machine-cse / peephole-opt
+     → phi-node-elimination → twoaddressinstruction
+     → register-coalescer → machine-scheduler → greedy
+```
+
+在 `TargetPassConfig::addOptimizedRegAlloc` 里，它排在 `LiveVariables` 和 `MachineLoopInfo` 之后；快速寄存器分配路径（`-O0`）也会跑它，只是不跑 coalescing 和预分配调度。拆掉 SSA 之后，MIR 才允许同一个虚拟寄存器在多个位置定义，后续 pass 也才能把它当作普通的活跃区间来处理。
+
+## 自己跑一遍
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+# AArch64：看 PHI 被 COPY 取代
+llc -mtriple=aarch64-linux-gnu -O2 -simplify-mir \
+  -stop-after=phi-node-elimination demo.ll -o phi-arm.mir
+
+# x86-64：同一条边，不同的指令
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=phi-node-elimination demo.ll -o phi-x86.mir
+```
+
+`demo.c` 要有一个带 `if/else` 的返回值，例如：
+
+```c
+int pick(int c, int d) {
+  if (c) return 1;
+  if (d) return 2;
+  return 0;
+}
+```
+
+想强制拆所有 critical edge，再加 `-phi-elim-split-all-critical-edges=1`。也可以直接拿 MIR 重放：
+
+```bash
+llc -mtriple=aarch64-linux-gnu -run-pass=phi-node-elimination phi-arm.mir -o -
+llc -mtriple=aarch64-linux-gnu -verify-machineinstrs \
+  -run-pass=phi-node-elimination phi-arm.mir -o /dev/null
+```
+
+第二阶段的两地址改写和 coalescing 如何继续清理这些 COPY，见 <I18nLink href="/passes/regalloc/">regalloc</I18nLink>。

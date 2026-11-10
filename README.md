@@ -208,14 +208,26 @@ npx serve dist   # 或任意静态服务器，访问 /passatlas/
 
 ## 管线图
 
-图鉴目录底部是一张按 LLVM 新版 PassManager 的 IR 层级组织的管线图：Module → CGSCC →
-Function → Loop，最后切到 Machine IR。主图覆盖默认优化管线的主干（100+ 个节点，带 `*` 的
-pass 只在特定优化级别 / PGO / target 下启用）；已经写好的 pass 是彩色链接，点进去就是对应
-页面，还没写的节点是灰色虚线。
+图鉴目录里的管线图按 LLVM 新版 PassManager 的 IR 层级组织：Module → CGSCC →
+Function → Loop，最后切到 Machine IR。主图覆盖默认优化管线的主干（带 `*` 的 pass 只在
+特定优化级别 / PGO 或 target 下启用）；已经写好的 pass 是彩色链接，点进去就是对应页面，
+还没写的节点是灰色虚线。
 
-主图下方还有一个默认折叠的完整注册表：LLVM 23.1.4 的 `PassRegistry.def` 里 367 个
-pass 注册项，按 Module / CGSCC / Function / Loop / Loop nest 分组。主图数据在
-[`src/data/pipeline.ts`](src/data/pipeline.ts)，注册表快照在
+代码生成没有被压成一个「黑盒」阶段，而是拆成指令选择、机器级 SSA 化简、拆 SSA 与预分配
+调度、寄存器分配、栈帧与后分配优化、MC 发射六段，并把 x86-64 与 AArch64 的 target-specific
+pass 用 `x86` / `arm64` 徽标标出。地图下方还有两条目标线的并排视图：同一段 IR 在两条线上
+的 MIR 落点、每个阶段由 `X86PassConfig` / `AArch64PassConfig` 插入的 pass，以及分配前后的
+物理寄存器对比。已收录的三篇机器级页面是：
+
+- [`/passes/isel/`](src/content/passes/zh/isel.mdx)：IR → Machine IR，SelectionDAG 与 GlobalISel
+- [`/passes/phi-elim/`](src/content/passes/zh/phi-elim.mdx)：φ 变 COPY、critical edge 拆分
+- [`/passes/regalloc/`](src/content/passes/zh/regalloc.mdx)：greedy、coalescing、spill
+
+Machine IR 阶段的数据在 [`src/data/machine.ts`](src/data/machine.ts)，主图在
+[`src/data/pipeline.ts`](src/data/pipeline.ts) 里由它生成；两条目标线的视图是
+[`src/components/MachineTrack.astro`](src/components/MachineTrack.astro)。主图下方还有一个
+默认折叠的完整注册表：LLVM 23.1.4 的 `PassRegistry.def` 里 367 个 pass 注册项，按
+Module / CGSCC / Function / Loop / Loop nest 分组。注册表快照在
 [`src/data/pass-registry.ts`](src/data/pass-registry.ts)。节点名与
 `src/content/passes/<locale>/` 里的 slug 相同就会自动点亮，不需要第二份清单。想加速某一个，
 直接提 PR。

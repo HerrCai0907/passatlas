@@ -1,4 +1,5 @@
 import type { Locale } from '../i18n/config';
+import { machineStages, type MachineTargetId } from './machine.ts';
 
 /**
  * LLVM 管线的层级。新版 pass manager 的 IR 层级是
@@ -28,6 +29,10 @@ export interface PipelinePass {
   repeat?: boolean;
   /** 只在特定优化级别、PGO 或 target 条件下启用 */
   conditional?: boolean;
+  /** 只属于某个目标后端；主图用徽标标出，避免把 x86 的 pass 当成跨目标事实 */
+  targets?: MachineTargetId[];
+  /** 该节点在 Machine IR 上运行（而不是 LLVM IR） */
+  mir?: boolean;
 }
 
 export interface PipelineStage {
@@ -251,22 +256,46 @@ export const pipelineStages: PipelineStage[] = [
     ),
   },
   {
-    id: 'codegen',
+    id: 'codegen-ir',
     level: 'codegen',
-    manager: 'Legacy PassManager · Machine IR',
-    entry: { zh: 'IR → Machine IR', en: 'IR → Machine IR' },
-    title: { zh: '代码生成', en: 'Code generation' },
+    manager: 'FunctionPassManager · CodeGen',
+    entry: { zh: 'IR 优化 → 代码生成', en: 'IR optimisation → code generation' },
+    title: { zh: '代码生成准备', en: 'Codegen preparation' },
     note: {
-      zh: 'IR 优化到此为止：CodeGenPrepare 之后由 SelectionDAG 负责指令选择，再进入 Machine IR 的调度与寄存器分配。',
-      en: 'IR optimisation ends here: after CodeGenPrepare, SelectionDAG selects instructions, then machine passes schedule and allocate registers.',
+      zh: '进入后端之前还有一层 IR 级准备：CodeGenPrepare 把地址计算和比较搬到使用点，原子操作、memcmp 和 reduction 之类在目标上没有原生指令的运算在这里展开。',
+      en: 'One last IR-level layer before the backend: CodeGenPrepare sinks address computation and compares to their uses, while atomics, memcmp and reductions without a native target instruction are expanded here.',
     },
     passes: list(
       'codegenprepare',
-      'isel',
-      'machine-scheduler',
-      'regalloc',
+      'atomic-expand',
+      'expand-memcmp',
+      'expand-reductions',
+      'stack-protector',
     ),
   },
+  ...machineStages.map((stage, index) => ({
+    id: `codegen-${stage.id}`,
+    level: 'codegen' as const,
+    manager: stage.manager,
+    ...(index === 0
+      ? { entry: { zh: 'IR → Machine IR', en: 'IR → Machine IR' } }
+      : {}),
+    title: stage.title,
+    note: stage.note,
+    passes: [
+      ...stage.shared.map((item) => ({ ...item, mir: true })),
+      ...stage.lanes['x86-64'].map((item) => ({
+        ...item,
+        mir: true,
+        targets: ['x86-64' as const],
+      })),
+      ...stage.lanes.aarch64.map((item) => ({
+        ...item,
+        mir: true,
+        targets: ['aarch64' as const],
+      })),
+    ],
+  })),
 ];
 
 /** 图上所有节点，供首页统计「还有多少篇没画」。 */

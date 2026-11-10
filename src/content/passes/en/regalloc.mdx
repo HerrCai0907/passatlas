@@ -1,0 +1,177 @@
+---
+title: regalloc
+subtitle: "Register allocation: virtual to physical registers"
+summary: Instruction selection gives every value a virtual register; the CPU has a fixed number of physical registers. greedy handles live intervals by spill weight, assigning, splitting, evicting or spilling; virtregrewriter materialises the decisions and inserts spill / reload code.
+category: codegen
+difficulty: 3
+status: ready
+order: 22
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Live Interval', 'Greedy', 'Spill', 'Coalescing']
+demo: regalloc
+source: llvm/lib/CodeGen/RegAllocGreedy.cpp
+updated: 2026-11-10
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+After instruction selection every value has its own virtual register, with no upper bound; the target has a fixed number of physical registers. x86-64 usually has 14 allocatable general-purpose registers, AArch64 has 31. As soon as two live ranges overlap, they cannot share one register.
+
+Register allocation has to satisfy three things at once:
+
+- **Correctness**: overlapping live ranges must not receive the same register.
+- **Constraints**: x86 division needs `rax` / `rdx`, shifts need `cl`, calls have fixed argument registers; AArch64 has the `x0–x7` argument convention and linker scratch `x16/x17`.
+- **Quality**: avoid spills, remove COPYs, and keep load / store traffic out of hot loops.
+
+This is graph colouring, and graph colouring is NP-hard. LLVM's default `greedy` allocator does not look for the global optimum; it uses live intervals, spill weights and a set of split/evict heuristics to trade compile time against code quality.
+
+## Algorithm
+
+### Step one: live intervals
+
+`LiveIntervals` expands each virtual register into segments `[start, end)` over slot indices numbered by block layout. PHI incoming edges, early-clobber defs and sub-registers (`sub_32`) all affect the shape.
+
+Two overlapping intervals interfere. The allocator does not need an explicit interference graph: `LiveRegMatrix` answers “is this physical register occupied over this range?” by slot index while assigning.
+
+### Step two: greedy priorities
+
+`RAGreedy::runOnMachineFunction` puts every virtual register in a priority queue. Priority comes from **spill weight**:
+
+- more uses and deeper loops mean a higher weight, so the value is more likely to get a register;
+- values with a COPY to or from a physical register get a hint (an argument `$edi`, a return value `$eax`) and are assigned first when possible;
+- an interval that is already hard to place has its weight reduced so it does not drag down everything else.
+
+### Step three: selectOrSplit
+
+For each interval, `selectOrSplit` tries roughly this order:
+
+```text
+1. tryAssign          hint available and register free → assign
+2. tryRegionSplit     split around the interference region, allocate each piece
+3. tryBlockSplit      split at basic-block boundaries
+4. tryLoopSplit       global split along loop boundaries (may insert spills)
+5. tryEvict           evict a neighbour and give the register to a hotter interval
+6. spill              nothing works → spill to %stack.N with spill / reload code
+```
+
+Splitting is not free: every split creates another interval and possibly another COPY. `greedy` estimates the cost and only splits when it beats a direct spill.
+
+### Step four: coalescing and the rewriter
+
+Before allocation, `register-coalescer` tries to join the virtual registers on both sides of a `COPY`; copies that can merge disappear, the rest stay. After allocation, `virtregrewriter` does three things:
+
+1. replace every virtual register with the physical register chosen by `greedy`;
+2. delete COPYs that no longer mean anything;
+3. insert `MOV32mr` / `MOV32rm` (x86) or `STRWui` / `LDRWui` (AArch64) for spilled values.
+
+Finally `stack-slot-coloring` merges spill slots whose live ranges do not overlap, reducing frame size.
+
+### Reading it in MIR
+
+The x86-64 `lea` function before allocation:
+
+```text
+bb.0:
+  liveins: $edi, $esi
+  %0:gr32 = COPY $edi
+  %1:gr32 = COPY $esi
+  %2:gr32 = LEA32r %0, 2, %1, 0, _
+  %3:gr32 = COPY %2
+  %4:gr32 = ADD32ri %3, 1
+  $eax = COPY %4
+  RET64 $eax
+```
+
+`register-coalescer` first merges `%2` and `%3`, removing the middle COPY; `greedy` then assigns `%0` to `$edi`, `%1` to `$esi` and `%4` to `$eax`. `%2` dies after the `ADD`, so it can reuse `$eax`. After `virtregrewriter`:
+
+```text
+bb.0:
+  liveins: $edi, $esi
+  $eax = LEA32r $edi, 2, $esi, 0, _
+  $eax = ADD32ri $eax, 1
+  RET64 $eax
+```
+
+The same logic is shorter on AArch64 because it is a three-address machine and needs no COPY for a two-address constraint:
+
+```text
+bb.0:
+  liveins: $w0, $w1
+  %0:gpr32 = COPY $w0
+  %1:gpr32 = COPY $w1
+  %2:gpr32 = ADDWrr %0, %1
+  $w0 = COPY %2
+  RET_ReallyLR implicit $w0
+```
+
+After allocation:
+
+```text
+bb.0:
+  liveins: $w0, $w1
+  $w0 = ADDWrr $w0, $w1
+  RET_ReallyLR implicit $w0
+```
+
+### What a spill looks like
+
+When every candidate fails, `greedy` gives the interval a stack slot. MIR then contains `%stack.N` and explicit load / store instructions:
+
+```text
+%12:gr32 = MOV32ri 42
+MOV32mr %stack.0, 1, _, 0, _, %12:gr32   ; spill
+...
+%13:gr32 = MOV32rm %stack.0, 1, _, 0, _  ; reload
+```
+
+This is more than “one extra instruction”: a spill changes live ranges, adds memory traffic, and can turn a hot loop into load / store code. `spills` and `folded-spills` in `-stats` are the direct indicators.
+
+## Cost and pitfalls
+
+- **greedy is not optimal.** Graph colouring is NP-hard; greedy's heuristics are good on most functions but can lose to the basic allocator under extreme pressure. `-regalloc=basic` is a useful comparison.
+- **Coalescing can raise pressure.** Joining two virtual registers removes a COPY but may tie two live ranges together that could otherwise be separated. LLVM's coalescer checks the cost, but “remove a COPY” and “reduce spills” do not always point the same way.
+- **Target constraints are hard.** x86 `idiv` is fixed to `rax` / `rdx`, `shl` counts in `cl`; AArch64 calls are fixed to `x0–x7`. These positions create extra COPYs or spills that no amount of “one more register” can fix.
+- **`-O0` takes another path.** The `fast` allocator skips coalescing and pre-RA scheduling: fast compilation, worse code. Its output is not comparable to `greedy`.
+- **Spill slots are not free.** Frame size, alignment, and prologue / epilogue saves all change; `stack-slot-coloring` only merges slots whose live ranges do not overlap.
+- **Physical register names in MIR are target facts.** `$eax` and `$w0` are not arbitrary: ABI, instruction constraints and live ranges all decide them. A different target or `-mcpu` changes the result.
+
+## Where it sits in the pipeline
+
+`greedy` runs after two-address rewriting, coalescing and pre-RA scheduling, and before `virtregrewriter`, `stack-slot-coloring`, `machine-cp` and post-RA scheduling:
+
+```text
+phi-node-elimination → twoaddressinstruction → register-coalescer
+  → machine-scheduler → greedy → virtregrewriter
+  → stack-slot-coloring → machine-cp → prolog-epilog
+```
+
+At `-O0`, `addFastRegAlloc` runs only `phi-node-elimination`, `twoaddressinstruction` and the `fast` allocator, without coalescing or scheduling. Use `-stop-after=greedy` to see the decisions, and `-stop-after=virtregrewriter` to see the final physical registers.
+
+## Run it yourself
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+# after allocation decisions, but MIR still prints virtual registers
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=greedy demo.ll -o greedy.mir
+
+# after virtregrewriter: physical registers and spills are materialised
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=virtregrewriter demo.ll -o rewritten.mir
+
+# compare AArch64: three-address, 31 GPRs
+llc -mtriple=aarch64-linux-gnu -O2 -simplify-mir \
+  -stop-after=virtregrewriter demo.ll -o rewritten-arm.mir
+```
+
+Write `demo.c` as a function that accumulates in a loop, then compare the number of spills in the two `.mir` files. Add `-stats` to see greedy's splits and spills, and `-verify-machineinstrs` to confirm the rewritten MIR is still valid.
+
+Force a different allocator for comparison:
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -regalloc=basic \
+  -stop-after=virtregrewriter demo.ll -o basic.mir
+```

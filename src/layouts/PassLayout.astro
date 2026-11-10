@@ -67,7 +67,13 @@ const categoryLine =
           <section class="pass__demo" aria-labelledby="demo-heading">
             <div class="pass__demo-head">
               <h2 id="demo-heading">{t(locale, 'pass.demoHeading')}</h2>
-              <p class="muted" set:html={t(locale, 'pass.demoHint')} />
+              <p
+                class="muted"
+                set:html={t(
+                  locale,
+                  demoData.format === 'mir' ? 'pass.demoHintMir' : 'pass.demoHint',
+                )}
+              />
             </div>
             <StepPlayer demo={demoData} locale={locale} client:visible />
           </section>
