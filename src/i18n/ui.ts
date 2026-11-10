@@ -74,8 +74,6 @@ const zh = {
   'passes.pipeline.title': 'LLVM 管线地图',
   'passes.pipeline.body':
     '按新版 PassManager 的 IR 层级组织：Module 通过 adaptor 进入 CGSCC，再下到 Function 与 Loop；IR 优化结束后，管线切成 Machine IR，按 target 的 PassConfig 走指令选择、寄存器分配与栈帧。彩色节点已经有页面，点进去就能看；灰色节点还在排队。',
-  'passes.pipeline.pgo': 'Profile 是优化管线的输入，不是管线里的一个 pass。',
-  'passes.pipeline.pgoLink': '先读 pgo-instr-gen，再看五个采样点',
   'passes.pipeline.legendLabel': '图例',
   'passes.pipeline.legendReady': '已收录，可进入',
   'passes.pipeline.legendPlanned': '待绘制',
@@ -347,8 +345,6 @@ const en: Messages = {
   'passes.pipeline.title': 'LLVM pipeline map',
   'passes.pipeline.body':
     'Organised by the new pass manager’s IR hierarchy: Module adapts into CGSCC, then down to Function and Loop. After IR optimisation the pipeline switches to Machine IR and follows the target PassConfig through instruction selection, register allocation and frame lowering. Colour means the page exists and is clickable; grey means it is still queued.',
-  'passes.pipeline.pgo': 'A profile is an input to the optimisation pipeline, not a pass inside it.',
-  'passes.pipeline.pgoLink': 'Start with pgo-instr-gen, then the five sampling points',
   'passes.pipeline.legendLabel': 'Legend',
   'passes.pipeline.legendReady': 'In the atlas — click to open',
   'passes.pipeline.legendPlanned': 'Not drawn yet',
