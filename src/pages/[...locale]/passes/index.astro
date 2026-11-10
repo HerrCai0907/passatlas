@@ -92,13 +92,6 @@ const groups = categoryOrder
         <p class="muted pipeline__lead">{t(locale, 'passes.pipeline.body')}</p>
       </header>
 
-      <p class="pipeline__pgo">
-        {t(locale, 'passes.pipeline.pgo')}
-        <a href={url('/passes/pgo-instr-gen/', locale)}>
-          {t(locale, 'passes.pipeline.pgoLink')} <span aria-hidden="true">→</span>
-        </a>
-      </p>
-
       <PipelineMap stages={pipelineStages} pages={passes} locale={locale} />
       <PassRegistry pages={passes} locale={locale} />
 
@@ -351,32 +344,6 @@ const groups = categoryOrder
   .pipeline__lead {
     max-width: 66ch;
     font-size: 14.5px;
-  }
-
-  .pipeline__pgo {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px 10px;
-    margin: -8px 0 18px;
-    padding: 10px 14px;
-    border: 1px solid var(--line);
-    border-left: 2px solid var(--accent);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    background: color-mix(in srgb, var(--surface) 70%, transparent);
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .pipeline__pgo a {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--accent-strong);
-    text-decoration: none;
-  }
-
-  .pipeline__pgo a:hover {
-    text-decoration: underline;
   }
 
   .pipeline__cta {
