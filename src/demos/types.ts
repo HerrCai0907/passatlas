@@ -28,10 +28,17 @@ export interface DemoLocalization {
   steps: Array<{ title: string; note: string }>;
 }
 
+export type DemoFormat = 'llvm-ir' | 'mir';
+
 export interface Demo {
   id: string;
   label: string;
   steps: DemoStep[];
+  /**
+   * 面板里放的是 LLVM IR 还是 Machine IR。
+   * MIR 不是 LLVM IR：播放器不解析 CFG，也不做指令级 diff，只做行级文本 diff。
+   */
+  format: DemoFormat;
   /**
    * 所有步骤、前后两侧 IR 的最大行数，构建期算好。
    * 播放器据此为 IR 面板预留固定高度，切步时按钮不会上下跳动。
@@ -140,6 +147,7 @@ export function makeDemo(
   label: string,
   sources: StepSource[],
   localizations?: Partial<Record<Locale, DemoLocalization>>,
+  options?: { format?: DemoFormat },
 ): Demo {
   const steps = sources.map(makeStep);
   const maxLines = steps.reduce(
@@ -147,7 +155,14 @@ export function makeDemo(
     0,
   );
 
-  return { id, label, steps, maxLines, localizations };
+  return {
+    id,
+    label,
+    steps,
+    format: options?.format ?? 'llvm-ir',
+    maxLines,
+    localizations,
+  };
 }
 
 /** 取某种语言的演示；没有翻译时回退到默认文案，保证页面永远有内容 */

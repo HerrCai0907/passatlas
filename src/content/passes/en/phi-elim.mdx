@@ -1,0 +1,166 @@
+---
+title: phi-elim
+subtitle: "SSA destruction: PHIs become COPYs"
+summary: A PHI is an SSA merge point, not a machine instruction. phi-node-elimination rewrites every φ as a COPY at the end of its predecessor, splitting critical edges when needed. Afterwards the function is no longer SSA and register allocation can begin.
+category: codegen
+difficulty: 2
+status: ready
+order: 21
+stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
+tags: ['SSA', 'PHI', 'Critical Edge', 'MIR']
+demo: phi-elim
+source: llvm/lib/CodeGen/PHIElimination.cpp
+updated: 2026-11-10
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+After instruction selection MIR is still SSA: every virtual register is defined once, and a control-flow merge uses `PHI` to say “take the value from whichever edge you came in on”.
+
+```text
+bb.3.merge:
+  %2:gpr32 = PHI %0:gpr32, %bb.1.then, %1:gpr32, %bb.2.else
+  $w0 = COPY %2:gpr32
+```
+
+A `PHI` is a pseudo instruction: it has no machine encoding and no CPU implements “pick a value by predecessor”. Neither AArch64 nor x86-64 has such an instruction. Register allocation, two-address rewriting and coalescing need real COPYs and real data flow, not a φ hovering at the top of a block.
+
+The goal is therefore precise: **lower the parallel-assignment semantics of φ into each incoming edge, then delete the φ.** Afterwards `%2` may be defined once in several different blocks — SSA is over.
+
+## Algorithm
+
+`PHIElimination::runOnMachineFunction` works in two passes: find the critical edges that need splitting, then lower each PHI.
+
+### Pass one: does a critical edge need splitting?
+
+An edge `P → B` is a **critical edge** exactly when:
+
+- `P` has more than one successor;
+- `B` has more than one predecessor.
+
+Placing a `COPY` at the end of `P` would affect every successor of `P`, not just `B`. For the other successors it is a redundant write; worse, it can extend a value along a path that does not need it, increasing pressure or changing semantics.
+
+The standard fix is to split the edge: create a jump-only block `C`, rewrite `P → B` into `P → C → B`, and put the copy in `C`.
+
+```text
+before:  P --(critical)--> B
+after:   P --> C --> B
+         C: COPY ...
+```
+
+LLVM does not split every critical edge unconditionally. `SplitPHIEdges` splits only when the copy could actually interfere with another path, or when this is a loop exit; `-phi-elim-split-all-critical-edges=1` forces all of them, mainly for tests. Loop backedges are not split by default — inserting a small block into a loop usually hurts layout.
+
+### Pass two: lower each PHI
+
+For every PHI at the top of `B`:
+
+1. Record its destination virtual register `D`.
+2. For each incoming `(src, P)`, insert `D = COPY src` before the terminator of `P`.
+3. An `undef` incoming becomes `IMPLICIT_DEF D`, not a COPY of an undefined value.
+4. After all incoming edges are handled, delete the PHI.
+
+Copies for several PHIs are semantically parallel. LLVM creates the destination register for each φ first and then inserts the COPYs; two-address rewriting and the coalescer remove most of them later, and only the survivors reach allocation.
+
+### Reading it in MIR
+
+AArch64 `pick`: `else` has two successors and `merge` has two predecessors, so `else → merge` is a critical edge.
+
+After splitting:
+
+```text
+bb.2.else:
+  %1:gpr32 = MOVi32imm 2
+  CBNZW $w1, %bb.5.crit
+  B %bb.4.other
+...
+bb.5.crit:
+  successors: %bb.3.merge
+  B %bb.3.merge
+```
+
+After lowering the PHI:
+
+```text
+bb.1.then:
+  %0:gpr32 = MOVi32imm 1
+  %2:gpr32 = COPY %0:gpr32
+  B %bb.3.merge
+...
+bb.5.crit:
+  %2:gpr32 = COPY %1:gpr32
+  B %bb.3.merge
+bb.3.merge:
+  $w0 = COPY %2:gpr32
+  RET_ReallyLR implicit $w0
+```
+
+`%2` is defined once in one block and once in another; `bb.3.merge` has no φ. The x86-64 shape is identical, only the instructions change to `TEST32rr` / `JCC_1` / `MOV32ri`:
+
+```text
+bb.2.else:
+  %1:gr32 = MOV32ri 2
+  TEST32rr $esi, $esi, implicit-def $eflags
+  JCC_1 %bb.5.crit, 4, implicit $eflags
+  JMP_1 %bb.4.other
+...
+bb.5.crit:
+  %2:gr32 = COPY %1:gr32
+  JMP_1 %bb.3.merge
+```
+
+## Cost and pitfalls
+
+- **Splitting adds blocks.** Every critical edge gains a jump-only block, which can hurt I-cache and branch prediction; that is why LLVM only splits when needed.
+- **COPYs do not always disappear.** The coalescer tries to merge `%2` with `%0` / `%1`, but when both predecessors define `%2`, at least one side may keep a copy; high pressure can turn it into a spill.
+- **Loop backedges are deliberately not split.** That is a layout decision, not an oversight. Forcing every edge (`-phi-elim-split-all-critical-edges=1`) is for testing and debugging.
+- **Debug info and live intervals must follow.** A PHI's debug location cannot simply move to the predecessor; LLVM drops the location on the new copy so the debugger does not attribute the value to the wrong line.
+- **It must stay consistent with LiveVariables / LiveIntervals.** That is why `phi-node-elimination` depends on `live-vars`, `machine-loop-info` and friends in the optimised pipeline; when replaying it on MIR, the input needs `tracksRegLiveness: true`.
+- **The verifier catches mistakes.** A stale PHI incoming edge or a COPY after the terminator shows up under `-verify-machineinstrs`.
+
+## Where it sits in the pipeline
+
+`phi-node-elimination` runs after machine SSA cleanup and before two-address rewriting and coalescing:
+
+```text
+isel → finalize-isel → machinelicm / machine-cse / peephole-opt
+     → phi-node-elimination → twoaddressinstruction
+     → register-coalescer → machine-scheduler → greedy
+```
+
+In `TargetPassConfig::addOptimizedRegAlloc` it comes after `LiveVariables` and `MachineLoopInfo`; the fast register-allocation path (`-O0`) also runs it, just without coalescing and pre-RA scheduling. Once SSA is destroyed, a virtual register may be defined in several places, and later passes can treat it as an ordinary live interval.
+
+## Run it yourself
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+# AArch64: watch PHIs turn into COPYs
+llc -mtriple=aarch64-linux-gnu -O2 -simplify-mir \
+  -stop-after=phi-node-elimination demo.ll -o phi-arm.mir
+
+# x86-64: the same edge, different instructions
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=phi-node-elimination demo.ll -o phi-x86.mir
+```
+
+Give `demo.c` an `if/else` return, for example:
+
+```c
+int pick(int c, int d) {
+  if (c) return 1;
+  if (d) return 2;
+  return 0;
+}
+```
+
+To force every critical edge to split, add `-phi-elim-split-all-critical-edges=1`. You can also replay a MIR file directly:
+
+```bash
+llc -mtriple=aarch64-linux-gnu -run-pass=phi-node-elimination phi-arm.mir -o -
+llc -mtriple=aarch64-linux-gnu -verify-machineinstrs \
+  -run-pass=phi-node-elimination phi-arm.mir -o /dev/null
+```
+
+How two-address rewriting and coalescing clean up these COPYs is covered in <I18nLink href="/passes/regalloc/">regalloc</I18nLink>.

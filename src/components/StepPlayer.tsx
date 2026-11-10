@@ -190,18 +190,25 @@ function IRPane({
   stepIndex,
   side,
   locale,
+  mir = false,
 }: {
   label: string;
   lines: IRLine[];
   stepIndex: number;
   side: 'before' | 'after';
   locale: Locale;
+  mir?: boolean;
 }) {
+  const ariaKey = mir
+    ? side === 'before'
+      ? 'player.mirBefore'
+      : 'player.mirAfter'
+    : side === 'before'
+      ? 'player.irBefore'
+      : 'player.irAfter';
+
   return (
-    <section
-      className="pa-pane"
-      aria-label={t(locale, side === 'before' ? 'player.irBefore' : 'player.irAfter')}
-    >
+    <section className="pa-pane" aria-label={t(locale, ariaKey)}>
       <header className="pa-pane__head">
         <span className="pa-pane__label">{label}</span>
         <span className="pa-pane__count">{t(locale, 'player.lines', { count: lines.length })}</span>
@@ -246,16 +253,31 @@ export default function StepPlayer({
   const steps = demo.steps;
   const total = steps.length;
   const step = steps[index];
+  const isMir = demo.format === 'mir';
 
-  const graphs = useMemo(() => steps.map((item) => graphOfStep(item, locale)), [steps, locale]);
+  const graphs = useMemo(
+    () =>
+      isMir
+        ? steps.map(() => ({
+            before: null,
+            after: null,
+            diff: null,
+            multiFunction: true,
+          }))
+        : steps.map((item) => graphOfStep(item, locale)),
+    [isMir, steps, locale],
+  );
   // CFG 一次只画一个函数。只要任一步的任一侧是多函数 IR，整个播放器就不能切到
   // CFG 模式：否则切步时会看到「只有第一个函数」的图，像是其他函数被优化掉了。
+  // MIR 不是 LLVM IR，解析器没有可用的函数/基本块模型，同样固定在文本视图。
   const cfgAvailable = useMemo(
-    () => graphs.every((graph) => !graph.multiFunction),
-    [graphs],
+    () => !isMir && graphs.every((graph) => !graph.multiFunction),
+    [isMir, graphs],
   );
   const shownMode: ViewMode = cfgAvailable ? mode : 'ir';
-  const cfgDisabledReason = cfgAvailable ? undefined : t(locale, 'player.cfgUnavailable');
+  const cfgDisabledReason = cfgAvailable
+    ? undefined
+    : t(locale, isMir ? 'player.cfgMirUnavailable' : 'player.cfgUnavailable');
   const cfgSides = useMemo(
     () => ({
       before: graphs.map((graph) => graph.before),
@@ -408,8 +430,22 @@ export default function StepPlayer({
           className="pa-panes"
           style={{ '--pa-ir-lines': demo.maxLines } as CSSProperties}
         >
-          <IRPane label="before" side="before" lines={step.before} stepIndex={index} locale={locale} />
-          <IRPane label="after" side="after" lines={step.after} stepIndex={index} locale={locale} />
+          <IRPane
+            label="before"
+            side="before"
+            lines={step.before}
+            stepIndex={index}
+            locale={locale}
+            mir={isMir}
+          />
+          <IRPane
+            label="after"
+            side="after"
+            lines={step.after}
+            stepIndex={index}
+            locale={locale}
+            mir={isMir}
+          />
         </div>
       )}
 

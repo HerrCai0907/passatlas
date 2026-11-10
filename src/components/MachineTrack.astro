@@ -1,0 +1,510 @@
+---
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import {
+  machineSnapshots,
+  machineStages,
+  machineTargets,
+  type MachineTargetId,
+} from '../data/machine';
+import { passSlug, type PassEntry } from '../lib/passes';
+import { url } from '../lib/url';
+
+interface Props {
+  pages: PassEntry[];
+  locale: Locale;
+}
+
+const { pages, locale } = Astro.props;
+const pagesBySlug = new Map(pages.map((pass) => [passSlug(pass), pass]));
+const targets: MachineTargetId[] = ['x86-64', 'aarch64'];
+
+function hrefFor(item: { name: string; page?: string }): string | undefined {
+  const page = pagesBySlug.get(item.page ?? item.name);
+  return page ? url(`/passes/${passSlug(page)}/`, locale) : undefined;
+}
+---
+
+<section class="machine" id="machine-ir" aria-labelledby="machine-title">
+  <header class="machine__head">
+    <div class="machine__intro">
+      <p class="eyebrow">{t(locale, 'passes.machine.eyebrow')}</p>
+      <h2 id="machine-title">{t(locale, 'passes.machine.title')}</h2>
+    </div>
+    <p class="machine__lead">{t(locale, 'passes.machine.body')}</p>
+  </header>
+
+  <div class="targets">
+    {
+      targets.map((id) => {
+        const target = machineTargets[id];
+        return (
+          <article class="target-card cat-codegen">
+            <header class="target-card__head">
+              <span class="target-card__id">{target.label}</span>
+              <code>{target.triple}</code>
+            </header>
+            <dl class="target-card__facts">
+              <div>
+                <dt>{t(locale, 'passes.machine.passConfig')}</dt>
+                <dd><code>{target.passConfig}</code></dd>
+              </div>
+              <div>
+                <dt>{t(locale, 'passes.machine.isel')}</dt>
+                <dd><code>{target.isel}</code></dd>
+              </div>
+              <div>
+                <dt>{t(locale, 'passes.machine.abi')}</dt>
+                <dd>{target.abi[locale]}</dd>
+              </div>
+              <div>
+                <dt>{t(locale, 'passes.machine.registers')}</dt>
+                <dd>{target.registers[locale]}</dd>
+              </div>
+              <div>
+                <dt>{t(locale, 'passes.machine.addressing')}</dt>
+                <dd>{target.addressing[locale]}</dd>
+              </div>
+            </dl>
+          </article>
+        );
+      })
+    }
+  </div>
+
+  <ol class="stages" aria-label={t(locale, 'passes.machine.stagesLabel')}>
+    {
+      machineStages.map((stage, index) => (
+        <li class="stage">
+          <header class="stage__head">
+            <span class="stage__no" aria-hidden="true">
+              {String(index + 1).padStart(2, '0')}
+            </span>
+            <h3>{stage.title[locale]}</h3>
+            <code class="stage__manager">{stage.manager}</code>
+          </header>
+          <p class="stage__note">{stage.note[locale]}</p>
+          <div class="lanes">
+            <div class="lane lane--shared">
+              <span class="lane__label">{t(locale, 'passes.machine.shared')}</span>
+              <ul class="chips">
+                {stage.shared.map((item) => {
+                  const href = hrefFor(item);
+                  const label = item.label ?? item.name;
+                  return (
+                    <li class:list={['chip', { 'chip--helper': item.kind === 'helper' }]}>
+                      {href ? <a href={href}>{label}</a> : <span>{label}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            {targets.map((id) => (
+              <div class="lane lane--target">
+                <span class="lane__label">{machineTargets[id].label}</span>
+                <ul class="chips">
+                  {stage.lanes[id].map((item) => {
+                    const href = hrefFor(item);
+                    const label = item.label ?? item.name;
+                    return (
+                      <li class:list={['chip', 'chip--target', { 'chip--helper': item.kind === 'helper' }]}>
+                        {href ? <a href={href}>{label}</a> : <span>{label}</span>}
+                        {item.conditional ? <em aria-hidden="true">*</em> : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </li>
+      ))
+    }
+  </ol>
+
+  <div class="snapshots">
+    {
+      machineSnapshots.map((snapshot) => (
+        <article class="snapshot">
+          <header class="snapshot__head">
+            <h3>{snapshot.title[locale]}</h3>
+            <p>{snapshot.intro[locale]}</p>
+          </header>
+          {snapshot.before ? (
+            <div class="code-block code-block--before">
+              <h4>
+                <span>{t(locale, 'passes.machine.before')}</span>
+                <code>LLVM IR</code>
+              </h4>
+              <pre><code>{snapshot.before}</code></pre>
+            </div>
+          ) : null}
+          <div class="snapshot__pair">
+            {targets.map((id) => (
+              <div class="code-block cat-codegen">
+                <h4>
+                  <span>{t(locale, 'passes.machine.after')}</span>
+                  <code>{machineTargets[id].label} MIR</code>
+                </h4>
+                <pre><code>{snapshot.targets[id]}</code></pre>
+              </div>
+            ))}
+          </div>
+        </article>
+      ))
+    }
+    <p class="snapshot__note">{t(locale, 'passes.machine.snapshotNote')}</p>
+  </div>
+</section>
+
+<style>
+  .machine {
+    padding-block: clamp(34px, 5vw, 54px) clamp(38px, 5vw, 58px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .machine__head {
+    display: grid;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    align-items: end;
+    gap: 10px clamp(24px, 4vw, 56px);
+    margin-bottom: 24px;
+  }
+
+  .machine__intro h2 {
+    margin-top: 8px;
+    font-size: clamp(26px, 3vw, 34px);
+  }
+
+  .machine__lead {
+    max-width: 70ch;
+    font-size: 14.5px;
+    line-height: 1.75;
+    color: var(--muted);
+  }
+
+  .targets {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .target-card {
+    padding: 16px 18px 17px;
+    border: 1px solid color-mix(in srgb, var(--cat) 26%, var(--line));
+    border-top: 3px solid var(--cat);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+  }
+
+  .target-card__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--line);
+  }
+
+  .target-card__id {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .target-card__head code {
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  .target-card__facts {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 0;
+  }
+
+  .target-card__facts div {
+    display: grid;
+    grid-template-columns: 7.5em minmax(0, 1fr);
+    gap: 10px;
+    align-items: baseline;
+  }
+
+  .target-card__facts dt {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .target-card__facts dd {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .target-card__facts code {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+  }
+
+  .stages {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+  }
+
+  .stage {
+    padding: 18px 0 20px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .stage__head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 4px 12px;
+  }
+
+  .stage__no {
+    padding: 1px 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--faint);
+  }
+
+  .stage__head h3 {
+    font-size: clamp(18px, 2vw, 21px);
+  }
+
+  .stage__manager {
+    justify-self: end;
+    max-width: 48ch;
+    font-size: 10.5px;
+    color: var(--faint);
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .stage__note {
+    max-width: 88ch;
+    margin-top: 7px;
+    font-size: 13.5px;
+    line-height: 1.72;
+    color: var(--muted);
+  }
+
+  .lanes {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .lane {
+    padding: 9px 10px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--surface) 66%, transparent);
+  }
+
+  .lane--shared {
+    border-style: dashed;
+  }
+
+  .lane--target {
+    border-color: color-mix(in srgb, var(--cat-codegen) 24%, var(--line));
+  }
+
+  .lane__label {
+    display: block;
+    margin-bottom: 6px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .lane--target .lane__label {
+    color: var(--cat-codegen);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .chip {
+    padding: 1px 6px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.6;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .chip a {
+    color: var(--accent-strong);
+    text-decoration: none;
+  }
+
+  .chip a:hover {
+    text-decoration: underline;
+  }
+
+  .chip--target {
+    border-color: color-mix(in srgb, var(--cat-codegen) 20%, var(--line));
+    color: var(--ink-soft);
+  }
+
+  .chip--helper {
+    border-style: dotted;
+    color: var(--faint);
+  }
+
+  .chip em {
+    margin-left: 3px;
+    font-style: normal;
+    color: var(--faint);
+  }
+
+  .snapshots {
+    margin-top: 30px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  .snapshot + .snapshot {
+    margin-top: 28px;
+  }
+
+  .snapshot__head h3 {
+    font-size: clamp(20px, 2.2vw, 24px);
+  }
+
+  .snapshot__head p {
+    max-width: 82ch;
+    margin-top: 6px;
+    font-size: 13.5px;
+    line-height: 1.72;
+    color: var(--muted);
+  }
+
+  .snapshot__pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .code-block {
+    margin-top: 12px;
+    border: 1px solid var(--code-border);
+    border-radius: var(--radius);
+    background: var(--code-bg);
+    overflow: hidden;
+  }
+
+  .snapshot__pair .code-block {
+    margin-top: 0;
+  }
+
+  .code-block h4 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--code-border);
+    background: var(--surface-soft);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .code-block h4 code {
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+    text-transform: none;
+    color: var(--cat-codegen);
+  }
+
+  .code-block pre {
+    margin: 0;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.68;
+    color: var(--code-text);
+    tab-size: 2;
+  }
+
+  .snapshot__note {
+    max-width: 86ch;
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--faint);
+  }
+
+  @media (max-width: 900px) {
+    .lanes {
+      grid-template-columns: 1fr;
+    }
+
+    .lane__label {
+      margin-bottom: 4px;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .machine__head,
+    .targets,
+    .snapshot__pair {
+      grid-template-columns: 1fr;
+    }
+
+    .stage__head {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .stage__manager {
+      grid-column: 1 / -1;
+      justify-self: start;
+      max-width: 100%;
+      text-align: left;
+    }
+  }
+
+  @media (max-width: 440px) {
+    .target-card {
+      padding: 14px 14px 15px;
+    }
+
+    .target-card__facts div {
+      grid-template-columns: 1fr;
+      gap: 1px;
+    }
+  }
+</style>

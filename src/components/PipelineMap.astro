@@ -49,6 +49,11 @@ const levelKeys = {
       <span class="legend__flag" aria-hidden="true">*</span>
       {t(locale, 'passes.pipeline.legendConditional')}
     </span>
+    <span class="legend__item">
+      <span class="legend__target legend__target--sample" aria-hidden="true">x86</span>
+      <span class="legend__target legend__target--sample" aria-hidden="true">arm64</span>
+      {t(locale, 'passes.pipeline.legendTarget')}
+    </span>
   </div>
 
   <ol class="map" aria-label={t(locale, 'passes.pipeline.mapLabel')}>
@@ -111,6 +116,18 @@ const levelKeys = {
                       >
                         <span class="node__dot" aria-hidden="true" />
                         <span class="node__name">{name}</span>
+                        {item.targets?.length ? (
+                          <span class="node__targets">
+                            {item.targets.map((target) => (
+                              <span
+                                class="node__target"
+                                title={target === 'x86-64' ? 'x86-64' : 'AArch64'}
+                              >
+                                {target === 'x86-64' ? 'x86' : 'arm64'}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
                         {item.conditional ? (
                           <span
                             class="node__flag"
@@ -139,6 +156,18 @@ const levelKeys = {
                       <span class="node__inner">
                         <span class="node__dot" aria-hidden="true" />
                         <span class="node__name">{name}</span>
+                        {item.targets?.length ? (
+                          <span class="node__targets">
+                            {item.targets.map((target) => (
+                              <span
+                                class="node__target"
+                                title={target === 'x86-64' ? 'x86-64' : 'AArch64'}
+                              >
+                                {target === 'x86-64' ? 'x86' : 'arm64'}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
                         {item.conditional ? (
                           <span
                             class="node__flag"
@@ -244,6 +273,20 @@ const levelKeys = {
     color: var(--faint);
     font-size: 13px;
     line-height: 1;
+  }
+
+  .legend__target {
+    padding: 0 4px;
+    border: 1px solid color-mix(in srgb, var(--cat-codegen) 24%, var(--line));
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    line-height: 1.5;
+    color: var(--cat-codegen);
+  }
+
+  .legend__target--sample {
+    margin-right: -4px;
   }
 
   /* ---------- 管线 ---------- */
@@ -448,6 +491,22 @@ const levelKeys = {
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--cat);
+  }
+
+  .node__targets {
+    display: inline-flex;
+    gap: 2px;
+  }
+
+  .node__target {
+    padding: 0 4px;
+    border: 1px solid color-mix(in srgb, var(--cat) 24%, var(--line));
+    border-radius: 3px;
+    font-size: 8.5px;
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    color: var(--cat);
+    text-transform: none;
   }
 
   .node__repeat {

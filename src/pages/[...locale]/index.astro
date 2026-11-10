@@ -27,6 +27,7 @@ const documented = new Set(passes.map((pass) => passSlug(pass)));
 const plannedCount = pipelinePasses.filter(
   (item) => !documented.has(item.page ?? item.name),
 ).length;
+const machinePasses = passes.filter((pass) => pass.data.category === 'codegen').length;
 const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale);
 ---
 
@@ -41,10 +42,10 @@ const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale
         </h1>
         <p class="lead hero__lead" set:html={t(locale, 'home.lead')} />
         <div class="hero__actions">
-          <a class="btn btn--primary" href={url('/passes/mem2reg/', locale)}>
-            {t(locale, 'home.start')} <span class="btn__arrow" aria-hidden="true">→</span>
+          <a class="btn btn--primary" href={url('/passes/', locale)}>
+            {t(locale, 'home.browse')} <span class="btn__arrow" aria-hidden="true">→</span>
           </a>
-          <a class="btn btn--ghost" href={url('/passes/', locale)}>{t(locale, 'home.browse')}</a>
+          <a class="btn btn--ghost" href={url('/passes/mem2reg/', locale)}>{t(locale, 'home.start')}</a>
         </div>
         <dl class="hero__stats">
           <div>
@@ -56,8 +57,8 @@ const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale
             <dd>{String(categoryOrder.length).padStart(2, '0')}</dd>
           </div>
           <div>
-            <dt>{t(locale, 'home.stats.backend')}</dt>
-            <dd>00</dd>
+            <dt>{t(locale, 'home.stats.codegen')}</dt>
+            <dd>{String(machinePasses).padStart(2, '0')}</dd>
           </div>
         </dl>
       </div>
