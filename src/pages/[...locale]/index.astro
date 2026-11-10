@@ -42,10 +42,10 @@ const heroDemo = getDemo('hero', locale) ?? getDemo(passes[0]?.data.demo, locale
         </h1>
         <p class="lead hero__lead" set:html={t(locale, 'home.lead')} />
         <div class="hero__actions">
-          <a class="btn btn--primary" href={url('/passes/mem2reg/', locale)}>
-            {t(locale, 'home.start')} <span class="btn__arrow" aria-hidden="true">→</span>
+          <a class="btn btn--primary" href={url('/passes/', locale)}>
+            {t(locale, 'home.browse')} <span class="btn__arrow" aria-hidden="true">→</span>
           </a>
-          <a class="btn btn--ghost" href={url('/passes/', locale)}>{t(locale, 'home.browse')}</a>
+          <a class="btn btn--ghost" href={url('/passes/mem2reg/', locale)}>{t(locale, 'home.start')}</a>
         </div>
         <dl class="hero__stats">
           <div>
