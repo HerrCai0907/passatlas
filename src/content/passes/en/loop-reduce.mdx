@@ -1,0 +1,206 @@
+---
+title: loop-reduce
+subtitle: "Loop strength reduction"
+summary: LSR uses ScalarEvolution to rewrite loop addresses and induction-variable expressions as a base register plus scale and offset, then picks the formula with the lowest target-specific cost — turning repeated multiplies into an add or a single scaled address. It is not in the IR optimisation pipeline; codegen schedules it before CodeGenPrepare and ISel.
+category: loop
+difficulty: 3
+status: ready
+order: 8
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['ScalarEvolution', 'Induction Variable', 'Addressing Mode', 'Cost Model']
+demo: loop-reduce
+source: llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp
+updated: 2026-11-12
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+A perfectly ordinary array loop:
+
+```llvm
+%mul = mul i64 %i, 3
+%p = getelementptr i32, ptr %a, i64 %mul
+store i32 7, ptr %p, align 4
+```
+
+`%i` advances by one each iteration, while `%p` recomputes both `mul` and `getelementptr`. In SCEV terms `%p` is really `a + 12*i`: an affine addrec whose step is a fixed 12 bytes. Since the step is constant, the loop can instead maintain a **pointer IV** that advances by 12 and never multiplies.
+
+That is **strength reduction**: replace multiplication with addition, and repeated computation with a cheaper addressing form. LSR is more involved than a single “mul → add” rewrite, though. A loop usually has several uses (GEPs, loads and stores, `icmp`s) that can share registers, and the target's addressing modes restrict which base / scale / offset combinations fold into an instruction. LSR's job is to **choose one formula for every use and minimise the total cost subject to legality**.
+
+Unlike the local strength reductions of <I18nLink href="/passes/instcombine/">instcombine</I18nLink>, LSR looks at loop-level recurrences: `mul x, 8 → shl x, 3` only needs a constant, while simplifying `i*3` depends on the step of `i` and on how the address is used. Which combination actually becomes one machine instruction is decided by the addressing modes of <I18nLink href="/passes/isel/">isel</I18nLink>.
+
+LSR is scheduled by codegen: `llc` runs it at `-O1` and above, before `CodeGenPrepare` and ISel. At that point the target's addressing modes and cost model are available, which makes it a pass that **picks address forms for the backend**, not a generic simplification in the IR optimisation pipeline.
+
+## Algorithm
+
+`loop-reduce` is a loop pass, scheduled by codegen's `addIRPasses`. Its entry point is `LoopStrengthReducePass::run`, and the work lives in `LSRInstance`. It only handles **innermost loops** and requires LoopSimplify form; it bails out when `IVUsers` is empty or when a loop has more than 200 IV users.
+
+The pass splits into five stages.
+
+### 1. Collect uses
+
+`IVUsers` reports the operands in the loop that are driven by induction variables. Each such operand is a **use**, classified into a kind:
+
+| kind | Typical case | What can fold |
+| --- | --- | --- |
+| `Address` | GEP, load/store address | base + scaled index + displacement |
+| `Basic` | Ordinary arithmetic | No semantic restriction; the target decides |
+| `ICmpZero` | An equality comparison against zero | Both sides combine into one expression |
+| `Special` | Arithmetic that permits a -1 scale | Subtraction / negation |
+
+Several uses of the same SCEV collapse into one `LSRUse`; they differ only in the constant offset of their fixups, which is common in unrolled loops. Each fixup records which operand of which instruction must be replaced.
+
+### 2. Initial formulas
+
+For a use's SCEV, LSR tries to split it into:
+
+```text
+formula = BaseGV + BaseOffset + Σ BaseRegs + Scale * ScaledReg + UnfoldedOffset
+```
+
+- `BaseRegs`: loop-invariant values, or values that can be computed outside the loop;
+- `ScaledReg`: usually the induction variable itself, an addrec;
+- `Scale`: a scaling factor accepted by the target's addressing modes;
+- `BaseOffset` / `UnfoldedOffset`: constant offsets; the latter needs a temporary register for the add;
+- `BaseGV`: the base of a global.
+
+For `a + 4*(3*i)`, one formula is `BaseRegs=[a], ScaledReg=i, Scale=12`, and another is `BaseRegs=[a], ScaledReg=3*i, Scale=4`. Which one wins depends on whether the target has a scale of 12, whether the multiply already exists, and whether the register can be reused by another use.
+
+### 3. Generate candidate formulas
+
+The initial match is deliberately conservative. LSR then expands the candidate set with generators:
+
+- `GenerateReassociations` / `GenerateCombinations`: reassociate and merge loop invariants;
+- `GenerateSymbolicOffsets` / `GenerateConstantOffsets`: move symbolic or constant offsets into the displacement;
+- `GenerateScales`: try the interesting factors as scales;
+- `GenerateICmpZeroScales`, `GenerateTruncates`: special cases for comparisons and narrowed types;
+- `GenerateCrossUseConstantOffsets`: share constant offsets across uses;
+- IV chains / post-inc: fold the `%i.next` increment into the use itself.
+
+Every generated formula is checked by `isLegalUse` and the target's `isLegalAddressingMode`. The candidate set explodes easily, so a series of `NarrowSearchSpace*` heuristics follows: drop clearly worse formulas, merge variants with the same scaled register, and limit combinations across unrolled code.
+
+### 4. Cost model and solving
+
+`Cost` tracks a set of metrics:
+
+| Metric | Meaning |
+| --- | --- |
+| `NumRegs` | Extra registers that must be maintained |
+| `AddRecCost` | Cost of the induction variable itself |
+| `NumIVMuls` | Multiplies involving an induction variable |
+| `NumBaseAdds` | Base-register adds needed inside the loop |
+| `ScaleCost` | Cost of a non-free scale |
+| `ImmCost` | Cost of encoding immediates |
+| `SetupCost` | Cost of setting up a register outside the loop |
+
+The target decides how these are weighted through `TargetTransformInfo::isLSRCostLess` (`-lsr-insns-cost` can add instruction count to the comparison as well). `SolveRecurse` backtracks over the uses: it picks a formula for the current use, accumulates cost, prunes as soon as the partial cost is worse than the best solution, and prefers formulas that reuse registers already selected. When the search finishes, every use has exactly one formula.
+
+The search is also compared against the **baseline**, the cost of leaving the loop unchanged; some targets simply drop a solution that is not better than baseline (`-lsr-drop-solution` overrides that decision).
+
+### 5. Rewrite
+
+`ImplementSolution` expands each chosen formula with `SCEVExpander` at a position that dominates all of its uses, inserts new induction variables (typically named `%lsr.iv` and `%scevgep`), and replaces the operand of every fixup. It then recursively deletes dead instructions, preserves LCSSA and cleans up congruent phis.
+
+For the loop above, `opt -passes=loop-reduce` produces the same shape on AArch64 and x86-64:
+
+```llvm
+%lsr.iv = phi ptr [ %scevgep, %loop ], [ %a, %entry ]
+store i32 7, ptr %lsr.iv, align 4
+%scevgep = getelementptr i8, ptr %lsr.iv, i64 12
+```
+
+`%mul` and `%p` are gone and the address becomes a single add. `%i` survives because the exit comparison still uses it — rewriting the loop condition is not LSR's job.
+
+## Cost and pitfalls
+
+- **The search space is the real cost.** LSR generates many formulas per use and then searches across uses; `MaxIVUsers = 200` and `-lsr-complexity-limit` are hard bounds that force a bail-out or a narrower search. The payoff on hot loops is large, but compile time can rise noticeably.
+- **Only innermost loops are modelled.** An outer-loop expression is rewritten only when it serves as a base register for an inner-loop use; LSR does not solve the outer loop on its own.
+- **LoopSimplify form is required.** Without a preheader, with multiple latches, or with irreducible control flow, `LSRInstance` returns immediately. If a standalone `opt -passes=loop-reduce` appears to do nothing, add `loop-simplify` first.
+- **The result depends on the target.** The same loop can get different formulas — or no rewrite at all — on x86-64, AArch64, or an environment without a triple. Available scales, immediate ranges and post-inc addressing all come from TTI; do not treat the output shape as a cross-target guarantee.
+- **Register pressure can backfire.** Maintaining an extra IV can make a hot loop more crowded; the cost model penalises `NumRegs`, but the heuristic search does not guarantee a global optimum.
+- **It runs in codegen, not in the IR optimisation pipeline.** The pipeline printed by `opt -passes='default<O2>'` does not contain `loop-reduce`; but `llc -O1` and above (and clang's backend) run it at the very start of `TargetPassConfig::addIRPasses()`. `-disable-lsr` turns it off and `-O0` skips it. Checking only `opt`'s default pipeline will make the pass look absent; use `llc -print-after=loop-reduce` to see the real schedule. `indvars` and unrolling in the IR pipeline are not a replacement: LSR's distinguishing feature is **choosing address formulas by target cost**.
+- **`%lsr.iv` is not a stable interface.** The name comes from SCEVExpander and is only useful for debugging and reading; never match it in tests. To inspect the internal decisions, use an assertions build with `-debug-only=loop-reduce`; release binaries do not have that option.
+
+## Where it sits in the pipeline
+
+`loop-reduce` is registered in `PassRegistry.def` as a `LOOP_PASS`, but it is not part of the IR optimisation pipeline: **codegen** schedules it. `llc` (and clang's backend) runs it at the very start of `TargetPassConfig::addIRPasses()`, with the source comment *Run loop strength reduction before anything else.* Only then do `CodeGenPrepare` and instruction selection follow:
+
+```text
+clang -O2
+  ├─ IR optimizer (opt): loop-simplify → licm / loop-rotate → indvars → ...
+  └─ codegen (llc):      loop-reduce → CodeGenPrepare → isel → ...
+```
+
+It only runs when the codegen optimisation level is not `None`, which means clang's `-O1` / `-O2` / `-O3` / `-Os` / `-Oz`; `-O0` skips it and `-disable-lsr` turns it off. `loop-term-fold` can follow immediately afterwards, but only when the target sets `EnableLoopTermFold`; the base class leaves it off (RISC-V enables it).
+
+This is why the atlas places it in “Codegen preparation” rather than “Loop optimisation”: logically it is a loop pass, but it executes in codegen, before `codegenprepare`. It depends on `ScalarEvolution`, `IVUsers`, `DominatorTree`, `LoopInfo`, `AssumptionCache`, `TargetLibraryInfo` and `TargetTransformInfo`; it also updates MemorySSA when that analysis is available.
+
+Calling it directly from `opt` is still useful for isolating the pass:
+
+```bash
+opt -passes=loop-simplify,loop-reduce -S demo.ll -o -
+```
+
+In a real compilation, however, the IR optimiser first canonicalises loops with passes such as `indvars`, and codegen's LSR then chooses target-specific address forms. They are different stages, not substitutes for each other.
+
+## Run it yourself
+
+Save this IR as `lsr.ll`:
+
+```llvm
+target triple = "aarch64-unknown-linux-gnu"
+
+define void @fill(ptr %a, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]
+  %mul = mul i64 %i, 3
+  %p = getelementptr i32, ptr %a, i64 %mul
+  store i32 7, ptr %p, align 4
+  %i.next = add nsw i64 %i, 1
+  %cmp = icmp slt i64 %i.next, %n
+  br i1 %cmp, label %loop, label %exit
+exit:
+  ret void
+}
+```
+
+Watch codegen run it: `llc` executes `loop-reduce` at `-O1` and above, and `-print-after` dumps the rewritten IR:
+
+```bash
+llc -O2 -print-after=loop-reduce lsr.ll -o /dev/null
+```
+
+You should see `*** IR Dump After Loop Strength Reduction (loop-reduce) ***` with the `%lsr.iv` pointer IV and a stride-12 `getelementptr`; the `mul` is gone. Switch `-O2` to `-O0`, or add `-disable-lsr`, and the dump disappears:
+
+```bash
+llc -O0 -print-after=loop-reduce lsr.ll -o /dev/null
+llc -O2 -disable-lsr -print-after=loop-reduce lsr.ll -o /dev/null
+```
+
+You can also run the same pass directly with `opt`:
+
+```bash
+opt -passes=loop-reduce -S lsr.ll -o -
+```
+
+Switch the triple to `x86_64-unknown-linux-gnu` and the shape stays the same — both targets allow a pointer recurrence here. On a target with different addressing capabilities, or with an i32 index, LSR may choose a scaled integer IV instead of a pointer IV.
+
+It is absent from `opt`'s default IR optimisation pipeline, which is consistent with codegen scheduling it:
+
+```bash
+opt -passes='default<O2>' --print-pipeline-passes lsr.ll \
+  | tr ',' '\n' | grep -c loop-reduce
+# 0
+```
+
+To see how many candidates LSR generated and which formula it chose, you need an assertions-enabled LLVM build:
+
+```bash
+llc -debug-only=loop-reduce -O2 lsr.ll -o /dev/null
+```
+
+Official release binaries do not include `-debug-only`, so that command fails there.

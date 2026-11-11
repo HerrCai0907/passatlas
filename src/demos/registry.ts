@@ -6,6 +6,7 @@ import { heroDemo } from './hero.ts';
 import { inlineFunctionDemo } from './inline-function.ts';
 import { instcombineDemo } from './instcombine.ts';
 import { iselDemo } from './isel.ts';
+import { loopReduceDemo } from './loop-reduce.ts';
 import { mem2regDemo } from './mem2reg.ts';
 import { pgoInstrGenDemo } from './pgo-instr-gen.ts';
 import { phiElimDemo } from './phi-elim.ts';
@@ -22,6 +23,7 @@ export const demos: Record<string, Demo> = {
   'inline-function': inlineFunctionDemo,
   instcombine: instcombineDemo,
   isel: iselDemo,
+  'loop-reduce': loopReduceDemo,
   mem2reg: mem2regDemo,
   'pgo-instr-gen': pgoInstrGenDemo,
   'phi-elim': phiElimDemo,

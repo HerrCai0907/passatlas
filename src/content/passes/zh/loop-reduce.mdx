@@ -1,0 +1,206 @@
+---
+title: loop-reduce
+subtitle: 循环强度削减
+summary: LSR 用 ScalarEvolution 把循环里的地址与归纳变量表达式拆成「基址寄存器 + scale + 偏移」，再按目标的寻址模式和寄存器代价挑一套公式，把每轮重复的乘法换成一次加法或一条带缩放的地址操作。它不在 IR 优化管线里，而是由 codegen 在 CodeGenPrepare 和 ISel 之前调度。
+category: loop
+difficulty: 3
+status: ready
+order: 8
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['ScalarEvolution', 'Induction Variable', 'Addressing Mode', 'Cost Model']
+demo: loop-reduce
+source: llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp
+updated: 2026-11-12
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+一个普通的数组循环：
+
+```llvm
+%mul = mul i64 %i, 3
+%p = getelementptr i32, ptr %a, i64 %mul
+store i32 7, ptr %p, align 4
+```
+
+`%i` 每轮只加 1，地址 `%p` 却要每轮重新算一遍 `mul` 和 `getelementptr`。从 SCEV 看，`%p` 其实是 `a + 12*i`：一个步长为 12 字节的仿射表达式（affine addrec）。既然步长固定，就可以维护一个「指针 IV」，每轮只前进 12 字节，不必再乘。
+
+这正是**强度削减**（strength reduction）：用加法替代乘法，用更便宜的寻址替代重复计算。但 LSR 比一句「mul → add」复杂：循环里通常有多个 use（多个 GEP、load/store、`icmp`），它们可以共享寄存器；target 的寻址模式又限定了哪些 base / scale / offset 组合能折进指令。LSR 的工作是**为所有 use 选一组公式，在合法性与总代价之间求最优**。
+
+和 <I18nLink href="/passes/instcombine/">instcombine</I18nLink> 的局部强度削减不同，LSR 看的是循环级的递推关系：`mul x, 8 → shl x, 3` 只依赖常量，而 `i*3` 的化简依赖 `i` 的步长和地址的使用方式。最终哪些组合能落到一条机器指令上，则由 <I18nLink href="/passes/isel/">isel</I18nLink> 的寻址模式决定。
+
+LSR 由 codegen 调度：`llc` 在 `-O1` 以上、`CodeGenPrepare` 和 ISel 之前运行它。此时 target 的寻址模式和代价模型已经可用，所以它是一个「按后端能力选地址形式」的 pass，而不是 IR 优化管线里的通用化简。
+
+## 算法
+
+`loop-reduce` 是一个 loop pass，默认由 codegen 的 `addIRPasses` 调度，入口 `LoopStrengthReducePass::run`，主体是 `LSRInstance`。它只处理**最内层循环**，要求 LoopSimplify 形式；`IVUsers` 为空、或者 IV user 超过 200 个时直接退出。
+
+整个 pass 可以拆成五步。
+
+### 1. 收集 use
+
+`IVUsers` 给出循环里由归纳变量驱动的操作数。每个这样的操作数是一个 **use**，LSR 把它归入一种 kind：
+
+| kind | 典型场景 | 能折什么 |
+| --- | --- | --- |
+| `Address` | GEP、load/store 地址 | base + scaled index + displacement |
+| `Basic` | 普通算术 | 无语义限制，靠 target 判断 |
+| `ICmpZero` | 与 0 比较的等价判断 | 比较两边合并成一个表达式 |
+| `Special` | 允许 -1 scale 的算术 | 减法 / 取负 |
+
+同一个 SCEV 的多个 use 会合并成一个 `LSRUse`；它们只是 fixup 的常量偏移不同（展开后的循环里很常见）。每个 fixup 记录「哪条指令的哪个操作数要换掉」。
+
+### 2. 初始公式
+
+对一个 use 的 SCEV，LSR 尝试拆成：
+
+```text
+formula = BaseGV + BaseOffset + Σ BaseRegs + Scale * ScaledReg + UnfoldedOffset
+```
+
+- `BaseRegs`：循环不变量，或者可以在循环外算好的值；
+- `ScaledReg`：通常是归纳变量本身（一个 addrec）；
+- `Scale`：target 寻址模式允许的缩放因子；
+- `BaseOffset` / `UnfoldedOffset`：常量偏移，后者需要一个临时寄存器来加；
+- `BaseGV`：全局变量基址。
+
+以 `a + 4*(3*i)` 为例，它可以写成 `BaseRegs=[a], ScaledReg=i, Scale=12`，也可以写成 `BaseRegs=[a], ScaledReg=3*i, Scale=4`。哪一个更好，取决于 target 有没有 12 的 scale、乘法是否已经存在、以及寄存器能不能被别的 use 复用。
+
+### 3. 生成候选公式
+
+初始匹配只做保守的拆分，随后 LSR 用一组生成器扩充候选：
+
+- `GenerateReassociations` / `GenerateCombinations`：重新结合、合并循环不变量；
+- `GenerateSymbolicOffsets` / `GenerateConstantOffsets`：把符号或常量挪进偏移；
+- `GenerateScales`：从收集到的 factor 里试不同的 scale；
+- `GenerateICmpZeroScales`、`GenerateTruncates`：比较和窄化类型的特例；
+- `GenerateCrossUseConstantOffsets`：在多个 use 之间共享常量偏移；
+- IV chain / post-inc：把 `%i.next` 的增量直接折到使用点上。
+
+每生成一个公式，都要用 `isLegalUse` 和 target 的 `isLegalAddressingMode` 检查合法性。候选数量很容易爆炸，所以后面还有 `NarrowSearchSpace*` 系列启发式：删掉明显更差的公式、合并相同 scaled reg 的变体、限制展开代码的组合。
+
+### 4. 代价模型与求解
+
+`Cost` 记录一组指标：
+
+| 指标 | 含义 |
+| --- | --- |
+| `NumRegs` | 需要额外维护的寄存器数 |
+| `AddRecCost` | 归纳变量本身的代价 |
+| `NumIVMuls` | 归纳变量参与的乘法数 |
+| `NumBaseAdds` | 循环内需要的基址加法数 |
+| `ScaleCost` | 非免费 scale 的代价 |
+| `ImmCost` | 立即数编码的代价 |
+| `SetupCost` | 循环外建立寄存器的代价 |
+
+target 通过 `TargetTransformInfo::isLSRCostLess` 决定这些指标的权重（`-lsr-insns-cost` 可以把指令数也纳入比较）。`SolveRecurse` 对每个 use 做回溯：当前 use 选一个公式，累计代价；如果已经比当前最优解差就剪枝；如果新公式能复用已选中的寄存器，优先复用。搜索结束后，每个 use 恰好得到一个公式。
+
+这套搜索还会和 **baseline**（不改写时的代价）比较；某些 target 允许直接放弃不如 baseline 的方案（`-lsr-drop-solution` 可覆盖）。
+
+### 5. 改写
+
+`ImplementSolution` 用 `SCEVExpander` 在支配所有使用的位置展开公式，插入新的归纳变量（通常命名为 `%lsr.iv`、`%scevgep`），替换每个 fixup 的操作数。随后递归删除死指令、维护 LCSSA、清理同余的 phi。
+
+以前面的循环为例，AArch64 与 x86-64 上跑 `opt -passes=loop-reduce` 都会得到：
+
+```llvm
+%lsr.iv = phi ptr [ %scevgep, %loop ], [ %a, %entry ]
+store i32 7, ptr %lsr.iv, align 4
+%scevgep = getelementptr i8, ptr %lsr.iv, i64 12
+```
+
+`%mul` 和 `%p` 消失了，地址变成一次 `add`。`%i` 还在，因为它仍被出口比较使用——LSR 不负责改写循环条件。
+
+## 代价与坑
+
+- **搜索空间是主要成本。** LSR 会为每个 use 生成大量公式，再做跨 use 的组合搜索；`MaxIVUsers = 200` 和 `-lsr-complexity-limit` 是硬边界，超过就直接退出或收窄。热循环里收益很大，但编译时间也可能明显上升。
+- **只建模最内层循环。** 外层循环的表达式只有作为内层 use 的 base reg 时才会被顺带改写；LSR 不会为外层循环单独求解。
+- **要求 LoopSimplify 形式。** 没有 preheader、latch 不唯一、或者存在不可规约控制流时，`LSRInstance` 会直接返回。单独跑 `opt -passes=loop-reduce` 却看不到变化时，先补 `loop-simplify`。
+- **结果依赖 target。** 同一个循环在 x86-64、AArch64 和没有 triple 的环境里可能得到不同的公式，甚至不改写。可用的 scale、立即数范围和 post-inc 寻址都由 TTI 决定；不要把这个 pass 的输出形状当成跨目标的固定答案。
+- **寄存器压力会反噬。** 多维护一个 IV 可能让热循环更拥挤；代价模型会惩罚 `NumRegs`，但启发式搜索不保证全局最优。
+- **它在 codegen，不在 IR 优化管线。** `opt -passes='default<O2>'` 的 pipeline 文本里没有 `loop-reduce`；但 `llc -O1` 以上（以及 clang 的后端）会在 `TargetPassConfig::addIRPasses()` 的最前面跑它，`-disable-lsr` 可关闭，`-O0` 不跑。只用 `opt` 检查默认优化管线会误以为这个 pass 不存在；要看真实调度，用 `llc -print-after=loop-reduce`。IR 优化阶段里的 `indvars`、展开也不是 LSR 的替代品：LSR 的独特之处是**按 target 代价选择地址公式**。
+- **`%lsr.iv` 不是稳定接口。** 名字来自 SCEVExpander，只用于调试和阅读；不要在测试里匹配它。需要看内部决策时，用 assertions 构建加 `-debug-only=loop-reduce`，release 二进制里没有这个选项。
+
+## 在管线里的位置
+
+`loop-reduce` 注册在 `PassRegistry.def` 的 `LOOP_PASS` 里，但它不在 IR 优化管线中，而是由 **codegen** 调度。`llc`（以及 clang 的后端）在 `TargetPassConfig::addIRPasses()` 一开始就运行它，源码注释写得很直白：*Run loop strength reduction before anything else.* 之后才轮到 `CodeGenPrepare` 和指令选择：
+
+```text
+clang -O2
+  ├─ IR optimizer (opt): loop-simplify → licm / loop-rotate → indvars → ...
+  └─ codegen (llc):      loop-reduce → CodeGenPrepare → isel → ...
+```
+
+它只在 codegen 优化级别不是 `None` 时运行，也就是 clang 的 `-O1` / `-O2` / `-O3` / `-Os` / `-Oz`；`-O0` 不跑，`-disable-lsr` 可以关闭。`loop-term-fold` 可以紧跟在它后面，但由 target 的 `EnableLoopTermFold` 决定，基类默认关闭（RISC-V 会打开）。
+
+这就是图鉴把它放在「代码生成准备」而不是「循环优化」的原因：它逻辑上是一个 loop pass，执行位置却在 codegen，而且在 `codegenprepare` 之前。它依赖 `ScalarEvolution`、`IVUsers`、`DominatorTree`、`LoopInfo`、`AssumptionCache`、`TargetLibraryInfo` 和 `TargetTransformInfo`；MemorySSA 存在时会一起维护。
+
+在 `opt` 里单独调用仍然适合隔离观察：
+
+```bash
+opt -passes=loop-simplify,loop-reduce -S demo.ll -o -
+```
+
+但在真实编译里，IR 优化阶段先由 `indvars` 等 pass 把循环规范化，再由 codegen 的 LSR 做面向 target 的地址选择；两者不是同一个阶段，也不是互相替代的关系。
+
+## 自己跑一遍
+
+把下面的 IR 存成 `lsr.ll`：
+
+```llvm
+target triple = "aarch64-unknown-linux-gnu"
+
+define void @fill(ptr %a, i64 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]
+  %mul = mul i64 %i, 3
+  %p = getelementptr i32, ptr %a, i64 %mul
+  store i32 7, ptr %p, align 4
+  %i.next = add nsw i64 %i, 1
+  %cmp = icmp slt i64 %i.next, %n
+  br i1 %cmp, label %loop, label %exit
+exit:
+  ret void
+}
+```
+
+用 codegen 看它：`llc` 在 `-O1` 以上会运行 `loop-reduce`，`-print-after` 会打印改写后的 IR：
+
+```bash
+llc -O2 -print-after=loop-reduce lsr.ll -o /dev/null
+```
+
+应该看到 `*** IR Dump After Loop Strength Reduction (loop-reduce) ***`，里面有 `%lsr.iv` 指针 IV 和步长 12 的 `getelementptr`，`mul` 被删除。把 `-O2` 换成 `-O0`，或者加上 `-disable-lsr`，这段 dump 就会消失：
+
+```bash
+llc -O0 -print-after=loop-reduce lsr.ll -o /dev/null
+llc -O2 -disable-lsr -print-after=loop-reduce lsr.ll -o /dev/null
+```
+
+也可以单独用 `opt` 跑同一个 pass：
+
+```bash
+opt -passes=loop-reduce -S lsr.ll -o -
+```
+
+把 triple 换成 `x86_64-unknown-linux-gnu`，输出形状相同——这两个目标的寻址模式都允许这里用指针归约；换成寻址能力不同的目标，或者把索引改成 i32，LSR 可能选择带 scale 的整数 IV，而不是指针 IV。
+
+它不在 `opt` 的默认 IR 优化管线里，这一点和 codegen 调度并不矛盾：
+
+```bash
+opt -passes='default<O2>' --print-pipeline-passes lsr.ll \
+  | tr ',' '\n' | grep -c loop-reduce
+# 0
+```
+
+想查看 LSR 生成了多少候选、最终选了哪个公式，需要带 assertions 的 LLVM 构建：
+
+```bash
+llc -debug-only=loop-reduce -O2 lsr.ll -o /dev/null
+```
+
+官方的 release 二进制不带 `-debug-only`，这条命令在那里会直接报错。

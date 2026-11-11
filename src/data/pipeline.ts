@@ -262,10 +262,11 @@ export const pipelineStages: PipelineStage[] = [
     entry: { zh: 'IR 优化 → 代码生成', en: 'IR optimisation → code generation' },
     title: { zh: '代码生成准备', en: 'Codegen preparation' },
     note: {
-      zh: '进入后端之前还有一层 IR 级准备：CodeGenPrepare 把地址计算和比较搬到使用点，原子操作、memcmp 和 reduction 之类在目标上没有原生指令的运算在这里展开。',
-      en: 'One last IR-level layer before the backend: CodeGenPrepare sinks address computation and compares to their uses, while atomics, memcmp and reductions without a native target instruction are expanded here.',
+      zh: '进入后端之前还有一层 IR 级准备：codegen 先在 addIRPasses 里跑循环强度削减（loop-reduce），再由 CodeGenPrepare 把地址计算和比较搬到使用点；原子操作、memcmp 和 reduction 之类在目标上没有原生指令的运算也在这里展开。',
+      en: 'One last IR-level layer before the backend: codegen runs loop strength reduction (loop-reduce) in addIRPasses, then CodeGenPrepare sinks address computation and compares to their uses, while atomics, memcmp and reductions without a native target instruction are expanded here.',
     },
     passes: list(
+      'loop-reduce',
       'codegenprepare',
       'atomic-expand',
       'expand-memcmp',
