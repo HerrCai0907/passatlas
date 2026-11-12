@@ -4,6 +4,7 @@ import { t } from '../i18n/ui';
 import type { PipelineStage } from '../data/pipeline';
 import { passRegistry } from '../data/pass-registry';
 import { llvmSourceUrl } from '../site';
+import { stageAnchor } from '../lib/pipeline';
 import { passSlug, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
 
@@ -80,11 +81,17 @@ const levelKeys = {
             )
           ) : null}
 
-          <article class="panel">
+          <article class="panel" id={stageAnchor(stage.id)}>
             <header class="panel__head">
-              <span class="panel__no" aria-hidden="true">
+              <a
+                class="panel__no"
+                href={`#${stageAnchor(stage.id)}`}
+                aria-label={t(locale, 'passes.pipeline.stageLink', {
+                  title: stage.title[locale],
+                })}
+              >
                 {String(index + 1).padStart(2, '0')}
-              </span>
+              </a>
               <div class="panel__title">
                 <h3>{stage.title[locale]}</h3>
                 <span class="panel__level">{t(locale, levelKeys[stage.level])}</span>
@@ -387,6 +394,15 @@ const levelKeys = {
     box-shadow: var(--shadow-sm);
   }
 
+  /* 从 pass 详情页跳进来的阶段：给整段一个定位高亮 */
+  .panel:target {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+    background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+    box-shadow:
+      0 0 0 3px var(--accent-soft),
+      var(--shadow-sm);
+  }
+
   .panel__head {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -402,6 +418,20 @@ const levelKeys = {
     font-size: 10px;
     font-variant-numeric: tabular-nums;
     color: var(--faint);
+    text-decoration: none;
+    transition:
+      border-color 0.16s var(--ease),
+      color 0.16s var(--ease);
+  }
+
+  .panel__no:hover {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+  }
+
+  .panel:target .panel__no {
+    border-color: var(--accent);
+    color: var(--accent-strong);
   }
 
   .panel__title {

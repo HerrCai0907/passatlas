@@ -7,6 +7,7 @@ import {
   machineTargets,
   type MachineTargetId,
 } from '../data/machine';
+import { machineStageAnchor } from '../lib/pipeline';
 import { passSlug, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
 
@@ -75,7 +76,7 @@ function hrefFor(item: { name: string; page?: string }): string | undefined {
   <ol class="stages" aria-label={t(locale, 'passes.machine.stagesLabel')}>
     {
       machineStages.map((stage, index) => (
-        <li class="stage">
+        <li class="stage" id={machineStageAnchor(stage.id)}>
           <header class="stage__head">
             <span class="stage__no" aria-hidden="true">
               {String(index + 1).padStart(2, '0')}
@@ -263,6 +264,16 @@ function hrefFor(item: { name: string; page?: string }): string | undefined {
   .stage {
     padding: 18px 0 20px;
     border-bottom: 1px solid var(--line);
+  }
+
+  /* 深链落点：同一阶段在管线图里也有锚点，这里高亮详细版本 */
+  .stage:target {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+
+  .stage:target .stage__no {
+    border-color: var(--accent);
+    color: var(--accent-strong);
   }
 
   .stage__head {
