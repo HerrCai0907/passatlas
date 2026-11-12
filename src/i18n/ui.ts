@@ -25,7 +25,6 @@ const zh = {
   'footer.about': '关于本站',
   'footer.docs': 'LLVM Pass 官方文档',
   'footer.source': 'LLVM 源码',
-  'footer.note': '100% 静态 · 无后端 · 无跟踪脚本',
   'footer.version': '目标版本',
   'footer.license': '内容许可',
   'footer.build': '构建',
@@ -35,7 +34,7 @@ const zh = {
   'home.titleEn': 'LLVM',
   'home.title': 'Pass 图鉴',
   'home.lead':
-    '每一个 pass 都是一次变形。这里把输入 IR、判定逻辑、输出 IR 拆成可以单步回放的帧，让你看清它<em>为什么</em>这么改。',
+    '这里把输入 IR、判定逻辑、输出 IR 拆成可以单步回放的帧，让你看清它<em>为什么</em>这么改。',
   'home.start': '从 mem2reg 开始',
   'home.browse': '浏览图鉴',
   'home.stats.passes': '已上线',
@@ -287,7 +286,6 @@ const en: Messages = {
   'footer.about': 'About this site',
   'footer.docs': 'LLVM pass documentation',
   'footer.source': 'LLVM source',
-  'footer.note': '100% static · no backend · no trackers',
   'footer.version': 'Target version',
   'footer.license': 'License',
   'footer.build': 'Built with',
@@ -297,7 +295,7 @@ const en: Messages = {
   'home.titleEn': 'LLVM',
   'home.title': 'Pass Atlas',
   'home.lead':
-    'Every pass is a transformation. Here the input IR, the decision logic and the output IR are split into frames you can replay one at a time, so you can see <em>why</em> the IR changes.',
+    'The input IR, the decision logic and the output IR are split into frames you can replay one at a time, so you can see <em>why</em> the IR changes.',
   'home.start': 'Start with mem2reg',
   'home.browse': 'Browse the atlas',
   'home.stats.passes': 'Passes',

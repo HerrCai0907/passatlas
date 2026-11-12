@@ -20,10 +20,6 @@ export const site = {
   name: 'PassAtlas',
   nameZh: 'LLVM Pass 图鉴',
   nameEn: 'LLVM Pass Atlas',
-  tagline: {
-    zh: '每一个 pass，都是一次变形。',
-    en: 'Every pass is a transformation.',
-  },
   description: {
     zh: '用可单步、可回退的动画拆解 LLVM 优化管线中的各个 pass：输入 IR、判定逻辑、输出 IR，以及它在 -O2 里的位置。全站静态，无需登录。',
     en: 'Step-by-step, reversible animations break down the passes in the LLVM optimisation pipeline: input IR, decision logic, output IR, and where the pass sits in -O2. Fully static, no sign-in.',
