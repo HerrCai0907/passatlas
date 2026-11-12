@@ -1,0 +1,239 @@
+---
+title: machine-function-splitter
+subtitle: 冷代码拆出去：把冷基本块移进独立 section
+summary: 用 profile 把冷基本块从函数主体拆到独立的冷 section：热代码更紧凑，i-cache 与 iTLB 更友好。代价是要有好 profile、链接器配合，EH 和跳转表还有额外约束。
+category: codegen
+difficulty: 3
+status: ready
+order: 23
+stage: []
+tags: ['PGO', 'Code Layout', 'Section', 'MIR', 'AutoFDO']
+demo: machine-function-splitter
+source: llvm/lib/CodeGen/MachineFunctionSplitter.cpp
+updated: 2026-11-12
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+一个函数在 `.text` 里通常是连续的一段。profile 几乎总是显示同一件事：执行时间集中在少数基本块，错误处理、`unreachable`、冷分支和清理代码几乎不跑，但它们和热路径一样占着 `.text` 的位置。
+
+```text
+未开启 MFS
+  .text: f1热 | f1冷 | f2热 | f2冷
+
+开启 MFS
+  .text:         f1热 | f2热
+  .text.split.*: f1冷 | f2冷
+```
+
+这伤害两件事：
+
+- **i-cache**：一条 64 字节的 cache line 里混进冷指令，热路径的有效密度下降；
+- **iTLB**：4 KiB 的页里如果只有一部分是热代码，热函数就会散落在更多页上。
+
+MachineFunctionSplitter（MFS）的答案很直接：用 profile 判出冷基本块，把它们从函数主体里拆出来，放进这个函数的冷 section——默认叫 `.text.split.<function>`，冷区域在汇编里有一个 `<function>.cold` 符号。链接器再把所有函数的冷 section 收在一起，热段就连续了。
+
+MFS 不改指令语义。它跑在寄存器分配、栈帧和基本块布局之后，只改基本块的 section 归属与顺序；这是代码布局优化，不是 IR 优化。它最初由 Google 为 AutoFDO 生产线提出，现在同时支持 instrumentation PGO 和 sample profile。
+
+## 算法
+
+### 输入：末端的一份 Machine IR
+
+MFS 是一个 `MachineFunctionPass`，位置在代码生成的最末端：物理寄存器已经分配，栈帧已经定好，`MachineBlockPlacement` 也做完了。它读的是机器层的频率信息，不是 IR：
+
+- `MF.getFunction().hasProfileData()` 为真，或者显式打开 `-mfs-split-ehcode`；
+- `MachineBlockFrequencyInfo`（MBFI）给出每个 MBB 的 profile count；
+- `ProfileSummaryInfo`（PSI）把 count 映射到全程序的分布。
+
+没有 profile 时（EH 静态拆分除外）pass 直接返回 `false`。`-fsplit-machine-functions` 只在 x86 和 AArch64 的 ELF 目标上被 clang 接受；没有 profile 的构建里它是空操作。
+
+### 什么算冷
+
+- **instrumentation PGO**：没有 count 就是冷；有 count 则交给 PSI 的全局分位判定。
+- **sample profile**：没有 count 不判断；有 count 也只信任 call graph 里热的函数。
+- **兜底**：`count < -mfs-count-threshold`（默认 1）。
+
+默认阈值是 `-mfs-psi-cutoff=999950`，也就是 99.995 分位：一个块如果比全程序 99.995% 的块还冷，就拆。注意这是**全程序的分位**，不是函数内的相对频率；LLVM 的注释里说明这个值是在 Intel CPU 上按 iTLB / i-cache 指标调出来的，换 CPU 或换负载分布不一定最优。
+
+sample profile 走另一条路：没有 count 的块不会被判冷，而且只对 call graph 里热的函数做拆分；冷函数整个跳过。`-mfs-psi-cutoff=0` 会关掉分位判定，改用 `-mfs-count-threshold`。
+
+### 标记：setSectionID
+
+`runOnMachineFunction` 的顺序大致是：
+
+1. **`isFunctionSafeToSplit`**：有 section 属性、`section_prefix` 是 `unlikely` / `unknown` 的函数不拆。
+2. **`RenumberBlocks()` + `setBBSectionsType(Preset)`**：固定当前布局顺序，并声明 section 由本 pass 指定。
+3. **遍历 MBB**：entry 不拆；EH pad 先记下；其余块按 `isColdBlock` 标成 `MBBSectionID::ColdSectionID`。
+4. **EH**：所有 landing pad 都冷才一起拆；`-mfs-split-ehcode` 则静态拆所有 EH-only 块。
+5. **收尾**：稳定排序、补跳转、landing pad nop。
+
+目标还可以否决单个块。AArch64 的 `isMBBSafeToSplitToCold` 拒绝三类：
+
+- `INLINEASM_BR`（asm goto）所在的块以及它的间接目标；
+- jump table 的目标块；
+- 含 `G_BRJT` / `JumpTableDest` 的块。
+
+原因是 AArch64 的 jump table 表项是 label-relative 的：表项和标签必须在同一个 section，跨 section 后 relocation 修不回来。AArch64 上还有一条更粗的规则：带 red zone 的函数整个不拆，因为跨 section 的分支 relaxation 可能需要一个 scratch 寄存器，而把寄存器溢出到 red zone 会破坏函数正在用的那块栈空间。
+
+### 排序与补跳转
+
+`sortBasicBlocksAndUpdateBranches` 按 section type 做稳定排序：`Default(0) < Exception(1) < Cold(2)`。热块保持 `MachineBlockPlacement` 留下的顺序，冷块整体挪到函数尾部；同一个函数的所有冷块仍然是连续的一段，将来进同一个 section。
+
+排序会打断原来的 fallthrough：原本 `P` 直接落进 `Q`，现在 `Q` 可能被挪走。`updateBranches` 因此要做两件事：
+
+- `P` 原来有 fallthrough，但 `Q` 不再相邻（或者 `P` 结束了一个 section）→ 在 `P` 末尾插一条无条件跳转；
+- `P` 结束 section 时不做分支优化，因为链接器可能重排 section；否则尝试翻转条件分支，让 fallthrough 继续成立。
+
+这也是 MFS 在 MIR 里留下的少数痕迹之一：section 边界上多出一条跳转，或者一条条件分支的朝向变了。
+
+### landing pad 的 nop
+
+如果冷 section 的第一个块是 landing pad，`avoidZeroOffsetLandingPad` 会在它的 `EH_LABEL` 前插一条 nop。原因是 LSDA：landing pad 的偏移相对于 `@LPStart`，偏移 0 表示“没有 landing pad”；块正好在 section 开头时偏移就是 0，必须用一条 nop 把它顶开。
+
+### 发射：.text.split 与 foo.cold
+
+MFS 自己不做 section 发射。AsmPrinter 遍历 MBB 时看到 `isBeginSection()`，通过 `getSectionForMachineBasicBlock` 取 section：冷块的 section 名是 `BBSectionsColdTextPrefix` 加函数名，默认前缀是 `.text.split.`（`-bbsections-cold-text-prefix` 可以改），冷块入口符号是 `<function>.cold`。
+
+```text
+	.text
+	.globl	guard
+guard:
+	cmpl	$0, %edi
+	jle	guard.cold
+	movl	%edi, %eax
+	retq
+
+	.section	.text.split.guard,"ax",@progbits
+guard.cold:
+	movl	$-1, %eax
+	retq
+```
+
+跨 section 的分支可能超出短跳转的编码范围，汇编器或链接器会做 branch relaxation；AArch64 上 relaxation 可能需要 scratch 寄存器，这正是 red zone 函数不能被拆的原因。MIR 里能看到的标记是：
+
+```text
+bb.2.cold (bbsections Cold):
+  $eax = MOV32ri -1
+  RET64 $eax
+```
+
+`.text.split.*` 只是输入 section。要让冷代码真正聚在一起，链接器得把它们放进同一个输出区：ld.lld 通过 `-z keep-text-section-prefix` 识别这个前缀，GNU ld 则要在 linker script 里显式收口，例如：
+
+```text
+.text.split : { *(.text.split.*) }
+```
+
+### 与 basic block sections 的关系
+
+MFS 借用了 basic block sections 的机制（section ID、排序、符号），但它的粒度是“一个函数的冷区域”，不是“每个块一个 section”。LLVM 23 里两者可以同时出现：如果某个函数在 basic-block-sections profile 里，`BasicBlockSections` 负责它，MFS 跳过；`-basic-block-sections=all` 时 MFS 直接不跑。更早的版本里两者互斥，`TargetPassConfig` 检测到 BB sections 就不会添加 MFS。
+
+## 代价与坑
+
+- **profile 质量决定一切。** 没有 profile 就是空操作；profile 漂移、采样偏差或负载不代表性都会让冷热判错。AutoFDO 还要求 FS discriminator（`-fdebug-info-for-profiling`），否则块计数不够精确，LLVM 会直接警告 “Using AutoFDO without FSDiscriminator for MFS may regress performance”。
+- **阈值是全局百分位。** `-mfs-psi-cutoff` 不是“函数内相对冷”，分布平坦的程序可能几乎什么都不拆，长尾很重的程序可能拆得过多。先用默认值测，再用 `-mfs-psi-cutoff` / `-mfs-count-threshold` 做对照。
+- **拆出去不是免费。** 冷热边要显式跳转，分支可能被 relaxation 拉长；二进制大小通常几乎不变，但热段的密度和对齐会变。不要把它当成 size 优化。
+- **EH 是最容易出事的地方。** landing pad、LSDA 偏移、funclet 和 CFI 都依赖块的位置；MFS 只在所有 landing pad 都冷时才整体拆，并在 section 开头的 landing pad 前补 nop。`-mfs-split-ehcode` 会绕过 profile 静态拆所有 EH-only 块，适合异常路径确实很冷、但 profile 不覆盖它们的场景。
+- **AArch64 的约束更多。** red zone、jump table、asm goto 都会阻止拆分；这些限制是为了让 relocation 和分支 relaxation 仍然成立，不是保守。
+- **链接器不配合就没有收益。** 冷 section 如果仍被塞回 `.text` 的中间，热代码没有被拉近，反而多出跳转。确认最终二进制里 `.text.split` 是一个独立的输出 section。
+- **符号变了。** 采样栈回溯里会出现 `foo.cold`；按符号名做聚合的工具要认得这个后缀。它仍然是原函数的一部分，不是新函数。
+- **平台限制。** `-fsplit-machine-functions` 只在 x86 / AArch64 ELF 上可用；Mach-O、COFF 和 32 位 ARM 会被 driver 拒绝。LTO 下对应的是 `-plugin-opt=-split-machine-functions`。
+- **BOLT 之类的后置布局工具会再动一遍。** MFS 负责把冷块分出来，BOLT 可能重新排整个二进制；两者叠加时以最终 profile 和布局为准。
+
+## 在管线里的位置
+
+MFS 在 `TargetPassConfig::addMachinePasses` 的靠后位置，基本块布局和 EH funclet 布局之后、AsmPrinter 之前：
+
+```text
+prolog-epilog → branch-folder / tailduplication → postrapseudos
+  → postmisched → block-placement → addPreEmitPass
+  → funclet-layout → live-debug-values
+  → machine-function-splitter → asm-printer
+```
+
+它前面是 <I18nLink href="/passes/regalloc/">regalloc</I18nLink>、<I18nLink href="/passes/phi-elim/">phi-elim</I18nLink> 和所有指令级优化，后面只剩 CFI fixup、栈帧统计和少量 target 收尾，然后就是 AsmPrinter。到这时指令已经定型，MFS 只能改“块放在哪”：这也是它为什么安全、为什么收益全部来自布局。
+
+pass 的注册名是 `machine-function-splitter`，llc 的 `-split-machine-functions` 打开 `TargetOptions::EnableMachineFunctionSplitter`，效果与隐藏选项 `-enable-split-machine-functions` 相同。`-stop-after=machine-function-splitter` 可以在 MIR 里看到 `(bbsections Cold)` 标记；想看最终 section，得看汇编或目标文件。MFS 和 profile 的生成、消费关系见 <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink>。
+
+## 自己跑一遍
+
+用 instrumentation PGO 走一遍完整流程。下面以 x86-64 Linux / ELF 为例：`-fsplit-machine-functions` 在 Mach-O 和 COFF 上会被 driver 拒绝。
+
+```bash
+# 1. 先跑一遍有代表性的负载
+clang -O2 -fprofile-generate demo.c -o demo
+./demo
+llvm-profdata merge -o demo.profdata default.profraw
+
+# 2. 用 profile 编译，打开 MFS
+clang -O2 -fprofile-use=demo.profdata -fsplit-machine-functions \
+  -S demo.c -o demo.s
+
+# 3. 找冷 section 与 .cold 符号
+grep -n -E "text\.split|\.cold" demo.s
+```
+
+`demo.c` 写一个带错误分支的函数就够了；`noinline` 是为了别让 `guard` 被内联进 `main`，否则就没有独立的函数可拆：
+
+```c
+__attribute__((noinline))
+int guard(int x) {
+  if (x > 0)
+    return x;
+  return -1;
+}
+
+int main(void) {
+  long sum = 0;
+  for (int i = 1; i < 100000; i++)
+    sum += guard(i);
+  sum += guard(-1);   /* 只跑一次的冷路径 */
+  return (int)sum;
+}
+```
+
+如果块不够冷，拆不出来，可以把判定调激进一点做对照：
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -fsplit-machine-functions \
+  -mllvm -mfs-psi-cutoff=0 -mllvm -mfs-count-threshold=1000000 \
+  -S demo.c -o demo-aggressive.s
+```
+
+在 MIR 里看 section 归属：
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -emit-llvm -S demo.c -o demo.ll
+llc -mtriple=x86_64-linux-gnu -O2 -split-machine-functions \
+  -stop-after=machine-function-splitter demo.ll -o demo.mir
+
+grep -n "bbsections Cold" demo.mir
+```
+
+确认目标文件里真的多了一个 section：
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -fsplit-machine-functions \
+  -c demo.c -o demo.o
+llvm-readelf -S demo.o | grep text
+```
+
+最后链接，让 lld 把冷 section 收在一起：
+
+```bash
+clang -O2 -fuse-ld=lld -fprofile-use=demo.profdata \
+  -fsplit-machine-functions demo.c -o demo \
+  -Wl,-z,keep-text-section-prefix
+
+# 或者：GNU ld + linker script，把 .text.split.* 放到 .text 之后
+```
+
+AutoFDO 的路径只换 profile 来源，并且记得打开 FS discriminator：
+
+```bash
+clang -O2 -fdebug-info-for-profiling -fprofile-sample-use=demo.afdo \
+  -fsplit-machine-functions demo.c -o demo
+```
+
+想看 EH 的拆分，用 `-mfs-split-ehcode`；它不需要 profile，但会把所有只能从 EH pad 到达的块都标冷，适合异常清理代码确实很冷的 C++ 程序。

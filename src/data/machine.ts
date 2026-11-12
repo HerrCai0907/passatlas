@@ -208,8 +208,8 @@ export const machineStages: MachineStage[] = [
     title: { zh: '栈帧与后分配优化', en: 'Frame lowering & post-RA' },
     manager: 'MachineFunctionPass · post-RA',
     note: {
-      zh: 'prolog-epilog 解析 frame index、保存 callee-saved 寄存器、对齐栈并生成 prologue / epilogue；之后再做 post-RA 调度、分支折叠、尾复制和基本块布局。此时寄存器已经是物理寄存器。',
-      en: 'prolog-epilog resolves frame indices, saves callee-saved registers, aligns the stack and emits prologue / epilogue; post-RA scheduling, branch folding, tail duplication and block placement follow. Registers are physical by now.',
+      zh: 'prolog-epilog 解析 frame index、保存 callee-saved 寄存器、对齐栈并生成 prologue / epilogue；之后再做 post-RA 调度、分支折叠、尾复制和基本块布局。布局定下来后，machine-function-splitter 按 profile 把冷块标进独立 section。此时寄存器已经是物理寄存器。',
+      en: 'prolog-epilog resolves frame indices, saves callee-saved registers, aligns the stack and emits prologue / epilogue; post-RA scheduling, branch folding, tail duplication and block placement follow. Once the layout is settled, machine-function-splitter marks cold blocks for their own section. Registers are physical by now.',
     },
     shared: [
       p('prolog-epilog', { label: 'PrologEpilogInserter' }),
@@ -218,6 +218,7 @@ export const machineStages: MachineStage[] = [
       p('tailduplication'),
       p('block-placement', { label: 'MachineBlockPlacement' }),
       p('postrapseudos', { label: 'ExpandPostRAPseudos' }),
+      p('machine-function-splitter', { page: 'machine-function-splitter', conditional: true }),
     ],
     lanes: {
       'x86-64': [

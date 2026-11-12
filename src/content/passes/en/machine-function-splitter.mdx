@@ -1,0 +1,239 @@
+---
+title: machine-function-splitter
+subtitle: "Cold code gets its own section: splitting cold blocks out of a function"
+summary: Use the profile to move cold basic blocks out of the function body into a dedicated cold section, keeping hot code dense and i-cache / iTLB friendly. The price is a good profile, linker support, and extra constraints around EH and jump tables.
+category: codegen
+difficulty: 3
+status: ready
+order: 23
+stage: []
+tags: ['PGO', 'Code Layout', 'Section', 'MIR', 'AutoFDO']
+demo: machine-function-splitter
+source: llvm/lib/CodeGen/MachineFunctionSplitter.cpp
+updated: 2026-11-12
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+A function usually occupies one contiguous run of `.text`. The profile almost always says the same thing: execution time concentrates in a few basic blocks, while error handling, `unreachable`, cold branches and cleanup code sit in `.text` without ever running.
+
+```text
+Without MFS
+  .text: f1hot | f1cold | f2hot | f2cold
+
+With MFS
+  .text:         f1hot | f2hot
+  .text.split.*: f1cold | f2cold
+```
+
+That hurts two things:
+
+- **i-cache**: a 64-byte cache line that mixes in cold instructions lowers the effective density of the hot path.
+- **iTLB**: when only part of a 4 KiB page is hot, hot function entries spread over more pages.
+
+MachineFunctionSplitter (MFS) answers directly: use the profile to find cold basic blocks, pull them out of the function body, and place them in a cold section for that function — by default `.text.split.<function>`, with a `<function>.cold` symbol for the cold region. The linker then collects every function's cold section together, so the hot part stays contiguous.
+
+MFS does not change instruction semantics. It runs after register allocation, frame lowering and block placement, and only changes a block's section membership and position; this is code-layout work, not IR work. It was proposed by Google for AutoFDO production pipelines and now supports both instrumentation PGO and sample profiles.
+
+## Algorithm
+
+### Input: a late Machine IR snapshot
+
+MFS is a `MachineFunctionPass` at the very end of code generation: physical registers are assigned, the frame is fixed, and `MachineBlockPlacement` has already run. It reads machine-level frequency information, not IR:
+
+- `MF.getFunction().hasProfileData()` is true, or `-mfs-split-ehcode` is passed explicitly;
+- `MachineBlockFrequencyInfo` (MBFI) provides a profile count per MBB;
+- `ProfileSummaryInfo` (PSI) maps that count onto the program-wide distribution.
+
+Without a profile (except for the static EH mode) the pass returns `false`. Clang only accepts `-fsplit-machine-functions` on x86 and AArch64 ELF targets; in a build without profile data it is a no-op.
+
+### What counts as cold
+
+- **instrumentation PGO**: no count means cold; with a count, the global PSI percentile decides.
+- **sample profile**: no count means “do not judge”; with a count, only functions hot in the call graph are trusted.
+- **fallback**: `count < -mfs-count-threshold` (default 1).
+
+The default cutoff is `-mfs-psi-cutoff=999950`, i.e. the 99.995th percentile: a block colder than 99.995% of the program is split. This is a **program-wide percentile**, not a function-relative frequency; the LLVM comment notes that the value was tuned empirically on Intel CPUs against iTLB / i-cache metrics, so a different CPU or workload may want a different cutoff.
+
+Sample profiles take a different path: a block with no count is not judged cold, and only functions that are hot in the call graph are split at all; cold functions are skipped entirely. `-mfs-psi-cutoff=0` disables the percentile test and falls back to `-mfs-count-threshold`.
+
+### Marking: setSectionID
+
+`runOnMachineFunction` works roughly like this:
+
+1. **`isFunctionSafeToSplit`**: skip functions with a section attribute or a `section_prefix` of `unlikely` / `unknown`.
+2. **`RenumberBlocks()` + `setBBSectionsType(Preset)`**: freeze the current layout order and declare that this pass assigns sections.
+3. **Walk the MBBs**: never split the entry block; remember EH pads; mark other cold blocks with `MBBSectionID::ColdSectionID`.
+4. **EH**: split all landing pads only if every one is cold; `-mfs-split-ehcode` statically splits all EH-only blocks.
+5. **Finish**: stable sort, branch fixup, landing-pad nop.
+
+Targets can veto individual blocks. AArch64's `isMBBSafeToSplitToCold` rejects three shapes:
+
+- blocks containing `INLINEASM_BR` (asm goto) and their indirect targets;
+- jump-table target blocks;
+- blocks with `G_BRJT` / `JumpTableDest`.
+
+AArch64 jump-table entries are label-relative: the entry and the label must stay in the same section, otherwise relocation fixup cannot work. AArch64 also refuses to split a function that uses a red zone at all, because relaxing a cross-section branch may need a scratch register, and spilling that register into the red zone would clobber the stack area the function is using.
+
+### Sorting and branch fixup
+
+`sortBasicBlocksAndUpdateBranches` performs a stable sort by section type: `Default(0) < Exception(1) < Cold(2)`. Hot blocks keep the order left by `MachineBlockPlacement`, cold blocks move to the end of the function, and all cold blocks of one function stay contiguous so they can share one section.
+
+The sort breaks the original fallthroughs: `P` used to fall into `Q`, and `Q` may now have moved. `updateBranches` therefore does two things:
+
+- if `P` had a fallthrough but `Q` is no longer adjacent (or `P` ends a section), insert an unconditional branch at the end of `P`;
+- do not optimise branches for a block that ends a section, because the linker may reorder sections; otherwise try flipping a conditional branch so the fallthrough still holds.
+
+That is one of the few MIR-level traces MFS leaves behind: an extra jump at a section boundary, or a conditional branch pointing the other way.
+
+### The landing-pad nop
+
+If the first block of the cold section is a landing pad, `avoidZeroOffsetLandingPad` inserts a nop before its `EH_LABEL`. The reason is the LSDA: a landing pad's offset is relative to `@LPStart`, and an offset of zero means “there is no landing pad”. A block at the very start of a section has offset zero, so a nop has to push it off zero.
+
+### Emission: .text.split and foo.cold
+
+MFS does not emit sections itself. AsmPrinter walks the MBBs, sees `isBeginSection()`, and asks `getSectionForMachineBasicBlock` for the section: a cold block's name is `BBSectionsColdTextPrefix` plus the function name, with the default prefix `.text.split.` (changeable via `-bbsections-cold-text-prefix`), and the cold block's entry symbol is `<function>.cold`.
+
+```text
+	.text
+	.globl	guard
+guard:
+	cmpl	$0, %edi
+	jle	guard.cold
+	movl	%edi, %eax
+	retq
+
+	.section	.text.split.guard,"ax",@progbits
+guard.cold:
+	movl	$-1, %eax
+	retq
+```
+
+A branch across sections may no longer fit a short jump, so the assembler or linker performs branch relaxation; on AArch64 relaxation may need a scratch register, which is exactly why red-zone functions cannot be split. In MIR the marker looks like this:
+
+```text
+bb.2.cold (bbsections Cold):
+  $eax = MOV32ri -1
+  RET64 $eax
+```
+
+`.text.split.*` is only an input section. For the cold code to actually end up together, the linker has to place those sections in one output region: ld.lld recognises the prefix with `-z keep-text-section-prefix`, while GNU ld needs an explicit linker script, for example:
+
+```text
+.text.split : { *(.text.split.*) }
+```
+
+### Relation to basic block sections
+
+MFS borrows the basic block section machinery (section IDs, sorting, symbols), but its granularity is “the cold region of one function”, not “one section per block”. In LLVM 23 the two can coexist: if a function appears in the basic-block-sections profile, `BasicBlockSections` owns it and MFS skips it; with `-basic-block-sections=all`, MFS does not run at all. In earlier versions they were mutually exclusive — `TargetPassConfig` simply did not add MFS when BB sections were enabled.
+
+## Cost and pitfalls
+
+- **Profile quality decides everything.** No profile means a no-op; a stale profile, sampling bias or an unrepresentative workload misclassifies blocks. AutoFDO also needs FS discriminators (`-fdebug-info-for-profiling`); without them block counts are less precise and LLVM warns “Using AutoFDO without FSDiscriminator for MFS may regress performance”.
+- **The cutoff is a global percentile.** `-mfs-psi-cutoff` is not “cold relative to this function”: a flat distribution may split almost nothing, a long-tailed one may split too much. Start from the defaults, then compare against other `-mfs-psi-cutoff` / `-mfs-count-threshold` values.
+- **Splitting is not free.** Hot-to-cold edges need explicit branches, and relaxation may lengthen them; binary size is usually almost unchanged, but hot-section density and alignment do change. Do not treat this as a size optimisation.
+- **EH is where it breaks.** Landing pads, LSDA offsets, funclets and CFI all depend on block placement; MFS only splits when every landing pad is cold, and inserts the nop described above. `-mfs-split-ehcode` bypasses the profile and statically marks every EH-only block cold, which suits C++ cleanup code that the profile does not cover.
+- **AArch64 has more restrictions.** Red zones, jump tables and asm goto all block splitting; those checks are what keeps relocation and branch relaxation sound, not conservatism.
+- **No linker support, no win.** If cold sections are still mixed back into the middle of `.text`, hot code has not moved closer and you have paid for extra jumps. Verify that `.text.split` is a separate output section in the final binary.
+- **The symbols change.** Sampled stack traces now contain `foo.cold`; tools that aggregate by symbol name need to understand the suffix. It is still part of the original function, not a new function.
+- **Platform limits.** `-fsplit-machine-functions` is only available on x86 / AArch64 ELF; the driver rejects Mach-O, COFF and 32-bit ARM. With LTO the flag becomes `-plugin-opt=-split-machine-functions`.
+- **Post-link layout tools may move things again.** MFS separates cold blocks, while BOLT may re-lay-out the whole binary; when both are used, the final profile and layout decide.
+
+## Where it sits in the pipeline
+
+MFS sits late in `TargetPassConfig::addMachinePasses`, after block placement and EH funclet layout and before AsmPrinter:
+
+```text
+prolog-epilog → branch-folder / tailduplication → postrapseudos
+  → postmisched → block-placement → addPreEmitPass
+  → funclet-layout → live-debug-values
+  → machine-function-splitter → asm-printer
+```
+
+Everything before it — <I18nLink href="/passes/regalloc/">regalloc</I18nLink>, <I18nLink href="/passes/phi-elim/">phi-elim</I18nLink> and the instruction-level optimisers — has already fixed the instructions; after it come only CFI fixup, stack-size analysis and a few target-specific pre-emit passes, then AsmPrinter. MFS can only change where blocks live, which is why it is safe and why all of its benefit comes from layout.
+
+The registered pass name is `machine-function-splitter`; llc's `-split-machine-functions` sets `TargetOptions::EnableMachineFunctionSplitter`; the hidden `-enable-split-machine-functions` option has the same effect. `-stop-after=machine-function-splitter` shows the `(bbsections Cold)` marker in MIR; the final section only appears in assembly or the object file. How the profile is produced and consumed is covered in <I18nLink href="/passes/pgo-instr-gen/basic-block/">basic-block</I18nLink>.
+
+## Run it yourself
+
+Walk the whole instrumentation-PGO path. The commands below assume x86-64 Linux / ELF: the driver rejects `-fsplit-machine-functions` on Mach-O and COFF.
+
+```bash
+# 1. run a representative workload first
+clang -O2 -fprofile-generate demo.c -o demo
+./demo
+llvm-profdata merge -o demo.profdata default.profraw
+
+# 2. rebuild with the profile and turn MFS on
+clang -O2 -fprofile-use=demo.profdata -fsplit-machine-functions \
+  -S demo.c -o demo.s
+
+# 3. find the cold section and the .cold symbol
+grep -n -E "text\.split|\.cold" demo.s
+```
+
+A function with an error branch is enough; `noinline` keeps `guard` from being inlined into `main`, so there is a real function to split:
+
+```c
+__attribute__((noinline))
+int guard(int x) {
+  if (x > 0)
+    return x;
+  return -1;
+}
+
+int main(void) {
+  long sum = 0;
+  for (int i = 1; i < 100000; i++)
+    sum += guard(i);
+  sum += guard(-1);   /* the cold path, taken once */
+  return (int)sum;
+}
+```
+
+If nothing is cold enough to split, make the test more aggressive and compare:
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -fsplit-machine-functions \
+  -mllvm -mfs-psi-cutoff=0 -mllvm -mfs-count-threshold=1000000 \
+  -S demo.c -o demo-aggressive.s
+```
+
+To see section membership in MIR:
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -emit-llvm -S demo.c -o demo.ll
+llc -mtriple=x86_64-linux-gnu -O2 -split-machine-functions \
+  -stop-after=machine-function-splitter demo.ll -o demo.mir
+
+grep -n "bbsections Cold" demo.mir
+```
+
+Confirm that the object file really has an extra section:
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -fsplit-machine-functions \
+  -c demo.c -o demo.o
+llvm-readelf -S demo.o | grep text
+```
+
+Finally link so that lld collects the cold sections together:
+
+```bash
+clang -O2 -fuse-ld=lld -fprofile-use=demo.profdata \
+  -fsplit-machine-functions demo.c -o demo \
+  -Wl,-z,keep-text-section-prefix
+
+# or: GNU ld plus a linker script that puts .text.split.* after .text
+```
+
+The AutoFDO path only changes where the profile comes from — and remember the FS discriminators:
+
+```bash
+clang -O2 -fdebug-info-for-profiling -fprofile-sample-use=demo.afdo \
+  -fsplit-machine-functions demo.c -o demo
+```
+
+To see EH splitting, use `-mfs-split-ehcode`; it needs no profile, but marks every block reachable only from an EH pad as cold, which fits C++ programs whose cleanup code is genuinely cold.

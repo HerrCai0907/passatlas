@@ -375,7 +375,7 @@ entry:
   assert.match(machineSnapshots.find((snapshot) => snapshot.id === 'ra').targets['x86-64'], /\$eax/);
   assert.match(machineSnapshots.find((snapshot) => snapshot.id === 'ra').targets.aarch64, /\$w0/);
 
-  for (const id of ['isel', 'phi-elim', 'regalloc']) {
+  for (const id of ['isel', 'phi-elim', 'regalloc', 'machine-function-splitter']) {
     const zh = getDemo(id, 'zh');
     const en = getDemo(id, 'en');
     assert.ok(zh && en, `${id} 演示应存在`);
