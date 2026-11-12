@@ -14,6 +14,7 @@ updated: 2026-11-12
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
+import LSRFormulaLabIsland from '../../../components/LSRFormulaLabIsland.astro';
 
 ## 它解决什么问题
 
@@ -66,7 +67,7 @@ formula = BaseGV + BaseOffset + Σ BaseRegs + Scale * ScaledReg + UnfoldedOffset
 - `BaseOffset` / `UnfoldedOffset`：常量偏移，后者需要一个临时寄存器来加；
 - `BaseGV`：全局变量基址。
 
-以 `a + 4*(3*i)` 为例，它可以写成 `BaseRegs=[a], ScaledReg=i, Scale=12`，也可以写成 `BaseRegs=[a], ScaledReg=3*i, Scale=4`。哪一个更好，取决于 target 有没有 12 的 scale、乘法是否已经存在、以及寄存器能不能被别的 use 复用。
+以 `a + 4*(3*i)` 为例，代数上它可以写成 `BaseRegs=[a], ScaledReg=i, Scale=12`，也可以写成 `BaseRegs=[a], ScaledReg=3*i, Scale=4`。但 LSR 的候选来自 `IVUsers` 的 SCEV：这个表达式已经被规范化成步长 12 的 addrec，`3*i` 不一定作为独立寄存器出现；而 `Scale=12` 还要先过 target 的寻址模式。哪一个更好，最终取决于候选里有哪些合法公式、以及寄存器能不能被别的 use 复用。
 
 ### 3. 生成候选公式
 
@@ -74,7 +75,7 @@ formula = BaseGV + BaseOffset + Σ BaseRegs + Scale * ScaledReg + UnfoldedOffset
 
 - `GenerateReassociations` / `GenerateCombinations`：重新结合、合并循环不变量；
 - `GenerateSymbolicOffsets` / `GenerateConstantOffsets`：把符号或常量挪进偏移；
-- `GenerateScales`：从收集到的 factor 里试不同的 scale；
+- `GenerateScales`：从循环里收集到的步长（以及它们之间的整除比）里试不同的 scale；
 - `GenerateICmpZeroScales`、`GenerateTruncates`：比较和窄化类型的特例；
 - `GenerateCrossUseConstantOffsets`：在多个 use 之间共享常量偏移；
 - IV chain / post-inc：把 `%i.next` 的增量直接折到使用点上。
@@ -97,9 +98,36 @@ formula = BaseGV + BaseOffset + Σ BaseRegs + Scale * ScaledReg + UnfoldedOffset
 
 target 通过 `TargetTransformInfo::isLSRCostLess` 决定这些指标的权重（`-lsr-insns-cost` 可以把指令数也纳入比较）。`SolveRecurse` 对每个 use 做回溯：当前 use 选一个公式，累计代价；如果已经比当前最优解差就剪枝；如果新公式能复用已选中的寄存器，优先复用。搜索结束后，每个 use 恰好得到一个公式。
 
-这套搜索还会和 **baseline**（不改写时的代价）比较；某些 target 允许直接放弃不如 baseline 的方案（`-lsr-drop-solution` 可覆盖）。
+这套搜索还会和 **baseline**（把表达式按初始公式原样展开的代价）比较；某些 target 允许直接放弃不如 baseline 的方案（`-lsr-drop-solution` 可覆盖）。
 
-### 5. 改写
+### 5. 算一遍：步长怎样决定公式
+
+把 `mul` 换成指针 IV 不是一条规则，而是一次计算：读 SCEV、分解、过合法性、比代价，再在多个 use 之间共享寄存器。下面两个循环只差索引：
+
+```llvm
+; a[i]
+%p = getelementptr i32, ptr %a, i64 %i      ; 步长 4
+
+; a[3*i]
+%mul = mul i64 %i, 3
+%p = getelementptr i32, ptr %a, i64 %mul    ; 步长 12
+```
+
+<div class="pa-lsr-bleed" id="formula-search">
+  <LSRFormulaLabIsland />
+</div>
+
+计算可以拆成四个问题。
+
+**1. 地址的 SCEV 是什么？** `IVUsers` 报告的是 `%p` 的 SCEV：`{a,+,4}` 和 `{a,+,12}`，不是 `%mul` 这条指令。`a + 4*(3*i)` 已经被规范化为步长 12 的 addrec，所以 `3*i` 不会作为一个独立寄存器进入候选。这是理解 LSR 的第一步：**它的输入是 SCEV，不是 IR 的指令形状**。
+
+**2. 步长能拆成哪些 (scale, reg)？** 公式里的 `Scale * ScaledReg` 就是这一步。`GenerateScales` 收集循环里各个 IV 的步长，用它们之间的整除比作为 factor；`{0,+,4}` 除以 4 得到 `{0,+,1}`，于是 `a + 4*i` 也可以写成 `a + 4*{0,+,1}`。但 scale 12 在 AArch64（64 位变址 LSL #0–#3）和 x86-64（1/2/4/8）上都不是合法变址，`isLegalAddressingMode` 会把它直接判出局。
+
+**3. 合法公式怎样比较？** `Cost` 记下 `NumRegs`、`AddRecCost`、`NumIVMuls`、`NumBaseAdds`、`ScaleCost`、`ImmCost`、`SetupCost`，再由 `TTI::isLSRCostLess` 决定顺序。x86-64 把 `Insns` 放第一位；AArch64 默认先比 `NumRegs`，打开 `-enable-aarch64-lsr-cost-opt` 后还会插入 `Insns` 和 `NumPrePostIndex`。这不是「哪个 scale 不合法」的差别：同一个 stride = 2 的循环，AArch64 选指针 phi，x86-64 保留 scale 8，原因是两个目标把指令数和寄存器 / scale 代价放在了不同的优先级。
+
+**4. 多个 use 怎么共享？** `getUse` 会先把可折叠的常量偏移抽成 **fixup**：`a[3*i]` 和 `a[3*i+2]` 因此落在同一个 `{a,+,12}` use 上，fixup 的偏移分别是 0 和 8；公式把起点选成 `a+8` 时，这两个偏移会一起平移成 -8 和 0，展开后进入 store / load 的地址，在 isel 时成为 displacement。`SolveRecurse` 再对每个 use 选一个公式，能复用已选中的 SCEV 就优先复用，代价已经超过当前最优就剪枝。
+
+### 6. 改写
 
 `ImplementSolution` 用 `SCEVExpander` 在支配所有使用的位置展开公式，插入新的归纳变量（通常命名为 `%lsr.iv`、`%scevgep`），替换每个 fixup 的操作数。随后递归删除死指令、维护 LCSSA、清理同余的 phi。
 
