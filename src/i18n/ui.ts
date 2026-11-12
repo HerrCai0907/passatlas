@@ -25,7 +25,6 @@ const zh = {
   'footer.about': '关于本站',
   'footer.docs': 'LLVM Pass 官方文档',
   'footer.source': 'LLVM 源码',
-  'footer.note': '100% 静态 · 无后端 · 无跟踪脚本',
   'footer.version': '目标版本',
   'footer.license': '内容许可',
   'footer.build': '构建',
@@ -35,7 +34,7 @@ const zh = {
   'home.titleEn': 'LLVM',
   'home.title': 'Pass 图鉴',
   'home.lead':
-    '每一个 pass 都是一次变形。这里把输入 IR、判定逻辑、输出 IR 拆成可以单步回放的帧，让你看清它<em>为什么</em>这么改。',
+    '这里把输入 IR、判定逻辑、输出 IR 拆成可以单步回放的帧，让你看清它<em>为什么</em>这么改。',
   'home.start': '从 mem2reg 开始',
   'home.browse': '浏览图鉴',
   'home.stats.passes': '已上线',
@@ -66,10 +65,6 @@ const zh = {
   'passes.metaDescription': '按算法族与 profile 采样点组织的 LLVM pass 图谱，每篇都配一个可单步回放的 IR 动画或可检查的 IR 例子。',
   'passes.eyebrow': 'Atlas · 目录',
   'passes.heading': 'Pass 图谱',
-  'passes.lead':
-    '按算法族分组，从「值在哪里」到「指令怎么选」；最上面是 IR PGO：先用 pgo-instr-gen 把运行事实写进 IR，再由各个消费者把计数变成优化判断。每篇都有一条能自己跑的命令。',
-  'passes.jump': '跳转到分类',
-  'passes.pipeline.jump': '管线图',
   'passes.pipeline.eyebrow': 'Pipeline',
   'passes.pipeline.title': 'LLVM 管线地图',
   'passes.pipeline.body':
@@ -97,7 +92,6 @@ const zh = {
   'passes.pipeline.legendTarget': '目标专属 pass',
   'passes.pipeline.source': 'PassBuilderPipelines.cpp',
   'passes.pipeline.conditional': '条件启用：取决于优化级别、PGO 或 target',
-  'passes.machine.jump': '两条目标线',
   'passes.machine.eyebrow': 'Machine IR · 两条主线',
   'passes.machine.title': '从 IR 到机器指令：x86-64 与 AArch64',
   'passes.machine.body':
@@ -239,7 +233,7 @@ const zh = {
 
   'ir.metaTitle': 'CFG 实验室',
   'ir.metaDescription':
-    '把任意 LLVM IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。全静态、纯前端解析。',
+    '把任意 LLVM IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。',
   'ir.eyebrow': 'Lab · CFG',
   'ir.heading': '把 IR 摊开看',
   'ir.lead':
@@ -253,7 +247,7 @@ const zh = {
 
   'about.metaTitle': '关于',
   'about.metaDescription':
-    'PassAtlas 的做法：用可单步的 IR 动画讲清 LLVM pass 的算法，全站静态，可离线阅读。',
+    'PassAtlas 的做法：用可单步的 IR 动画讲清 LLVM pass 的算法。',
   'about.eyebrow': 'About',
   'about.heading': '为什么做图鉴',
   'about.lead':
@@ -295,7 +289,6 @@ const en: Messages = {
   'footer.about': 'About this site',
   'footer.docs': 'LLVM pass documentation',
   'footer.source': 'LLVM source',
-  'footer.note': '100% static · no backend · no trackers',
   'footer.version': 'Target version',
   'footer.license': 'License',
   'footer.build': 'Built with',
@@ -305,7 +298,7 @@ const en: Messages = {
   'home.titleEn': 'LLVM',
   'home.title': 'Pass Atlas',
   'home.lead':
-    'Every pass is a transformation. Here the input IR, the decision logic and the output IR are split into frames you can replay one at a time, so you can see <em>why</em> the IR changes.',
+    'The input IR, the decision logic and the output IR are split into frames you can replay one at a time, so you can see <em>why</em> the IR changes.',
   'home.start': 'Start with mem2reg',
   'home.browse': 'Browse the atlas',
   'home.stats.passes': 'Passes',
@@ -340,10 +333,6 @@ const en: Messages = {
     'An LLVM pass atlas grouped by algorithm family and profile sampling point, with a step-by-step IR animation or a concrete IR example on every page.',
   'passes.eyebrow': 'Atlas · Index',
   'passes.heading': 'Pass atlas',
-  'passes.lead':
-    'Grouped by algorithm family, from "where does the value live" to "which instruction do we pick"; IR PGO sits at the top: pgo-instr-gen writes runtime facts into the IR, then the consumers turn counts into optimisation decisions. Every page ends with a command you can run.',
-  'passes.jump': 'Jump to a category',
-  'passes.pipeline.jump': 'Pipeline map',
   'passes.pipeline.eyebrow': 'Pipeline',
   'passes.pipeline.title': 'LLVM pipeline map',
   'passes.pipeline.body':
@@ -373,7 +362,6 @@ const en: Messages = {
   'passes.pipeline.source': 'PassBuilderPipelines.cpp',
   'passes.pipeline.conditional':
     'Conditional: depends on the optimisation level, PGO or target',
-  'passes.machine.jump': 'Two MIR lanes',
   'passes.machine.eyebrow': 'Machine IR · two lanes',
   'passes.machine.title': 'From IR to machine instructions: x86-64 and AArch64',
   'passes.machine.body':
@@ -516,7 +504,7 @@ const en: Messages = {
 
   'ir.metaTitle': 'CFG lab',
   'ir.metaDescription':
-    'Paste any LLVM IR, split it into basic blocks and draw the control flow in your browser. Fully static, parsed on the client.',
+    'Paste any LLVM IR, split it into basic blocks and draw the control flow in your browser.',
   'ir.eyebrow': 'Lab · CFG',
   'ir.heading': 'Spread the IR out',
   'ir.lead':
@@ -530,7 +518,7 @@ const en: Messages = {
 
   'about.metaTitle': 'About',
   'about.metaDescription':
-    'How PassAtlas works: step-by-step IR animations that explain LLVM pass algorithms, fully static and readable offline.',
+    'How PassAtlas works: step-by-step IR animations that explain LLVM pass algorithms.',
   'about.eyebrow': 'About',
   'about.heading': 'Why an atlas',
   'about.lead':

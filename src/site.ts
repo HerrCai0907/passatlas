@@ -5,7 +5,13 @@ import type { Locale } from './i18n/config';
  * 新增外部链接时先加到这里，不要在组件里硬编码 URL。
  * 面向读者的文案按语言分开；标识符、版本号、仓库地址不翻译。
  */
+/**
+ * 部署时由 GitHub Actions 注入 PUBLIC_REPO_URL（见 .github/workflows/deploy.yml）；
+ * 本地 dev / preview 没有这个变量，回退到仓库本身，否则「在 GitHub 上编辑这一页」
+ * 会指向一个不存在的仓库。
+ */
 const repoFromEnv = import.meta.env.PUBLIC_REPO_URL as string | undefined;
+const repoUrl = repoFromEnv || 'https://github.com/HerrCai0907/passatlas';
 
 /** LLVM 23.1.4 release commit (llvmorg-23.1.4^{}). Pin every source link to it. */
 const llvmCommit = '7a941dfb2877a0b8cf30323fefa85ad019e0b0f5';
@@ -14,17 +20,13 @@ export const site = {
   name: 'PassAtlas',
   nameZh: 'LLVM Pass 图鉴',
   nameEn: 'LLVM Pass Atlas',
-  tagline: {
-    zh: '每一个 pass，都是一次变形。',
-    en: 'Every pass is a transformation.',
-  },
   description: {
-    zh: '用可单步、可回退的动画拆解 LLVM 优化管线中的各个 pass：输入 IR、判定逻辑、输出 IR，以及它在 -O2 里的位置。全站静态，无需登录。',
-    en: 'Step-by-step, reversible animations break down the passes in the LLVM optimisation pipeline: input IR, decision logic, output IR, and where the pass sits in -O2. Fully static, no sign-in.',
+    zh: '用可单步、可回退的动画拆解 LLVM 优化管线中的各个 pass：输入 IR、判定逻辑、输出 IR，以及它在 -O2 里的位置。',
+    en: 'Step-by-step, reversible animations break down the passes in the LLVM optimisation pipeline: input IR, decision logic, output IR, and where the pass sits in -O2.',
   },
   llvmVersion: 'LLVM 23.1.4',
   llvmCommit,
-  github: repoFromEnv || 'https://github.com/passatlas/passatlas',
+  github: repoUrl,
   llvmDocs: 'https://llvm.org/docs/Passes.html',
   llvmSource: 'https://github.com/llvm/llvm-project',
   llvmTree: `https://github.com/llvm/llvm-project/tree/${llvmCommit}`,

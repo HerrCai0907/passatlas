@@ -24,8 +24,6 @@ const links = [
   <div class="container foot__grid">
     <div class="foot__brand">
       <p class="foot__name">PassAtlas</p>
-      <p class="foot__tag">{site.tagline[locale]}</p>
-      <p class="foot__note">{t(locale, 'footer.note')}</p>
     </div>
 
     <nav class="foot__links" aria-label={t(locale, 'footer.nav')}>
@@ -85,20 +83,6 @@ const links = [
     font-weight: 600;
     letter-spacing: -0.015em;
     margin: 0;
-  }
-
-  .foot__tag {
-    margin-top: 6px;
-    font-size: 14px;
-    color: var(--ink-soft);
-  }
-
-  .foot__note {
-    margin-top: 10px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.05em;
-    color: var(--faint);
   }
 
   .foot__links {
