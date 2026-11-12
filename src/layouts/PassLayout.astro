@@ -8,6 +8,7 @@ import { getDemo } from '../demos/registry';
 import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import { categories, categoryName, difficultyLabel } from '../lib/categories';
+import { pipelineStageNumber, stagesForPass, stageAnchor } from '../lib/pipeline';
 import { passSlug, passSubtitle, type PassEntry } from '../lib/passes';
 import { site, llvmSourceUrl } from '../site';
 import { url } from '../lib/url';
@@ -28,11 +29,41 @@ const cfgSample = cfg ? cfgSamples.find((sample) => sample.id === cfg) : undefin
 const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
 const categoryLine =
   locale === 'zh' ? `${categoryMeta.zh} · ${categoryMeta.en}` : categoryMeta.en;
+const slug = passSlug(pass);
+const passStages = stagesForPass(slug);
+const atlasHref = url('/passes/', locale);
 ---
 
 <BaseLayout title={title} description={summary} locale={locale}>
   <article class={`pass cat-${category}`}>
     <div class="container">
+      {/* 页面最开头：直接跳到图鉴里这个 pass 出现的管线阶段 */}
+      <nav class="pass__where" aria-label={t(locale, 'pass.where')}>
+        <span class="pass__where-label">{t(locale, 'pass.where')}</span>
+        {
+          passStages.length > 0 ? (
+            passStages.map((stage) => (
+              <a
+                class="pass__where-link"
+                href={`${atlasHref}#${stageAnchor(stage.id)}`}
+                aria-label={t(locale, 'pass.whereLink', { title: stage.title[locale] })}
+              >
+                <span class="pass__where-no" aria-hidden="true">
+                  {String(pipelineStageNumber(stage.id)).padStart(2, '0')}
+                </span>
+                <span class="pass__where-name">{stage.title[locale]}</span>
+                <span class="pass__where-arrow" aria-hidden="true">↘</span>
+              </a>
+            ))
+          ) : (
+            <a class="pass__where-link" href={`${atlasHref}#pipeline`}>
+              <span class="pass__where-name">{t(locale, 'passes.pipeline.title')}</span>
+              <span class="pass__where-arrow" aria-hidden="true">↘</span>
+            </a>
+          )
+        }
+      </nav>
+
       <nav class="crumbs" aria-label={t(locale, 'pass.crumbs')}>
         <a href={url('/', locale)}>PassAtlas</a>
         <span aria-hidden="true">/</span>
@@ -146,6 +177,64 @@ const categoryLine =
 <style>
   .pass {
     padding-top: 28px;
+  }
+
+  /* ---------- 顶部定位条：跳到 /passes 里这个 pass 出现的阶段 ---------- */
+  .pass__where {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px 8px;
+    margin-bottom: 22px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+
+  .pass__where-label {
+    margin-right: 2px;
+    padding-right: 10px;
+    border-right: 1px solid var(--line);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .pass__where-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 9px 3px 8px;
+    border: 1px solid color-mix(in srgb, var(--cat, var(--accent)) 30%, var(--line));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--cat, var(--accent)) 7%, var(--surface));
+    color: var(--ink-soft);
+    text-decoration: none;
+    transition:
+      border-color 0.16s var(--ease),
+      background-color 0.16s var(--ease),
+      transform 0.16s var(--ease);
+  }
+
+  .pass__where-link:hover {
+    border-color: var(--cat, var(--accent));
+    background: color-mix(in srgb, var(--cat, var(--accent)) 12%, var(--surface));
+    transform: translateY(-1px);
+  }
+
+  .pass__where-no {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--faint);
+  }
+
+  .pass__where-name {
+    color: var(--ink);
+  }
+
+  .pass__where-arrow {
+    font-size: 11px;
+    color: var(--cat, var(--accent));
   }
 
   .crumbs {

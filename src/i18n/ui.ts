@@ -78,6 +78,7 @@ const zh = {
   'passes.pipeline.legendReady': '已收录，可进入',
   'passes.pipeline.legendPlanned': '待绘制',
   'passes.pipeline.mapLabel': 'LLVM 默认优化管线示意图',
+  'passes.pipeline.stageLink': '定位到「{title}」这一段',
   'passes.pipeline.adaptor': '通过',
   'passes.pipeline.helper': '辅助',
   'passes.pipeline.planned': '待绘制',
@@ -136,6 +137,8 @@ const zh = {
   'pass.edit': '发现错误？在 GitHub 上编辑这一页 ↗',
   'pass.cfgTitle': '{title} 的控制流图',
   'pass.stageNone': '由 -fprofile-generate 等开关启用，不在固定 -O 级别里。',
+  'pass.where': '管线位置',
+  'pass.whereLink': '跳到图鉴管线中的「{title}」阶段',
 
   'pgo.site.samples': '采样',
   'pgo.site.writes': '写成',
@@ -349,6 +352,7 @@ const en: Messages = {
   'passes.pipeline.legendReady': 'In the atlas — click to open',
   'passes.pipeline.legendPlanned': 'Not drawn yet',
   'passes.pipeline.mapLabel': 'Schematic of the default LLVM optimisation pipeline',
+  'passes.pipeline.stageLink': 'Permalink to the “{title}” stage',
   'passes.pipeline.adaptor': 'via',
   'passes.pipeline.helper': 'helper',
   'passes.pipeline.planned': 'not drawn yet',
@@ -410,6 +414,8 @@ const en: Messages = {
   'pass.edit': 'Found an error? Edit this page on GitHub ↗',
   'pass.cfgTitle': 'Control-flow graph of {title}',
   'pass.stageNone': 'Enabled by flags such as -fprofile-generate, not by a fixed -O level.',
+  'pass.where': 'In the pipeline',
+  'pass.whereLink': 'Jump to the “{title}” stage in the atlas pipeline',
 
   'pgo.site.samples': 'Samples',
   'pgo.site.writes': 'Becomes',
