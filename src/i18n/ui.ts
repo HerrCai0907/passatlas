@@ -230,7 +230,7 @@ const zh = {
 
   'ir.metaTitle': 'CFG 实验室',
   'ir.metaDescription':
-    '把任意 LLVM IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。全静态、纯前端解析。',
+    '把任意 LLVM IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。',
   'ir.eyebrow': 'Lab · CFG',
   'ir.heading': '把 IR 摊开看',
   'ir.lead':
@@ -244,7 +244,7 @@ const zh = {
 
   'about.metaTitle': '关于',
   'about.metaDescription':
-    'PassAtlas 的做法：用可单步的 IR 动画讲清 LLVM pass 的算法，全站静态，可离线阅读。',
+    'PassAtlas 的做法：用可单步的 IR 动画讲清 LLVM pass 的算法。',
   'about.eyebrow': 'About',
   'about.heading': '为什么做图鉴',
   'about.lead':
@@ -498,7 +498,7 @@ const en: Messages = {
 
   'ir.metaTitle': 'CFG lab',
   'ir.metaDescription':
-    'Paste any LLVM IR, split it into basic blocks and draw the control flow in your browser. Fully static, parsed on the client.',
+    'Paste any LLVM IR, split it into basic blocks and draw the control flow in your browser.',
   'ir.eyebrow': 'Lab · CFG',
   'ir.heading': 'Spread the IR out',
   'ir.lead':
@@ -512,7 +512,7 @@ const en: Messages = {
 
   'about.metaTitle': 'About',
   'about.metaDescription':
-    'How PassAtlas works: step-by-step IR animations that explain LLVM pass algorithms, fully static and readable offline.',
+    'How PassAtlas works: step-by-step IR animations that explain LLVM pass algorithms.',
   'about.eyebrow': 'About',
   'about.heading': 'Why an atlas',
   'about.lead':
