@@ -66,10 +66,6 @@ const zh = {
   'passes.metaDescription': '按算法族与 profile 采样点组织的 LLVM pass 图谱，每篇都配一个可单步回放的 IR 动画或可检查的 IR 例子。',
   'passes.eyebrow': 'Atlas · 目录',
   'passes.heading': 'Pass 图谱',
-  'passes.lead':
-    '按算法族分组，从「值在哪里」到「指令怎么选」；最上面是 IR PGO：先用 pgo-instr-gen 把运行事实写进 IR，再由各个消费者把计数变成优化判断。每篇都有一条能自己跑的命令。',
-  'passes.jump': '跳转到分类',
-  'passes.pipeline.jump': '管线图',
   'passes.pipeline.eyebrow': 'Pipeline',
   'passes.pipeline.title': 'LLVM 管线地图',
   'passes.pipeline.body':
@@ -96,7 +92,6 @@ const zh = {
   'passes.pipeline.legendTarget': '目标专属 pass',
   'passes.pipeline.source': 'PassBuilderPipelines.cpp',
   'passes.pipeline.conditional': '条件启用：取决于优化级别、PGO 或 target',
-  'passes.machine.jump': '两条目标线',
   'passes.machine.eyebrow': 'Machine IR · 两条主线',
   'passes.machine.title': '从 IR 到机器指令：x86-64 与 AArch64',
   'passes.machine.body':
@@ -337,10 +332,6 @@ const en: Messages = {
     'An LLVM pass atlas grouped by algorithm family and profile sampling point, with a step-by-step IR animation or a concrete IR example on every page.',
   'passes.eyebrow': 'Atlas · Index',
   'passes.heading': 'Pass atlas',
-  'passes.lead':
-    'Grouped by algorithm family, from "where does the value live" to "which instruction do we pick"; IR PGO sits at the top: pgo-instr-gen writes runtime facts into the IR, then the consumers turn counts into optimisation decisions. Every page ends with a command you can run.',
-  'passes.jump': 'Jump to a category',
-  'passes.pipeline.jump': 'Pipeline map',
   'passes.pipeline.eyebrow': 'Pipeline',
   'passes.pipeline.title': 'LLVM pipeline map',
   'passes.pipeline.body':
@@ -369,7 +360,6 @@ const en: Messages = {
   'passes.pipeline.source': 'PassBuilderPipelines.cpp',
   'passes.pipeline.conditional':
     'Conditional: depends on the optimisation level, PGO or target',
-  'passes.machine.jump': 'Two MIR lanes',
   'passes.machine.eyebrow': 'Machine IR · two lanes',
   'passes.machine.title': 'From IR to machine instructions: x86-64 and AArch64',
   'passes.machine.body':

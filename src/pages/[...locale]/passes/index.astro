@@ -7,7 +7,6 @@ import PipelineMap from '../../../components/PipelineMap.astro';
 import PassRegistry from '../../../components/PassRegistry.astro';
 import MachineTrack from '../../../components/MachineTrack.astro';
 import { pipelineStages } from '../../../data/pipeline';
-import { machineStages } from '../../../data/machine';
 import { pgoGroup, pgoSite } from '../../../data/pgo';
 import { defaultLocale, locales, type Locale } from '../../../i18n/config';
 import { t } from '../../../i18n/ui';
@@ -55,30 +54,6 @@ const groups = categoryOrder
     <div class="container">
       <p class="eyebrow">{t(locale, 'passes.eyebrow')}</p>
       <h1 class="page-head__title">{t(locale, 'passes.heading')}</h1>
-      <p class="lead page-head__lead">{t(locale, 'passes.lead')}</p>
-
-      <nav class="jump" aria-label={t(locale, 'passes.jump')}>
-        <a class="chip" href="#pipeline">
-          {t(locale, 'passes.pipeline.jump')}
-          <span class="jump__count" aria-hidden="true">↓</span>
-        </a>
-        <a class="chip" href="#machine-ir">
-          {t(locale, 'passes.machine.jump')}
-          <span class="jump__count">{machineStages.length}</span>
-        </a>
-        <a class="chip chip--pgo" href="#pgo">
-          {pgoGroup.short[locale]}
-          <span class="jump__count">{pgoEntries.length + (pgoLead ? 1 : 0)}</span>
-        </a>
-        {
-          groups.map((group) => (
-            <a class="chip chip--cat" href={`#${group.id}`}>
-              {categoryName(group.id, locale)}
-              <span class="jump__count">{group.items.length}</span>
-            </a>
-          ))
-        }
-      </nav>
     </div>
   </header>
 
@@ -175,29 +150,6 @@ const groups = categoryOrder
     margin-top: 10px;
     font-size: clamp(38px, 5.4vw, 60px);
     letter-spacing: -0.03em;
-  }
-
-  .page-head__lead {
-    margin-top: 14px;
-    max-width: 62ch;
-  }
-
-  .jump {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 26px;
-  }
-
-  .jump__count {
-    font-size: 10px;
-    opacity: 0.6;
-  }
-
-  .chip--pgo {
-    border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
-    background: var(--accent-soft);
-    color: var(--accent-strong);
   }
 
   .group {
