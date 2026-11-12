@@ -14,6 +14,7 @@ updated: 2026-11-12
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
+import LSRFormulaLabIsland from '../../../components/LSRFormulaLabIsland.astro';
 
 ## What problem does it solve
 
@@ -66,7 +67,7 @@ formula = BaseGV + BaseOffset + Σ BaseRegs + Scale * ScaledReg + UnfoldedOffset
 - `BaseOffset` / `UnfoldedOffset`: constant offsets; the latter needs a temporary register for the add;
 - `BaseGV`: the base of a global.
 
-For `a + 4*(3*i)`, one formula is `BaseRegs=[a], ScaledReg=i, Scale=12`, and another is `BaseRegs=[a], ScaledReg=3*i, Scale=4`. Which one wins depends on whether the target has a scale of 12, whether the multiply already exists, and whether the register can be reused by another use.
+For `a + 4*(3*i)`, the algebra offers `BaseRegs=[a], ScaledReg=i, Scale=12`, and equally `BaseRegs=[a], ScaledReg=3*i, Scale=4`. But LSR's candidates come from the SCEV reported by `IVUsers`: this expression has already been normalised into an addrec with stride 12, so `3*i` need not exist as a separate register; and `Scale=12` still has to pass the target's addressing modes. Which one wins depends on which legal formulas are actually enumerated and whether their registers can be shared with other uses.
 
 ### 3. Generate candidate formulas
 
@@ -74,7 +75,7 @@ The initial match is deliberately conservative. LSR then expands the candidate s
 
 - `GenerateReassociations` / `GenerateCombinations`: reassociate and merge loop invariants;
 - `GenerateSymbolicOffsets` / `GenerateConstantOffsets`: move symbolic or constant offsets into the displacement;
-- `GenerateScales`: try the interesting factors as scales;
+- `GenerateScales`: try the interesting factors as scales — the factors come from the strides collected in the loop and the exact divisions between them;
 - `GenerateICmpZeroScales`, `GenerateTruncates`: special cases for comparisons and narrowed types;
 - `GenerateCrossUseConstantOffsets`: share constant offsets across uses;
 - IV chains / post-inc: fold the `%i.next` increment into the use itself.
@@ -97,9 +98,36 @@ Every generated formula is checked by `isLegalUse` and the target's `isLegalAddr
 
 The target decides how these are weighted through `TargetTransformInfo::isLSRCostLess` (`-lsr-insns-cost` can add instruction count to the comparison as well). `SolveRecurse` backtracks over the uses: it picks a formula for the current use, accumulates cost, prunes as soon as the partial cost is worse than the best solution, and prefers formulas that reuse registers already selected. When the search finishes, every use has exactly one formula.
 
-The search is also compared against the **baseline**, the cost of leaving the loop unchanged; some targets simply drop a solution that is not better than baseline (`-lsr-drop-solution` overrides that decision).
+The search is also compared against the **baseline**, the cost of expanding the expression with its initial formula; some targets simply drop a solution that is not better than baseline (`-lsr-drop-solution` overrides that decision).
 
-### 5. Rewrite
+### 5. Worked example: how the stride picks the formula
+
+Replacing the `mul` with a pointer IV is not a rule; it is a computation: read the SCEV, decompose it, check legality, compare cost, and share registers across uses. These two loops differ only in the index:
+
+```llvm
+; a[i]
+%p = getelementptr i32, ptr %a, i64 %i      ; stride 4
+
+; a[3*i]
+%mul = mul i64 %i, 3
+%p = getelementptr i32, ptr %a, i64 %mul    ; stride 12
+```
+
+<div class="pa-lsr-bleed" id="formula-search">
+  <LSRFormulaLabIsland />
+</div>
+
+The computation answers four questions.
+
+**1. What is the address SCEV?** `IVUsers` reports `%p`, not the `%mul` instruction: `{a,+,4}` and `{a,+,12}`. `a + 4*(3*i)` has already been normalised into an addrec with stride 12, so `3*i` does not enter the candidate set as a separate register. This is the first thing to internalise: **LSR consumes SCEV, not IR instruction shapes**.
+
+**2. Which (scale, reg) pairs can the stride be split into?** That is the `Scale * ScaledReg` term. `GenerateScales` collects the strides of the loop's IVs and uses exact divisions between them as factors; dividing `{0,+,4}` by 4 yields `{0,+,1}`, so `a + 4*i` can also be written as `a + 4*{0,+,1}`. Scale 12, however, is not an encodable index on AArch64 (64-bit index allows LSL #0–#3) or x86-64 (1/2/4/8), so `isLegalAddressingMode` drops it.
+
+**3. How are the legal formulas compared?** `Cost` tallies `NumRegs`, `AddRecCost`, `NumIVMuls`, `NumBaseAdds`, `ScaleCost`, `ImmCost` and `SetupCost`, and `TTI::isLSRCostLess` decides the order. x86-64 compares `Insns` first; AArch64 compares `NumRegs` first by default, and with `-enable-aarch64-lsr-cost-opt` it inserts `Insns` and `NumPrePostIndex` too. The difference is not legality: for the same stride = 2 loop, AArch64 picks a pointer phi while x86-64 keeps scale 8, because the two targets rank instruction count against register / scale cost differently.
+
+**4. How do multiple uses share?** `getUse` first extracts foldable constant offsets into **fixups**: `a[3*i]` and `a[3*i+2]` therefore land on the same `{a,+,12}` use with fixup offsets 0 and 8. If the formula picks `a+8` as its start, both offsets shift to -8 and 0, and those become the store / load addresses in the expanded IR, then displacements at ISel. `SolveRecurse` then picks one formula per use, preferring formulas that reuse an already-selected SCEV and pruning a partial solution as soon as its cost exceeds the best one.
+
+### 6. Rewrite
 
 `ImplementSolution` expands each chosen formula with `SCEVExpander` at a position that dominates all of its uses, inserts new induction variables (typically named `%lsr.iv` and `%scevgep`), and replaces the operand of every fixup. It then recursively deletes dead instructions, preserves LCSSA and cleans up congruent phis.
 

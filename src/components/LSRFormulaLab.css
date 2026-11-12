@@ -1,0 +1,690 @@
+/* LSR 公式求解示意图：两列对照，颜色全部来自 tokens.css。 */
+
+/* 与 PassLayout 的 .container 对齐：正文 760px，实验台铺到 1040px。 */
+.pa-lsr-bleed {
+  --lsr-gutter: clamp(18px, 4vw, 40px);
+  --lsr-container: calc(min(var(--wrap), 100vw) - 2 * var(--lsr-gutter));
+  width: calc(100% + max(0px, var(--lsr-container) - 100%));
+  margin-block: 1.8em;
+  /* 深链 #formula-search 时给 sticky header 留出空间。 */
+  scroll-margin-top: 96px;
+}
+
+.pa-lsr {
+  --lsr-accent: var(--cat, var(--accent));
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink-soft);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.pa-lsr:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.pa-lsr__progress {
+  height: 2px;
+  background: var(--line);
+}
+
+.pa-lsr__progress > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--lsr-accent), var(--focus-ring));
+  transition: width 0.4s var(--ease);
+}
+
+/* ---------- 头部 ---------- */
+.pa-lsr__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 15px 18px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.pa-lsr__heading {
+  min-width: 0;
+}
+
+.pa-lsr__kicker {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lsr-accent);
+}
+
+.pa-lsr__title {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.pa-lsr__actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.pa-lsr__counter {
+  margin-right: 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pa-lsr__btn {
+  display: inline-grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    color 0.18s var(--ease);
+}
+
+.pa-lsr__btn:hover:not(:disabled) {
+  border-color: var(--lsr-accent);
+  color: var(--lsr-accent);
+}
+
+.pa-lsr__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pa-lsr__btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pa-lsr__btn--play {
+  width: 37px;
+  height: 37px;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.pa-lsr__btn--play:hover:not(:disabled) {
+  border-color: var(--lsr-accent);
+  background: var(--lsr-accent);
+  color: var(--surface);
+}
+
+.pa-lsr__btn--reset {
+  width: 28px;
+  height: 28px;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.pa-lsr__btn--reset svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---------- 引言 ---------- */
+.pa-lsr__lead {
+  margin: 0;
+  padding: 12px 18px 14px;
+  max-width: 84ch;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+}
+
+.pa-lsr__reduced {
+  margin: 0 18px 12px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--focus-ring) 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--focus-bg);
+  color: var(--focus-text);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+/* ---------- 两列 ---------- */
+.pa-lsr__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 0 18px 16px;
+}
+
+.pa-lsr__col {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.pa-lsr__colhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pa-lsr__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--lsr-accent) 30%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lsr-accent) 10%, var(--surface));
+  color: var(--lsr-accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- 每个阶段 ---------- */
+.pa-lsr__block {
+  position: relative;
+  min-width: 0;
+  opacity: 0.52;
+  transition: opacity 0.35s var(--ease);
+}
+
+.pa-lsr__block[data-reached='true'] {
+  opacity: 1;
+}
+
+.pa-lsr__block:not(.pa-lsr__block--code) {
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.pa-lsr__block::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: -7px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background-color 0.3s var(--ease);
+}
+
+.pa-lsr__block.is-active::before {
+  background: var(--lsr-accent);
+}
+
+.pa-lsr__block-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+  margin: 0 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- 代码 ---------- */
+.pa-lsr__code {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.62;
+  tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.pa-lsr__code--result {
+  border-color: color-mix(in srgb, var(--lsr-accent) 30%, var(--code-border));
+  background: color-mix(in srgb, var(--lsr-accent) 4%, var(--code-bg));
+}
+
+.pa-lsr__irline {
+  display: inline;
+  opacity: 0.25;
+  transition:
+    opacity 0.4s var(--ease),
+    color 0.3s var(--ease);
+  transition-delay: calc(var(--i) * 70ms);
+}
+
+.pa-lsr__block[data-reached='true'] .pa-lsr__irline {
+  opacity: 1;
+}
+
+/* ---------- SCEV 与说明 ---------- */
+.pa-lsr__scev {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.pa-lsr__scev code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.pa-lsr__sub {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------- 因式分解 ---------- */
+.pa-lsr__factors {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pa-lsr__factor {
+  padding: 7px 0;
+}
+
+.pa-lsr__factor + .pa-lsr__factor {
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.pa-lsr__factor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+}
+
+.pa-lsr__formula {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.pa-lsr__tag {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.pa-lsr__tag--ok {
+  border-color: color-mix(in srgb, var(--ok) 32%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  color: var(--ok);
+}
+
+.pa-lsr__tag--bad {
+  border-color: color-mix(in srgb, var(--bad) 32%, transparent);
+  background: color-mix(in srgb, var(--bad) 9%, transparent);
+  color: var(--bad);
+}
+
+.pa-lsr__tag--warn {
+  border-color: color-mix(in srgb, var(--focus-ring) 35%, transparent);
+  background: var(--focus-bg);
+  color: var(--focus-text);
+}
+
+/* ---------- 代价 ---------- */
+.pa-lsr__meters {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.pa-lsr__meter {
+  display: grid;
+  grid-template-columns: minmax(4.6rem, auto) 1fr 1.3rem;
+  align-items: center;
+  gap: 8px;
+}
+
+.pa-lsr__meter-label {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.pa-lsr__meter-track {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.pa-lsr__meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ok);
+  transition: width 0.5s var(--ease) 0.1s;
+}
+
+.pa-lsr__meter-track[data-on='false'] .pa-lsr__meter-fill {
+  background: var(--line-strong);
+}
+
+.pa-lsr__meter-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pa-lsr__result-tag {
+  margin-left: auto;
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--lsr-accent);
+}
+
+/* ---------- 当前步骤的说明 ---------- */
+.pa-lsr__note {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.pa-lsr__note-no {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--lsr-accent);
+}
+
+.pa-lsr__note-body h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.pa-lsr__note-body p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+}
+
+/* ---------- 底部：步进点与注脚 ---------- */
+.pa-lsr__foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.pa-lsr__dots {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pa-lsr__dot {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition:
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    color 0.18s var(--ease);
+}
+
+.pa-lsr__dot:hover {
+  border-color: var(--lsr-accent);
+  color: var(--lsr-accent);
+}
+
+.pa-lsr__dot[data-on='true'] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.pa-lsr__footnote {
+  margin: 0;
+  max-width: 88ch;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.pa-lsr__btn:focus-visible,
+.pa-lsr__dot:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---------- 嵌入 MDX 时的排版补偿 ----------
+   组件位于 .pass__body.prose 内，.prose pre / p / ul 的选择器更具体。
+   这里统一加 .pa-lsr 前缀，把示意图自己的字号、边距和列表缩进拿回来。 */
+.pa-lsr .pa-lsr__kicker {
+  color: var(--lsr-accent);
+}
+
+.pa-lsr .pa-lsr__title {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+
+.pa-lsr .pa-lsr__sub {
+  color: var(--muted);
+}
+
+.pa-lsr .pa-lsr__reduced {
+  color: var(--focus-text);
+}
+
+.pa-lsr .pa-lsr__footnote {
+  color: var(--muted);
+}
+
+.pa-lsr .pa-lsr__code {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: var(--code-bg) !important;
+  box-shadow: none;
+  font-size: 11px;
+  line-height: 1.62;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.pa-lsr .pa-lsr__code code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: inherit;
+}
+
+.pa-lsr .pa-lsr__code--result {
+  border-color: color-mix(in srgb, var(--lsr-accent) 30%, var(--code-border));
+  background: color-mix(in srgb, var(--lsr-accent) 4%, var(--code-bg)) !important;
+}
+
+.pa-lsr .pa-lsr__scev code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pa-lsr .pa-lsr__sub code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  overflow-wrap: anywhere;
+}
+
+.pa-lsr .pa-lsr__formula {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pa-lsr .pa-lsr__factors {
+  padding-left: 0;
+}
+
+.pa-lsr .pa-lsr__factor {
+  margin: 0;
+}
+
+.pa-lsr .pa-lsr__dots {
+  padding-left: 0;
+}
+
+.pa-lsr .pa-lsr__dots li {
+  margin: 0;
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 900px) {
+  .pa-lsr__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .pa-lsr__head {
+    padding: 13px 14px 9px;
+  }
+
+  .pa-lsr .pa-lsr__title {
+    font-size: 18px;
+  }
+
+  .pa-lsr__actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .pa-lsr__counter {
+    margin-left: auto;
+  }
+
+  .pa-lsr__lead,
+  .pa-lsr__grid,
+  .pa-lsr__note {
+    padding-inline: 14px;
+  }
+
+  .pa-lsr__col {
+    padding: 10px;
+  }
+
+  .pa-lsr .pa-lsr__code {
+    /* 窄屏把字号再降 1px，大多数 IR 行就不必折行；仍需折行时按空格换行，不横向裁切。 */
+    font-size: 10px;
+    white-space: pre-wrap;
+  }
+
+  .pa-lsr__meter {
+    grid-template-columns: minmax(4.2rem, auto) 1fr 1.2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pa-lsr__progress > span,
+  .pa-lsr__block,
+  .pa-lsr__block::before,
+  .pa-lsr__meter-fill,
+  .pa-lsr__irline,
+  .pa-lsr__btn,
+  .pa-lsr__dot {
+    transition: none;
+  }
+}
