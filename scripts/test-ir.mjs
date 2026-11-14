@@ -14,6 +14,7 @@ import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { canRenderCFG, functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
 import { tokenizeIR, highlightToHtml } from '../src/lib/ir/highlight.ts';
+import { prefersIRView } from '../src/lib/ir/mode.ts';
 import { parseSource } from '../src/lib/ir/source.ts';
 import { parseMIR } from '../src/lib/mir/parse.ts';
 
@@ -561,6 +562,39 @@ entry:
   const html = highlightToHtml('define void @f() {', 'llvm-ir');
   assert.match(html, /ir-tok--keyword">define/);
   assert.ok(!highlightToHtml('<script>alert(1)</script>', 'mir').includes('<script>'));
+}
+
+// ---- 默认展示模式：单基本块（LLVM IR / MIR）用 IR 文本 ----
+{
+  const toIR = (lines) => lines.map((line) => line.text).join('\n');
+  assert.equal(prefersIRView(parseIR(diamond)), false, '菱形的默认是 CFG');
+  assert.equal(prefersIRView(parseIR(loopIR)), false, '循环的默认是 CFG');
+  assert.equal(
+    prefersIRView(parseIR('define void @f() {\nentry:\n  ret void\n}\n')),
+    true,
+    '单基本块 LLVM IR 默认 IR',
+  );
+  assert.equal(prefersIRView(parseIR('')), true, '空输入没有图可画，默认 IR');
+  assert.equal(
+    prefersIRView(
+      parseIR(
+        'define void @a() {\nentry:\n  ret void\n}\n\ndefine void @b() {\nentry:\n  ret void\n}\n',
+      ),
+    ),
+    true,
+    '多个单基本块函数也不需要 CFG',
+  );
+
+  assert.equal(
+    prefersIRView(parseMIR(toIR(getDemo('regalloc', 'zh').steps[0].before))),
+    true,
+    '单基本块 MIR 默认 IR',
+  );
+  assert.equal(
+    prefersIRView(parseMIR(toIR(getDemo('phi-elim', 'zh').steps[0].before))),
+    false,
+    '多基本块 MIR 默认 CFG',
+  );
 }
 
 console.log('IR parser, CFG layout, Machine IR & i18n: all assertions passed');

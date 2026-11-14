@@ -75,6 +75,7 @@ src/
     ir/source.ts        按 IRFormat 选择解析器
     ir/highlight.ts     LLVM IR / MIR 两套语法高亮
     ir/layout.ts        分层布局 + 回边识别（纯函数，输出坐标）
+    ir/mode.ts          单基本块默认 IR、多基本块默认 CFG
     mir/parse.ts        Machine IR → 机器函数 / 基本块 / 边
     mir/opcodes.ts      MIR 终结指令、条件跳转与 %bb 引用
   data/pipeline.ts      LLVM 默认管线（Module → CGSCC → Function → Loop → Machine IR）与待绘制节点
@@ -242,7 +243,7 @@ updated: 2026-11-01
       snapshot; the player shows the current instruction and the pass's internal state alongside
       the IR, not only the before/after diff
 - [ ] Machine IR pages set `format: 'mir'`, show real MIR (MBBs, virtual registers, register
-      classes), end with `llc` commands instead of `opt`, and their player shows a MIR CFG
+      classes), end with `llc` commands instead of `opt`, and a multi-block player shows a MIR CFG
 - [ ] frontmatter `demo` matches a registry key, and English step titles / notes exist
 - [ ] prev/next navigation works in both locales (automatic via `order`)
 - [ ] page renders at 390px, 768px and 1440px without horizontal scroll
@@ -254,22 +255,24 @@ updated: 2026-11-01
 `CFGViewer` turns IR text into a layered directed graph. The pipeline is
 **parse → layout → render**, and the first two stages are pure and run at build time too.
 
-**Every IR display defaults to CFG mode and offers an IR text toggle.** This is a product rule,
-not a per-page choice: `StepPlayer` and `CFGViewer` both use `ViewModeSwitch` and pass
-`defaultMode="cfg"`. If you add a new IR surface, wire the same switch and keep CFG as default.
+**Every IR display offers a `[CFG | IR]` toggle.** CFG is the default when any function has more
+than one basic block; **input where every function has at most one basic block (LLVM IR or MIR)
+defaults to IR text**, because a single-node graph adds nothing. If you add a new IR surface, wire
+the same switch and use `prefersIRView()` from `src/lib/ir/mode.ts` for the default.
 
 The two IR formats have **separate parsers and highlighters**, chosen by an `IRFormat`
 (`'llvm-ir' | 'mir'`). Every IR block must say which one it shows (`IRFormatTag`), and no component
 may feed one format to the other parser. Use `parseSource(text, format, locale)` from
 `src/lib/ir/source.ts` when the format is a prop.
 
-The one exception to CFG-by-default is `StepPlayer`: CFG mode draws a single function, so a demo
-whose before or after IR defines more than one function has no CFG mode. The player disables the
-CFG option (with an explanatory note) and stays in IR mode, because the graph would silently drop
-every function but the first. Machine IR is **not** an exception: `parseMIR` builds machine basic
-blocks from `bb.N` labels and edges from `successors:` / `JMP_1` / `JCC_1` / `B %bb.N`, and the
-player draws that CFG like any LLVM IR graph. `CFGViewer` keeps its per-function tabs and still
-supports multi-function input. Use `canRenderCFG()` from `src/lib/ir/parse.ts` for this check.
+The one exception to the format-aware default is `StepPlayer` multi-function input: CFG mode draws
+a single function, so a demo whose before or after IR defines more than one function has no CFG
+mode. The player disables the CFG option (with an explanatory note) and stays in IR mode, because
+the graph would silently drop every function but the first. Machine IR is **not** an exception:
+`parseMIR` builds machine basic blocks from `bb.N` labels and edges from `successors:` / `JMP_1` /
+`JCC_1` / `B %bb.N`, and the player draws that CFG like any LLVM IR graph. `CFGViewer` keeps its
+per-function tabs and still supports multi-function input. Use `canRenderCFG()` from
+`src/lib/ir/parse.ts` for this check.
 
 - `src/lib/ir/parse.ts`: LLVM IR functions → blocks → instructions → edges (`br`, `br i1`,
   `switch`, `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via
@@ -294,7 +297,8 @@ supports multi-function input. Use `canRenderCFG()` from `src/lib/ir/parse.ts` f
 
 When embedding a graph in a pass page, prefer the frontmatter field (`cfg: <sample-id>`) over
 importing the component into MDX: it keeps full-width layout and one implementation. The section
-is only rendered when the page has no step demo (`demo`), because the player already shows a CFG.
+is only rendered when the page has no step demo (`demo`), because the player already shows the
+IR/CFG panes.
 
 ## 7. Animation rules
 
@@ -306,7 +310,7 @@ is only rendered when the page has no step demo (`demo`), because the player alr
 | `compact` | smaller type for the home hero |
 | `autoplay` / `loop` | hero only; never autoplay on a content page |
 | `caption` | small label next to the demo id (e.g. 自动播放) |
-| `defaultMode` | `cfg` (default) or `ir`; CFG must stay the default in production, except for multi-function demos |
+| `defaultMode` | `cfg` or `ir` for multi-block input; single-block input always defaults to `ir` |
 | `locale` | UI language; pass the route locale, never infer it in the island |
 
 Rules:

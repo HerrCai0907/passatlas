@@ -13,7 +13,7 @@ interface Props {
   cfgDisabledReason?: string;
 }
 
-/** IR 展示模块统一的「图 / 文」切换。默认选 CFG。 */
+/** IR 展示模块统一的「图 / 文」切换。单基本块默认 IR，多基本块默认 CFG。 */
 export default function ViewModeSwitch({
   value,
   onChange,

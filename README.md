@@ -11,7 +11,7 @@
 ## 特性
 
 - **分步动画**：before / after 双栏对照，构建期自动做行级 diff；绿线是新增、红线是删除、琥珀色是这一步的重点，IR 最左侧的小箭头指向当前处理的指令。支持 `←` `→` 单步、`空格` 播放、速度调节与跳步。
-- **默认 CFG 视图**：所有 IR 展示模块（分步动画、实验室、独立图组件）都默认把 IR 画成基本块有向图，右上角一键切回 IR 文本。LLVM IR 和 Machine IR 使用各自的解析器与高亮方案，每个 IR 面板都标出格式；循环回边用虚线，LLVM IR 的条件边标 `true` / `false`，MIR 的条件边标 `taken` / `fallthrough`。点击基本块高亮相关边。
+- **CFG / IR 双视图**：所有 IR 展示模块（分步动画、实验室、独立图组件）都提供 `[CFG | IR]` 切换。多基本块默认画有向图；单基本块的 LLVM IR 与 Machine IR 默认显示 IR 文本（一张节点的图没有信息量）。LLVM IR 和 Machine IR 使用各自的解析器与高亮方案，每个 IR 面板都标出格式；循环回边用虚线，LLVM IR 的条件边标 `true` / `false`，MIR 的条件边标 `taken` / `fallthrough`。点击基本块高亮相关边。
 - **100% 静态**：构建产物是纯 HTML / CSS / JS，无后端、无数据库、无追踪脚本，扔进任何静态托管都能跑，也可以完全离线阅读。
 - **内容即代码**：每篇 pass 是一个 MDX 文件，frontmatter 由 Zod 校验；写错字段、写错分类，构建直接失败。
 - **零配置部署**：push 到 `main` 自动构建并发布到 GitHub Pages，项目站点子路径（`/repo-name/`）自动处理。
@@ -130,7 +130,7 @@ source: llvm/lib/Transforms/.../X.cpp
 
 `CFGViewer` 把一段 IR 切成基本块并画成有向图：解析和布局都是无依赖的纯函数，构建期就能渲染出 HTML，浏览器里只负责交互。LLVM IR 由 `lib/ir/parse.ts` 解析，Machine IR 由 `lib/mir/parse.ts` 解析；两者共用分层布局，但语法高亮各有一套调色板，IR 面板上会标出 `LLVM IR` / `Machine IR`。
 
-**所有 IR 展示模块默认是 CFG 图，可随时切到 IR 文本**：分步动画（`StepPlayer`）的 before / after 两个面板、实验室、以及独立嵌图都共用同一个 `[CFG | IR]` 切换。
+**所有 IR 展示模块都提供 `[CFG | IR]` 切换**：分步动画（`StepPlayer`）的 before / after 两个面板、实验室、以及独立嵌图共用同一个切换。有多个基本块时默认 CFG；单基本块（LLVM IR 或 MIR）默认 IR 文本。
 
 ![CFG 实验室](docs/preview-cfg.png)
 

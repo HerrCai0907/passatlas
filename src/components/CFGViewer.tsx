@@ -3,6 +3,7 @@ import { defaultLocale, type Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import type { IRFormat } from '../lib/ir/format';
 import { layoutCFG } from '../lib/ir/layout';
+import { prefersIRView } from '../lib/ir/mode';
 import { functionToIR } from '../lib/ir/parse';
 import type { IRFunction } from '../lib/ir/parse';
 import { parseSource } from '../lib/ir/source';
@@ -23,7 +24,7 @@ export interface CFGViewerProps {
   /** 视口最大高度，超出后内部滚动 */
   height?: number;
   collapsedByDefault?: boolean;
-  /** 默认展示模式；按产品约定默认是 CFG 图 */
+  /** 多基本块时的默认展示模式；单基本块始终默认 IR 文本 */
   defaultMode?: ViewMode;
   locale?: Locale;
 }
@@ -76,7 +77,8 @@ export default function CFGViewer({
   locale = defaultLocale,
 }: CFGViewerProps) {
   const parsed = useMemo(() => parseSource(ir, format, locale), [ir, format, locale]);
-  const [mode, setMode] = useState<ViewMode>(defaultMode);
+  // null 表示还没手动选过模式；输入变化时回到自动默认
+  const [mode, setMode] = useState<ViewMode | null>(null);
   const [activeFunction, setActiveFunction] = useState(0);
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
   const [selected, setSelected] = useState<string | null>(null);
@@ -85,6 +87,9 @@ export default function CFGViewer({
   const [copied, setCopied] = useState(false);
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
+  // 单基本块的图只有一张卡片，默认看 IR 文本；多基本块才默认 CFG
+  const preferIR = useMemo(() => prefersIRView(parsed), [parsed]);
+  const shownMode: ViewMode = mode ?? (preferIR ? 'ir' : defaultMode);
   const fn = parsed.functions[activeFunction];
   const graph = useMemo(() => (fn ? layoutCFG(fn, { collapsed }) : null), [fn, collapsed]);
   const rows = useMemo(
@@ -96,10 +101,11 @@ export default function CFGViewer({
     setActiveFunction(0);
     setSelected(null);
     setAutoFit(true);
+    setMode(null);
   }, [ir, format]);
 
   useEffect(() => {
-    if (mode !== 'cfg') return;
+    if (shownMode !== 'cfg') return;
     const viewport = viewportRef.current;
     if (!viewport || !graph) return;
 
@@ -114,7 +120,7 @@ export default function CFGViewer({
     const observer = new ResizeObserver(fit);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [graph, autoFit, mode]);
+  }, [graph, autoFit, shownMode]);
 
   const issues = parsed.issues;
 
@@ -154,9 +160,14 @@ export default function CFGViewer({
           ))}
         </div>
 
-        <ViewModeSwitch value={mode} onChange={setMode} locale={locale} label={t(locale, 'cfg.mode')} />
+        <ViewModeSwitch
+          value={shownMode}
+          onChange={setMode}
+          locale={locale}
+          label={t(locale, 'cfg.mode')}
+        />
 
-        {mode === 'cfg' ? (
+        {shownMode === 'cfg' ? (
           <div className="cfg__actions">
             <button
               type="button"
@@ -224,7 +235,7 @@ export default function CFGViewer({
         <p className="cfg__empty">
           {t(locale, format === 'mir' ? 'cfg.emptyMir' : 'cfg.empty')}
         </p>
-      ) : mode === 'cfg' ? (
+      ) : shownMode === 'cfg' ? (
         <>
           <div className="cfg__viewport" ref={viewportRef} style={{ maxHeight: `${height}px` }}>
             <CFGCanvas

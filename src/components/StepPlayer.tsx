@@ -8,6 +8,7 @@ import type { InstructionDiff, InstructionMark } from '../lib/ir/diff';
 import type { IRFormat } from '../lib/ir/format';
 import { layoutCFG } from '../lib/ir/layout';
 import type { CFGGraph } from '../lib/ir/layout';
+import { prefersIRView } from '../lib/ir/mode';
 import { canRenderCFG } from '../lib/ir/parse';
 import { parseSource } from '../lib/ir/source';
 import CFGCanvas from './CFGCanvas';
@@ -24,7 +25,7 @@ interface StepPlayerProps {
   autoplay?: boolean;
   loop?: boolean;
   caption?: string;
-  /** 默认展示模式；按产品约定默认是 CFG 图 */
+  /** 默认展示模式；多基本块时生效，单基本块始终默认 IR 文本 */
   defaultMode?: ViewMode;
   /** 界面语言；演示标题与说明在传入前已由 getDemo() 本地化 */
   locale?: Locale;
@@ -56,6 +57,8 @@ interface StepGraph {
   diff: InstructionDiff | null;
   /** 这一步的两侧 IR 是否包含多个函数；多函数时不能用 CFG 模式 */
   multiFunction: boolean;
+  /** 这一步两侧是否都只有最多一个基本块；单基本块默认 IR 文本 */
+  singleBlock: boolean;
 }
 
 /** 解析这一步的两侧 IR，并按指令文本做 diff；注释变化不会把整块染红染绿 */
@@ -73,6 +76,7 @@ function graphOfStep(step: DemoStep, locale: Locale, format: IRFormat): StepGrap
     after: afterFn ? layoutCFG(afterFn) : null,
     diff: beforeFn && afterFn ? diffInstructions(beforeFn, afterFn, focus) : null,
     multiFunction: !canRenderCFG(beforeParsed) || !canRenderCFG(afterParsed),
+    singleBlock: prefersIRView(beforeParsed) && prefersIRView(afterParsed),
   };
 }
 
@@ -277,7 +281,8 @@ export default function StepPlayer({
   locale = defaultLocale,
 }: StepPlayerProps) {
   const reducedMotion = usePrefersReducedMotion();
-  const [mode, setMode] = useState<ViewMode>(defaultMode);
+  // null 表示还没手动选过模式，跟随整段演示的自动默认
+  const [mode, setMode] = useState<ViewMode | null>(null);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(autoplay);
   const [speed, setSpeed] = useState(1);
@@ -299,7 +304,11 @@ export default function StepPlayer({
     () => graphs.every((graph) => !graph.multiFunction),
     [graphs],
   );
-  const shownMode: ViewMode = cfgAvailable ? mode : 'ir';
+  // 单基本块的两侧 IR 画成 CFG 只有一张卡片，默认直接看文本；
+  // 只要任一步出现多基本块，就按产品的 CFG 默认继续。
+  const preferIR = useMemo(() => graphs.every((graph) => graph.singleBlock), [graphs]);
+  const autoMode: ViewMode = preferIR ? 'ir' : defaultMode;
+  const shownMode: ViewMode = cfgAvailable ? (mode ?? autoMode) : 'ir';
   const cfgDisabledReason = cfgAvailable
     ? undefined
     : t(locale, 'player.cfgUnavailable');
@@ -311,9 +320,10 @@ export default function StepPlayer({
     [graphs],
   );
 
+  // 换一个演示时重新采用自动默认，不把上一个演示的手动选择带过来
   useEffect(() => {
-    if (!cfgAvailable) setMode('ir');
-  }, [cfgAvailable]);
+    setMode(null);
+  }, [demo.id]);
 
   // IR 视口有固定高度：切步后把 cursor 滚到可见位置。
   useEffect(() => {
