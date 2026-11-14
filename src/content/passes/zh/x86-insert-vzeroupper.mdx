@@ -1,0 +1,234 @@
+---
+title: x86-insert-vzeroupper
+subtitle: AVX 之后清干净：在 SSE 边界插 vzeroupper
+summary: AVX 指令会把 YMM 的高 128 位写脏，之后执行 legacy SSE 要付 transition penalty。这个 pass 在机器指令定型后做一次块级数据流分析，在调用和返回前插 vzeroupper，把状态清回 clean。
+category: codegen
+difficulty: 2
+status: ready
+order: 24
+stage: []
+tags: ['AVX', 'SSE', 'MIR', 'ABI', 'x86-64']
+demo: x86-insert-vzeroupper
+source: llvm/lib/Target/X86/X86InsertVZeroUpper.cpp
+updated: 2026-11-14
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+AVX 给 x86 加了 256 位的 `ymm0`–`ymm15`，但并没有替换 SSE。同一份二进制里，VEX 编码的 AVX 指令和 legacy SSE 指令可以混着跑，硬件于是必须跟踪一件事：YMM 的高 128 位现在是不是「脏」的。
+
+两条规则造成了这个状态：
+
+- VEX 编码的指令写 128 位结果时，会把高 128 位**清零**；
+- legacy SSE 指令只写低 128 位，高 128 位**保持原样**。
+
+所以只要一条 AVX 指令往高位写了非零值，之后的 legacy SSE 就会遇到一个非零的高位状态。Sandy Bridge / Ivy Bridge 上，这个切换要付一次流水线级的 AVX–SSE transition penalty，量级是几十个周期。后来的核心把代价换了形态而不是彻底删掉：Haswell 起更像逐条指令的额外开销，Skylake 客户端上传统意义上的切换惩罚基本消失，但 dirty upper 会变成 SSE 指令的 false dependency，在 Skylake-SP 这类服务器核心上又变得明显。AMD 的 Zen 系列没有这条惩罚。
+
+```text
+AVX 之后：高 128 位 ≠ 0（dirty）
+
+  ├─ 直接跑 legacy SSE
+  │    → transition penalty
+  └─ vzeroupper
+       → 高位 = 0（clean）
+```
+
+问题是，开了 AVX 的代码里为什么还会有 legacy SSE？因为「这个函数用 AVX」是编译单个翻译单元时的决定，而边界另一边的事情编译器看不到：
+
+- 单独编译的 TU、静态库、第三方 `.a`，可能只开了 SSE2；
+- 通过函数指针、回调、`qsort` 比较器调进来的代码；
+- `memcpy` 之类由 libc 提供的实现；
+- 手写内联汇编里的 SSE 指令。
+
+`vzeroupper` 就是为这个边界准备的：一条 3 字节的指令，把 `ymm0`–`ymm15` 的 128 位以上清零（AVX-512 下同时清 `zmm0`–`zmm15` 的 128 位以上），低 128 位不动，处理器回到 clean 状态。它不是保存/恢复，而是**丢弃高位并声明干净**。
+
+这个 pass 的职责因此很窄：指令已经定型、寄存器已经分配之后，找出「当前 YMM 状态是脏的」位置，在离开函数或调用别人之前插一条 `vzeroupper`。它不改任何计算，也不做跨函数分析。
+
+## 算法
+
+`x86-insert-vzeroupper` 是一个 `MachineFunctionPass`，要求 `NoVRegs`，跑在寄存器分配和栈帧 lowering 之后。它只读 MIR，不看 IR。
+
+### 开关与快速退出
+
+`insertVZeroUpper(MF)` 先检查三个条件，任何一个不成立就直接返回。第三个条件是 target 的 `+vzeroupper` tuning feature，`-mno-vzeroupper` 会把它关掉：
+
+```text
+-x86-use-vzeroupper (默认 true)
+  && subtarget.hasAVX()
+  && subtarget.insertVZEROUPPER()
+```
+
+然后是一次常数时间的快速判断：扫描函数的 live-in，以及 `VR256RegClass` / `VR512_0_15RegClass` 里有没有非空的物理寄存器。整个函数没碰过 YMM/ZMM 就直接返回——这是绝大多数函数的路径，比如纯整数代码和只用 SSE 的代码。
+
+### 三个块状态
+
+每个基本块在分析里处于三种状态之一：
+
+| 状态 | 含义 |
+| --- | --- |
+| `PASS_THROUGH` | 块内既没有弄脏 YMM/ZMM 的指令，也没有 `vzeroupper`，入口状态原样传到出口 |
+| `EXITS_CLEAN` | 块内有一条（或将有一条）`vzeroupper`，出口保证干净 |
+| `EXITS_DIRTY` | 有指令弄脏了 YMM/ZMM，后面没有 `vzeroupper` 清掉 |
+
+另外每块还记一个 `FirstUnguardedCall`：块里第一条「可能需要保护」的 call。它的存在是因为块入口状态一开始是未知的——不能立刻判断这条 call 该不该插。
+
+### 两趟：先扫描，再沿脏前驱传播
+
+第一趟按 MBB 的布局顺序线性扫描，块内维护一个局部的 `CurState`：
+
+```text
+for each MBB:
+  Cur = PASS_THROUGH
+  for each MI:
+    VZERO* → Cur = CLEAN
+    YMM/ZMM operand → Cur = DIRTY
+    call or return:
+      DIRTY → insert VZEROUPPER
+      PASS_THROUGH → save first call
+  exit DIRTY → successors to worklist
+YMM/ZMM live-in → entry to worklist
+```
+
+第二趟处理 worklist。一个块被放进 worklist，意味着它有一条以 dirty 状态结束的前驱：
+
+```text
+while worklist not empty:
+  MBB = pop()
+  if MBB.first call:
+    insert VZEROUPPER
+  if MBB was PASS_THROUGH:
+    push successors
+```
+
+这就是为什么第一趟遇到「入口状态未知」的 call 只记录不插入：那块自己可能是干净的，脏状态要从某条前驱传进来。worklist 只在真正发现脏前驱时才补插，并且顺着 `PASS_THROUGH` 块继续往后传，直到遇到一个自己会清干净（`EXITS_CLEAN`）的块或者已经插过的块。
+
+### 什么算「弄脏」
+
+对每条指令，只要它有任何 YMM/ZMM 寄存器操作数（显式或隐式，调试操作数除外）就算弄脏。这条规则对 call 有两个特例：
+
+- call 带 RegMask，但 RegMask 没有 clobber 全部 YMM/ZMM：当作「使用了 YMM」，会把状态置脏。callee 只破坏一部分向量寄存器时，剩下的高位状态不可知，保守处理。
+- call 根本没有 RegMask（`_chkstk`、`_ftol2` 这类 helper）：跳过。它们不走标准调用约定，寄存器用法在指令里写清楚了。
+
+反过来，一条 call 如果自己带了 YMM/ZMM 操作数——比如返回 `__m256` 的 call——它会被当成 AVX 指令，**不插** guard。callee 本身就是 AVX 代码，边界两边都在 AVX 域里，清理没有意义。
+
+### 例外与细节
+
+- **已有的 `vzeroupper` / `vzeroall` 把状态重置为 clean。** 你手写的 intrinsic 会被尊重，pass 不会重复插。
+- **中断处理函数的 `iret` 跳过。** 它们的 epilogue 会恢复 YMM/ZMM，`vzeroupper` 反而会破坏现场。
+- **返回 YMM/ZMM 值的 `ret` 不插。** `RET64 $ymm0` 带 YMM 操作数，在状态机里被当成「使用 YMM」，直接置脏并跳过。否则 `vzeroupper` 会把返回值的上半截清零。
+- **只看 `ymm0`–`ymm15` / `zmm0`–`zmm15`。** `vzeroupper` 清不到 16–31，而 legacy SSE 的编码也访问不到它们，没必要管。
+- **函数有 YMM/ZMM live-in 时，入口被当作脏前驱。** 参数从 YMM 进来，说明调用方那边已经用过 256 位；入口块的第一条 call 也要保护。
+
+### 插完长什么样
+
+在 MIR 里，`VZEROUPPER` 会带上它所 clobber 的全部寄存器：
+
+```text
+VZEROUPPER implicit-def $ymm0, implicit-def $ymm1, implicit-def $ymm2, ...
+CALL64pcrel32 target-flags(x86-plt) @sse_sum, csr_64, implicit $rsp, implicit $ssp, ...
+```
+
+这也是 pass 只敢在调用和返回前插的原因：这些位置按 ABI 不允许有活着的 YMM 值跨过，清零不会破坏任何东西。函数内部则默认「开了 AVX 就不会生成 legacy SSE」，不需要在内联的 SSE 指令前插。
+
+## 代价与坑
+
+- **一条 uop，但不是免费的。** 在每次迭代都调用 helper 的热循环里，guard 会跟着迭代走。call 边界本身有开销，通常摊得掉，但在超短函数、超高频调用点上它会被量出来。callee 本身也是 AVX 时，这条 guard 纯属浪费。
+- **它是保守的，没有过程间信息。** 即使 callee 在同一个 TU、甚至已经被 LTO 看到，只要它可能执行 SSE，pass 就会插。内联能消掉一部分 call，也就顺带消掉一部分 guard。
+- **关掉它有两个层次。** `-mno-vzeroupper` 关掉 target 的 `+vzeroupper` tuning feature，只影响这个目标；`-mllvm -x86-use-vzeroupper=false` 关掉整个 pass。AMD 上没有 AVX–SSE transition penalty，想省这几条指令可以关；但只要有代码和 SSE 混跑，Intel 上不要关。
+- **内联汇编是盲区。** pass 只读 MIR 里的寄存器和 RegMask，汇编字符串里写了什么它看不见。既可能漏插（asm 弄脏了 YMM），也可能白插。手写 SSE 和 AVX 混用时自己负责，例如在边界上调 `_mm256_zeroupper()`。
+- **约定是双向的。** 调用方在 call 前清干净，模型就假设 call 返回后状态也是干净的——这依赖每个 callee 也在返回前清。一个手写汇编的 callee 如果带着脏状态返回，调用方不会知道，下一条 SSE 照样付代价。
+- **`RET64 $ymm0` 是刻意的例外。** 返回向量值时 guard 被抑制，调用方拿到的是脏状态；如果调用方随后要进 SSE，得由它自己清。这也是为什么「每个 call 返回都干净」不能当成绝对不变量。
+- **代码尺寸。** 每条 guard 3 字节。大型 C++ 程序里 call 点多，累计起来是可见的，但通常远小于 MFS 那类布局改动带来的对齐变化。
+- **只区分「碰过 YMM/ZMM」和「没碰过」。** 它不区分 VEX 与 EVEX，也不管 AVX-512 的 EVEX↔VEX 混用代价；那些是别的机制。`vzeroupper` 对 `zmm16`–`zmm31` 也无效，但 legacy SSE 访问不到它们，所以这不影响正确性。
+- **`-stop-after=x86-insert-vzeroupper` 在 LLVM 23 的 `llc` 里会报 not registered。** 这个 pass 已经移植到新 PM，名字只作为 `DEBUG_TYPE` 存在。看结果用 `-stop-before=x86-asm-printer` 或 `-print-after-all`。
+- **它不会让代码变快，只会让混跑不变慢。** 纯 AVX 程序里这些指令全是额外开销；纯 SSE 程序里 pass 在快速退出那一步就返回了。
+
+## 在管线里的位置
+
+这个 pass 在 `X86PassConfig::addPreEmitPass` 里，位于寄存器分配、栈帧 lowering、后 RA 调度和基本块布局之后，AsmPrinter 之前：
+
+```text
+prolog-epilog → post-RA scheduling → block-placement
+  → x86-expand-pseudo → kcfi → indirect-branch-tracking
+  → x86-insert-vzeroupper
+  → x86-fixup-bw-insts → x86-pad-short-functions → x86-fixup-leas
+  → x86-compress-evex → x86-insert-x87-wait → asm-printer
+```
+
+它要求 `NoVRegs`，所以看到的是物理寄存器；它之后只剩 target 的收尾小改写，不会再产生新的 YMM 使用。它前面是 <I18nLink href="/passes/isel/">isel</I18nLink> 选出的指令和 <I18nLink href="/passes/regalloc/">regalloc</I18nLink> 分配的物理寄存器；同样是机器级收尾，<I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink> 改的是块放在哪个 section，而这里改的是指令序列本身。
+
+它不参与 IR 优化管线，添加这个 pass 也不看优化级别：`-O0` 下它照样跑，只是代码里真的出现 YMM/ZMM 时才有事可做。开了 AVX 的 `-O0` 代码如果用了向量 intrinsic，一样会在边界上被插上 guard。
+
+## 自己跑一遍
+
+先写一个既有 AVX 计算、又调用 SSE helper 的函数。`-ffast-math` 是必要的：没有它，浮点归约不会被向量化成 256 位，函数里根本不会出现 YMM，pass 在快速退出那一步就返回了。
+
+```bash
+cat > demo.c <<'EOF'
+__attribute__((noinline)) float sse_sum(const float *p, int n);
+
+__attribute__((noinline)) float avx_dot(const float *a, const float *b, int n) {
+  float acc = 0.0f;
+  for (int i = 0; i < n; i++)
+    acc += a[i] * b[i];
+  acc += sse_sum(a, n);
+  for (int i = 0; i < n; i++)
+    acc += a[i] * b[i];
+  return acc;
+}
+EOF
+
+clang -O2 -mavx -ffast-math -S demo.c -o demo.s
+grep -n -B2 -A2 vzeroupper demo.s
+```
+
+这个例子里能看到两处：调用 `sse_sum` 之前一处，函数返回之前一处。`sse_sum` 没有定义，汇编里会是一个外部符号；这不影响观察 pass 的行为。
+
+在 MIR 里看插入点（LLVM 23 的 pass 名不能用于 `-stop-after`，用 `-stop-before`）：
+
+```bash
+clang -O2 -mavx -ffast-math -emit-llvm -S demo.c -o demo.ll
+llc -mtriple=x86_64-linux-gnu -mattr=+avx -O2 \
+  -stop-before=x86-asm-printer demo.ll -o demo.mir
+grep -n -B3 -A1 VZEROUPPER demo.mir
+```
+
+只看 pass 前后的变化，可以打开 `-print-after-all`：
+
+```bash
+llc -mtriple=x86_64-linux-gnu -mattr=+avx -O2 -print-after-all demo.ll -o /dev/null 2>&1 \
+  | grep -B3 -A1 VZEROUPPER
+```
+
+确认开关真的生效：
+
+```bash
+# target 层关闭
+clang -O2 -mavx -ffast-math -mno-vzeroupper -S demo.c -o off.s
+grep -c vzeroupper off.s        # 0
+
+# 整个 pass 关闭
+clang -O2 -mavx -ffast-math -mllvm -x86-use-vzeroupper=false -S demo.c -o off2.s
+grep -c vzeroupper off2.s       # 0
+```
+
+在目标文件里找它：
+
+```bash
+clang -O2 -mavx -ffast-math -c demo.c -o demo.o
+llvm-objdump -d demo.o | grep -n -B2 -A2 vzeroupper
+```
+
+想观察「返回 YMM 值时不插 guard」，把函数换成返回 `__m256`：
+
+```bash
+cat > vec.c <<'EOF'
+typedef float v8f __attribute__((vector_size(32)));
+__attribute__((noinline)) v8f ret_vec(v8f a) { return a; }
+EOF
+clang -O2 -march=haswell -S vec.c -o - | grep -E "vzeroupper|retq"
+```
+
+只会看到 `retq`：`ret_vec` 的返回值就在 `ymm0` 里，`vzeroupper` 会把它的高位清零，所以 pass 让这条返回保持脏状态，把清理留给调用方。

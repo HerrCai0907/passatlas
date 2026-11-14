@@ -130,7 +130,7 @@ const zh = {
   'pass.next': '下一篇 →',
   'pass.edit': '发现错误？在 GitHub 上编辑这一页 ↗',
   'pass.cfgTitle': '{title} 的控制流图',
-  'pass.stageNone': '由 -fprofile-generate 等开关启用，不在固定 -O 级别里。',
+  'pass.stageNone': '由 target 或 -fprofile-generate 等开关启用，不在固定 -O 级别里。',
   'pass.where': '管线位置',
   'pass.whereLink': '跳到图鉴管线中的「{title}」阶段',
 
@@ -401,7 +401,7 @@ const en: Messages = {
   'pass.next': 'Next →',
   'pass.edit': 'Found an error? Edit this page on GitHub ↗',
   'pass.cfgTitle': 'Control-flow graph of {title}',
-  'pass.stageNone': 'Enabled by flags such as -fprofile-generate, not by a fixed -O level.',
+  'pass.stageNone': 'Enabled by flags such as -fprofile-generate or target options, not by a fixed -O level.',
   'pass.where': 'In the pipeline',
   'pass.whereLink': 'Jump to the “{title}” stage in the atlas pipeline',
 
