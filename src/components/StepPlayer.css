@@ -138,7 +138,6 @@
 
 /* ---------- 算法状态：和 IR 并排的「内部过程」 ---------- */
 .pa-state {
-  border-bottom: 1px solid var(--line);
   background: var(--surface-soft);
 }
 
@@ -158,13 +157,6 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent-strong);
-}
-
-.pa-state__count {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .pa-state__list {
@@ -360,6 +352,26 @@
   color: var(--muted);
 }
 
+/* IR 文本的固定高度视口：状态、说明和控制条始终留在视口内，IR 自己滚 */
+.pa-ir-viewport {
+  max-height: clamp(240px, 42vh, 380px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.pa-ir-viewport:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* 滚动时 BEFORE / AFTER 标题留在顶部 */
+.pa-ir-viewport .pa-pane__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
 .pa-panes {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -390,13 +402,6 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--muted);
-}
-
-.pa-pane__count {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
 }
 
 .pa-pane__empty {
@@ -501,6 +506,11 @@
   line-height: 1.7;
   color: var(--muted);
   background: var(--surface-soft);
+}
+
+/* 说明在算法状态下方时，用说明自己的上边界收口 */
+.pa-state + .pa-note {
+  border-top: 1px solid var(--line);
 }
 
 /* 说明文字也按所有步骤里最长的一段占位，避免换行数变化推动下方控制条 */
@@ -669,13 +679,16 @@
     grid-template-columns: 1fr;
   }
 
-  /* 窄屏两个面板纵向排列：每块用同一个最大行数固定高度，超出部分在块内滚动 */
+  .pa-ir-viewport {
+    max-height: min(32vh, 300px);
+  }
+
+  /* 窄屏也由同一个视口滚动，before / after 不再各自嵌套滚动 */
   .pa-ir,
   .pa-player--compact .pa-ir {
-    height: min(calc(var(--pa-ir-lines, 8) * 1.72em + 16px), 260px);
-    min-height: 0;
-    max-height: none;
-    overflow-y: auto;
+    height: auto;
+    min-height: max(160px, calc(var(--pa-ir-lines, 8) * 1.72em + 16px));
+    overflow-y: visible;
   }
 
   .pa-steps,
