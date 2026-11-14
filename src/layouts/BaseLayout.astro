@@ -53,6 +53,7 @@ const otherMetas = alternates.filter((item) => item.locale !== locale);
     {!noindex && <link rel="alternate" hreflang="x-default" href={alternates[0]?.href} />}
     <link rel="icon" type="image/svg+xml" href={url('/favicon.svg')} />
     <meta name="theme-color" content="#f7f3ea" />
+    <meta name="google-site-verification" content={site.googleSiteVerification} />
     <meta name="generator" content={Astro.generator} />
     {noindex ? <meta name="robots" content="noindex" /> : null}
 
