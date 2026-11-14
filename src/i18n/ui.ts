@@ -120,8 +120,6 @@ const zh = {
   'pass.difficulty': '难度 {level}',
   'pass.demoHeading': '分步动画',
   'pass.demoHint': '点按「下一步」，或用键盘 <kbd>←</kbd> <kbd>→</kbd> 单步，<kbd>空格</kbd> 播放。',
-  'pass.demoHintMir':
-    '这是 Machine IR：播放器用 MIR 解析器切出机器基本块，需要时可以切到 CFG 查看控制流。用 <kbd>←</kbd> <kbd>→</kbd> 单步，<kbd>空格</kbd> 播放。',
   'pass.cfgHeading': '控制流图',
   'pass.cfgHint': '基本块、跳转与分支条件的一张地图。',
   'pass.sourcePrefix': '在 LLVM 源码中：',
@@ -405,8 +403,6 @@ const en: Messages = {
   'pass.demoHeading': 'Step-by-step animation',
   'pass.demoHint':
     'Press Next, or use <kbd>←</kbd> <kbd>→</kbd> to step and <kbd>Space</kbd> to play.',
-  'pass.demoHintMir':
-    'This is Machine IR: the player parses machine basic blocks; switch to CFG when you want the control-flow view. Use <kbd>←</kbd> <kbd>→</kbd> to step and <kbd>Space</kbd> to play.',
   'pass.cfgHeading': 'Control-flow graph',
   'pass.cfgHint': 'A map of basic blocks, branches and conditions.',
   'pass.sourcePrefix': 'In the LLVM source:',
