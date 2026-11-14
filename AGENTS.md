@@ -130,8 +130,10 @@ define i32 @f(i32 %x) {
   ret i32 %v
 }
 `,
-    // 可选：这一步只观察、不改写时，高亮同一行
+    // 这一步需要重点关注的 IR，可以有多行
     focus: ['ret i32 %x'],
+    // 当前处理的那条指令：箭头画在 IR 最左边
+    cursor: { line: 'ret i32 %x' },
     // 从 stack-slot-coloring 开始，每一步还要给出算法内部状态快照
     state: `
 slot   weight  color
@@ -151,14 +153,23 @@ slot   weight  color
 - `before` / `after` are **raw IR strings**; indentation is dedented automatically.
 - Do **not** hand-write diff marks. `makeStep()` computes an LCS line diff at build time and
   marks added / removed lines.
+- **Required from `stack-slot-coloring` onward: every step supplies exactly one `cursor`**, the
+  instruction being processed in that step. `cursor` takes `{ line, side?, occurrence? }`; `side`
+  defaults to `before`, and `makeDemo()` resolves it to a pane row at build time, throwing if the
+  line cannot be found. A step may only process one instruction; if a rewrite touches several
+  instructions, split it into several steps.
+- **`focus` is not the cursor.** It marks the IR worth looking at in this step and may contain
+  several lines; the cursor is a single arrow at the far left of the IR and is the only thing that
+  says “this is the current instruction”.
 - **Required from `stack-slot-coloring` onward: every step supplies a `state` snapshot** of the
   pass's internal state (worklist, slot table, coloring, live intervals, …). `makeDemo()` diffs
   consecutive snapshots, so the animation shows the algorithm running, not just the IR before and
   after. This is part of the page, not an optional extra: a step that only changes IR without
   showing the decision that produced it is incomplete. Keep state lines language-neutral
   (identifiers, numbers, arrows, `-`) and explain them in `note`.
-- Keep each step focused on one change. 2–4 steps per pass, 5–16 lines per side. Machine IR demos
-  may run to ~30 lines because each step needs its MBB/PHI context; still change one thing per step.
+- Keep each step focused on one instruction/change. Use as many steps as the algorithm needs: the
+  one-cursor-per-step rule can push a demo past the old 2–4 step target. Keep 5–16 lines per side;
+  Machine IR demos may run to ~30 lines because each step needs its MBB/PHI context.
 - The `after` of step *n* should be the `before` of step *n + 1* — the reader may replay it.
 - Register it once in `src/demos/registry.ts` under the same id; `getDemo(id, locale)` picks the
   localized title and note.
@@ -218,8 +229,9 @@ updated: 2026-11-01
 - [ ] `npm run build` passes, page appears under `/passes/<id>/` and `/en/passes/<id>/`
 - [ ] local review server is running and the URLs are reported (see §11)
 - [ ] animation has ≥ 2 steps, each step's IR is valid-looking LLVM (opaque `ptr`, `phi`, …)
-- [ ] from `stack-slot-coloring` onward, every step has a `state` snapshot and the player shows
-      the pass's internal state alongside the IR, not only the before/after diff
+- [ ] from `stack-slot-coloring` onward, every step has exactly one `cursor` and a `state`
+      snapshot; the player shows the current instruction and the pass's internal state alongside
+      the IR, not only the before/after diff
 - [ ] Machine IR pages set `format: 'mir'`, show real MIR (MBBs, virtual registers, register
       classes), and end with `llc` commands instead of `opt`
 - [ ] frontmatter `demo` matches a registry key, and English step titles / notes exist
@@ -279,6 +291,10 @@ Rules:
 - IR mode keeps the diff colours: green = added line, red = removed, amber = "look at this"
   (`focus`). CFG mode shows the same steps as before/after graphs; do not drop either mode.
 - CFG mode reuses `CFGCanvas` (non-interactive) so node geometry stays identical to `CFGViewer`.
+- The cursor is the current instruction, not a highlight: `StepPlayer` draws a small arrow at the
+  far left of exactly one IR line, reads it from `DemoStep.cursor`, and every step must have one.
+  `focus` lines still keep the amber highlight; they mean “look at this IR in this step”, not
+  “this is the instruction being processed”.
 - Algorithm state is part of the animation: when a demo supplies `state`, `StepPlayer` renders it
   above the IR panes and reserves `Demo.stateMaxLines`. Do not leave internal state only in `note`.
 - Do not add new semantic colours without changing `tokens.css` and this file.
