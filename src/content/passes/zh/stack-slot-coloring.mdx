@@ -1,0 +1,232 @@
+---
+title: stack-slot-coloring
+subtitle: 栈槽着色：让不重叠的 spill slot 共用一个栈位置
+summary: 寄存器分配会留下许多 spill slot。生命周期不重叠的槽可以复用同一个栈位置；StackSlotColoring 用 LiveStacks 的区间、spill weight 和 first-fit 着色合并它们，再改写 frame index、删掉空出来的栈对象。
+category: codegen
+difficulty: 2
+status: ready
+order: 25
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Live Interval', 'Graph Coloring', 'Spill Slot', 'Frame Layout', 'MIR']
+demo: stack-slot-coloring
+source: llvm/lib/CodeGen/StackSlotColoring.cpp
+updated: 2026-11-14
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+寄存器分配器在压力大的时候会把值溢出到栈上。每个被溢出的值通常拿到一个独立的 spill slot，MIR 里写成 `%stack.N`：
+
+```text
+%12:gr32 = MOV32ri 42
+MOV32mr %stack.0, 1, _, 0, _, %12:gr32   ; spill
+...
+%13:gr32 = MOV32rm %stack.0, 1, _, 0, _  ; reload
+```
+
+这些槽不一定同时活着。一个值在函数前半段被溢出，另一个值在调用之后才被溢出，它们的活跃区间完全不重叠，却各自占着 8 字节的栈位置。函数里这种槽一多，栈帧就会变大：更多的 cache line、更大的栈指针调整、prologue / epilogue 里更多的保存恢复。
+
+StackSlotColoring 做的事很像寄存器分配，只是“寄存器”换成了栈槽：
+
+- **输入**：寄存器分配器留下的 spill slot 活跃区间（`LiveStacks`）；
+- **约束**：两个槽的活跃区间重叠，就不能共用同一个栈位置；
+- **目标**：用尽量少的栈位置装下所有 spill slot，减小 `MachineFrameInfo` 里的栈帧。
+
+它主要改栈槽的**归属**，不改指令语义，也不会系统性地减少 spill / reload 的次数；只有 `RemoveDeadStores` 会顺手删掉少数相邻的死存储。收益来自更小的 frame，以及更好的栈缓存局部性。
+
+注意它和 `stack-coloring` 不是同一个 pass：`StackColoring` 在寄存器分配之前合并 `alloca`，处理的是用户变量；`StackSlotColoring` 在寄存器分配之后合并 **spill slot**，处理的是分配器自己造出来的临时栈位置。两篇页面不要混在一起。
+
+## 算法
+
+### 输入与跳过条件
+
+`StackSlotColoring::run` 先看有没有活可干：
+
+- `LiveStacks->getNumIntervals() == 0`：没有 spill slot，直接返回；
+- `MF.exposesReturnsTwice()`：函数调用了 `setjmp` / `sigsetjmp`，栈可能在 `longjmp` 之后被改写，不做着色；
+- legacy 路径还会 `skipFunction`，所以带 `optnone` 的函数不会进来。
+
+`LiveStacks` 不是这个 pass 现场算出来的：它是寄存器分配器在溢出时登记的。也正因为如此，把一段已经打印出来的 MIR 再喂给 `llc -run-pass=stack-slot-coloring`，通常什么都看不到——MIR 里没有序列化 `LiveStacks` 的区间。要看效果，应该从 IR 用 `-stop-before` / `-stop-after` 走完整代码生成。
+
+### 第一步：扫描引用，累加权重
+
+`ScanForSpillSlotRefs` 遍历所有基本块和指令：
+
+- 每个 FI 操作数（`%stack.N`）给对应槽加分；权重用 `LiveIntervals::getSpillWeight` 按块频率折算，循环里的引用更重；
+- 每个 `MachineMemOperand` 里的 `FixedStackPseudoSourceValue` 也记下来，后面改写时要一起改；
+- debug 指令不计权重，但仍然会被扫描。
+
+权重决定处理顺序：越“热”的槽越早拿到颜色。`InitializeSlots` 再把区间按 frame index 排好，按权重稳定排序，并跳过已经 dead 的栈对象。
+
+### 第二步：初始化颜色
+
+这里的“颜色”不是新分配一个抽象编号，而是**已有的 spill slot 的 frame index**。代码里为每个 stack ID 维护三样东西：
+
+```text
+AllColors[StackID]   这个 stack ID 下所有 spill slot 的集合
+UsedColors[StackID]  已经当颜色用的槽
+NextColors[StackID]  下一个还没用过的槽（从最小的 frame index 开始）
+```
+
+`stack-id` 把不同用途的栈对象隔开（例如 AMDGPU 的 SGPR spill、AArch64 SVE 的可伸缩向量槽），不同 stack ID 的槽不能互相复用。
+
+### 第三步：first-fit 着色
+
+对每个槽，`ColorSlot` 做两件事：
+
+1. **先试着复用已用颜色**：从最小的已用颜色开始，用 `LiveIntervalUnion` 查当前区间和这个颜色里已有的区间是否重叠；不重叠就共享；
+2. **不能共享就取下一个空闲颜色**：`NextColors` 给出当前 stack ID 下第一个没用过的槽。
+
+共享时还要更新颜色槽的大小和对齐：
+
+```text
+size   = max(已有 size, 新对象 size)
+align  = max(已有 align, 新对象 align)
+```
+
+所以两个大小不同的 spill slot 可以共用一个位置，但颜色槽必须大到能装下最大的那个。对齐变大也可能带来额外的 padding，这是着色不一定总能缩小栈帧的原因之一。
+
+### 第四步：改写与清理
+
+颜色定下来后，`ColorSlots` 生成 `SlotMapping`，然后：
+
+- 把每条指令里的 FI 操作数从旧槽改成颜色槽；
+- 把 `MachineMemOperand` 里的 `FixedStackPseudoSourceValue` 改成新的 frame index；
+- 调用 `RemoveDeadStores` 删掉“load 之后又原样 store 回同一个槽”的死存储（目标用 `isLoadFromStackSlot` / `isStoreToStackSlot` 识别，`-ssc-dce-limit` 可以限制数量）；
+- 从 `MachineFrameInfo` 删除没有任何颜色使用的栈对象。
+
+此时 `stack:` 列表变短，`%stack.2` / `%stack.3` 这样的引用已经不存在了。真正的栈偏移要等 `prolog-epilog` 才落地。
+
+### 在 MIR 里看
+
+下面这个函数有两段互不相交的溢出区：第一个 call 两侧用 `%stack.0` / `%stack.1`，第二个 call 两侧用 `%stack.2` / `%stack.3`。
+
+```text
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 2, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 3, type: spill-slot, size: 8, alignment: 8 }
+
+...
+MOV64mr %stack.2, 1, $noreg, 0, $noreg, killed renamable $rcx
+...
+renamable $rcx = MOV64rm %stack.2, 1, $noreg, 0, $noreg
+```
+
+`%stack.0` / `%stack.1` 的区间在第一个 call 之后就结束了，`%stack.2` / `%stack.3` 的区间从后面才开始。着色器把 2 映射到 0、3 映射到 1：
+
+```text
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
+
+...
+MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
+...
+renamable $rcx = MOV64rm %stack.0, 1, $noreg, 0, $noreg
+```
+
+四个槽变成两个，frame 从 32 字节降到 16 字节；`MOV64mr` / `MOV64rm` 的数量一条没少。动画里的「算法状态」面板会逐步显示权重、颜色、共享关系和最终的 frame 变化。
+
+## 代价与坑
+
+- **first-fit 不是最优着色。** 处理顺序由 spill weight 决定，颜色由 frame index 顺序决定；这两者都可能让结果比最优解多用一个槽。`-no-stack-slot-sharing` 可以关掉共享，作为 baseline 对照。
+- **只处理 spill slot。** 用户 `alloca` 由更早的 `StackColoring` 负责；这个 pass 不会碰它们。把两者混为一谈，会误以为它能合并局部数组。
+- **不会系统性减少动态访存。** 主路径上 spill / reload 次数不变，只有保守的死存储删除会去掉少数相邻的 load / store；收益主要在 frame 大小、栈指针调整和栈缓存局部性上。对栈帧本来就不大的函数，收益可能接近零。
+- **共享会抬高 size / alignment。** 颜色槽要容纳所有共享对象，最大的那个决定大小和对齐；对齐变大可能带来 padding，抵消一部分收益。
+- **stack ID 是硬边界。** 不同 `stack-id` 的槽不能共享；这是语义要求，不是为了保守。
+- **setjmp / sigsetjmp 函数直接跳过。** `longjmp` 可能在任意时刻恢复栈，着色后的槽会被错误复用；`exposesReturnsTwice()` 为真时 pass 不跑。
+- **死存储删除很保守。** 只处理相邻的 load / store 对，而且依赖目标 hook；中间插了别的指令就不会删。`-ssc-dce-limit` 可以限制删除数量，避免编译时间失控。
+- **`-O0` 不跑。** 它挂在 `addOptimizedRegAlloc` 里，只有 greedy / basic 这条优化分配路径才会添加；fast 分配器路径不会调用它。legacy PM 路径下，带 `optnone` 的函数还会被 `skipFunction` 跳过。
+- **保存的 MIR 里没有 LiveStacks。** 单独 `llc -run-pass=stack-slot-coloring saved.mir` 通常没有区间可用；用 `-stop-before` / `-stop-after` 从 IR 跑完整流程才能看到真实效果。
+- **它不改变分配决策。** 如果所有 spill slot 的区间都重叠，着色器什么也做不了；真正的解决办法是降低寄存器压力，而不是指望这个 pass。
+
+## 在管线里的位置
+
+`stack-slot-coloring` 在 `addOptimizedRegAlloc` 里，紧跟在 `virtregrewriter` 之后、`machine-cp` 之前：
+
+```text
+greedy → virtregrewriter → stack-slot-coloring
+  → machine-cp → machinelicm → prolog-epilog → ...
+```
+
+它处理的是 `MachineFrameInfo` 里的抽象 frame index，还没有进入真正的栈布局；`prolog-epilog` 之后才会给这些对象分配偏移、生成 prologue / epilogue。再往后是 post-RA 调度、block placement 和 <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink>。
+
+它和 <I18nLink href="/passes/regalloc/">regalloc</I18nLink> 是同一条流水线上的上下游：greedy 决定哪些值溢出、给它们分配 `%stack.N`，`stack-slot-coloring` 再把生命周期不重叠的 `%stack.N` 合并。想看分配决策，用 `-stop-after=greedy`；想看栈槽合并，用 `-stop-after=stack-slot-coloring`。
+
+## 自己跑一遍
+
+先造一个寄存器压力足够大的函数：两段各 8 个值跨调用存活，迫使分配器在两次 `use` 调用前后各溢出几个值。
+
+```c
+extern void use(long);
+
+__attribute__((noinline))
+long spill_merge(long *p) {
+  long a0 = p[0] * 3 + p[1];
+  long a1 = p[2] * 3 + p[3];
+  long a2 = p[4] * 3 + p[5];
+  long a3 = p[6] * 3 + p[7];
+  long a4 = p[8] * 3 + p[9];
+  long a5 = p[10] * 3 + p[11];
+  long a6 = p[12] * 3 + p[13];
+  long a7 = p[14] * 3 + p[15];
+  use(0);
+  long s = a0 ^ (a1 << 1) ^ (a2 << 2) ^ (a3 << 3)
+         ^ (a4 << 4) ^ (a5 << 5) ^ (a6 << 6) ^ (a7 << 7);
+  long b0 = p[20] * 5 - p[21];
+  long b1 = p[22] * 5 - p[23];
+  long b2 = p[24] * 5 - p[25];
+  long b3 = p[26] * 5 - p[27];
+  long b4 = p[28] * 5 - p[29];
+  long b5 = p[30] * 5 - p[31];
+  long b6 = p[32] * 5 - p[33];
+  long b7 = p[34] * 5 - p[35];
+  use(1);
+  long t = b0 ^ (b1 << 1) ^ (b2 << 2) ^ (b3 << 3)
+         ^ (b4 << 4) ^ (b5 << 5) ^ (b6 << 6) ^ (b7 << 7);
+  return s + t;
+}
+```
+
+然后从 IR 生成着色前后的 MIR：
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-before=stack-slot-coloring demo.ll -o before.mir
+
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=stack-slot-coloring demo.ll -o after.mir
+
+grep -n -A12 "^stack:" before.mir
+grep -n -A12 "^stack:" after.mir
+```
+
+对照共享前后的引用：
+
+```bash
+grep -n "%stack" before.mir
+grep -n "%stack" after.mir
+```
+
+关掉共享，看 first-fit 单独工作的结果：
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -no-stack-slot-sharing -stop-after=stack-slot-coloring \
+  demo.ll -o no-share.mir
+```
+
+关掉整个 pass，再对比最终栈帧：
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -disable-ssc -stop-before=prolog-epilog demo.ll -o no-ssc.mir
+```
+
+在启用统计的构建里，`-stats` 能看到 `NumEliminated` / `NumDead`；调试构建可以用 `-debug-only=stack-slot-coloring` 看每个槽被分到哪个颜色。最后加上 `-verify-machineinstrs`，确认改写后的 frame index 和 MachineMemOperand 仍然一致。

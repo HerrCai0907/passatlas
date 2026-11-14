@@ -349,6 +349,8 @@ export default function StepPlayer({
 
   const progress = ((index + 1) / total) * 100;
   const current = graphs[index];
+  const stateLines = step.state ?? [];
+  const hasState = demo.stateMaxLines > 0;
 
   return (
     <div
@@ -400,6 +402,39 @@ export default function StepPlayer({
           ))}
         </span>
       </p>
+
+      {hasState ? (
+        <section
+          className="pa-state"
+          aria-label={t(locale, 'player.algorithmState')}
+          style={{ '--pa-state-lines': demo.stateMaxLines } as CSSProperties}
+        >
+          <header className="pa-state__head">
+            <span className="pa-state__label">{t(locale, 'player.algorithmState')}</span>
+            <span className="pa-state__count">
+              {t(locale, 'player.stateLines', { count: stateLines.length })}
+            </span>
+          </header>
+          {stateLines.length > 0 ? (
+            <ol className="pa-state__list" key={index}>
+              {stateLines.map((line, i) => (
+                <li
+                  key={`${line.text}-${i}`}
+                  className={`pa-state__line pa-state__line--${line.mark}`}
+                  style={{ '--i': i } as CSSProperties}
+                >
+                  <span className="pa-state__no" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <code>{line.text === '' ? '\u00a0' : line.text}</code>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="pa-state__empty">{t(locale, 'player.emptyState')}</p>
+          )}
+        </section>
+      ) : null}
 
       {shownMode === 'cfg' ? (
         <>

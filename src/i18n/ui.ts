@@ -161,6 +161,9 @@ const zh = {
 
   'player.group': '{name} 分步演示',
   'player.mode': '分步演示的展示模式',
+  'player.algorithmState': '算法状态',
+  'player.stateLines': '{count} 行',
+  'player.emptyState': '这一步没有新的内部状态',
   'player.cfgUnavailable': '多函数 IR 不支持 CFG 视图，已固定使用 IR 文本',
   'player.cfgMirUnavailable': 'Machine IR 不按 LLVM IR 解析，已固定使用 MIR 文本',
   'player.cfgBefore': '改写前的控制流图',
@@ -432,6 +435,9 @@ const en: Messages = {
 
   'player.group': '{name} step-by-step demo',
   'player.mode': 'Step player display mode',
+  'player.algorithmState': 'Algorithm state',
+  'player.stateLines': '{count} lines',
+  'player.emptyState': 'No new internal state at this step',
   'player.cfgUnavailable': 'CFG view is unavailable for multi-function IR; showing IR text',
   'player.cfgMirUnavailable': 'Machine IR is not parsed as LLVM IR; showing MIR text',
   'player.cfgBefore': 'Control-flow graph before the rewrite',

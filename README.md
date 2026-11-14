@@ -217,11 +217,12 @@ Function → Loop，最后切到 Machine IR。主图覆盖默认优化管线的�
 调度、寄存器分配、栈帧与后分配优化、MC 发射六段，并把 x86-64 与 AArch64 的 target-specific
 pass 用 `x86` / `arm64` 徽标标出。地图下方还有两条目标线的并排视图：同一段 IR 在两条线上
 的 MIR 落点、每个阶段由 `X86PassConfig` / `AArch64PassConfig` 插入的 pass，以及分配前后的
-物理寄存器对比。已收录的五篇机器级页面是：
+物理寄存器对比。已收录的六篇机器级页面是：
 
 - [`/passes/isel/`](src/content/passes/zh/isel.mdx)：IR → Machine IR，SelectionDAG 与 GlobalISel
 - [`/passes/phi-elim/`](src/content/passes/zh/phi-elim.mdx)：φ 变 COPY、critical edge 拆分
 - [`/passes/regalloc/`](src/content/passes/zh/regalloc.mdx)：greedy、coalescing、spill
+- [`/passes/stack-slot-coloring/`](src/content/passes/zh/stack-slot-coloring.mdx)：把生命周期不重叠的 spill slot 合并到同一个栈位置
 - [`/passes/machine-function-splitter/`](src/content/passes/zh/machine-function-splitter.mdx)：按 profile 把冷块拆到 `.text.split` section
 - [`/passes/x86-insert-vzeroupper/`](src/content/passes/zh/x86-insert-vzeroupper.mdx)：在 AVX 与 SSE 的边界插 `vzeroupper`，清掉 YMM 的高位状态
 

@@ -187,7 +187,7 @@ export const machineStages: MachineStage[] = [
     shared: [
       p('greedy', { page: 'regalloc', conditional: true }),
       p('virtregrewriter', { page: 'regalloc' }),
-      p('stack-slot-coloring'),
+      p('stack-slot-coloring', { page: 'stack-slot-coloring' }),
       p('machine-cp'),
       p('machinelicm', { label: 'MachineLICM' }),
     ],

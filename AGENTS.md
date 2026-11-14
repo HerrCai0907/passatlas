@@ -132,6 +132,12 @@ define i32 @f(i32 %x) {
 `,
     // 可选：这一步只观察、不改写时，高亮同一行
     focus: ['ret i32 %x'],
+    // 从 stack-slot-coloring 开始，每一步还要给出算法内部状态快照
+    state: `
+slot   weight  color
+.0     2.0     -
+.1     2.0     -
+`,
   },
 ], {
   en: {
@@ -145,6 +151,10 @@ define i32 @f(i32 %x) {
 - `before` / `after` are **raw IR strings**; indentation is dedented automatically.
 - Do **not** hand-write diff marks. `makeStep()` computes an LCS line diff at build time and
   marks added / removed lines.
+- From `stack-slot-coloring` onward, every step also supplies a `state` snapshot of the pass's
+  internal state (worklist, slot table, coloring, live intervals, …). `makeDemo()` diffs consecutive
+  snapshots, so the animation shows the algorithm running, not just the IR before and after. Keep
+  state lines language-neutral (identifiers, numbers, arrows, `-`) and explain them in `note`.
 - Keep each step focused on one change. 2–4 steps per pass, 5–16 lines per side. Machine IR demos
   may run to ~30 lines because each step needs its MBB/PHI context; still change one thing per step.
 - The `after` of step *n* should be the `before` of step *n + 1* — the reader may replay it.
@@ -267,8 +277,9 @@ Rules:
 - CFG mode reuses `CFGCanvas` (non-interactive) so node geometry stays identical to `CFGViewer`.
 - Do not add new semantic colours without changing `tokens.css` and this file.
 - No layout shift between steps: IR mode reserves `Demo.maxLines` (computed at build time),
-  CFG mode reserves the tallest step's scaled graph, and title/note reserve the tallest copy.
-  Never let a step shrink the player — the controls must not move under the pointer.
+  CFG mode reserves the tallest step's scaled graph, `Demo.stateMaxLines` reserves the algorithm
+  state panel, and title/note reserve the tallest copy. Never let a step shrink the player — the
+  controls must not move under the pointer.
 - Respect `prefers-reduced-motion`: autoplay must stop, and line-in animations are disabled in CSS.
 - Never require a mouse: every control has a keyboard path and an `aria-label`.
 
