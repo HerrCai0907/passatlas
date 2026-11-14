@@ -18,7 +18,10 @@ export type EdgeKind =
   | 'default'
   | 'normal'
   | 'unwind'
-  | 'indirect';
+  | 'indirect'
+  /* MIR：条件跳转的目标边与顺序落下的边 */
+  | 'taken'
+  | 'fallthrough';
 
 export interface IRInstruction {
   /** 去掉注释、trim 之后的整行文本 */
@@ -45,8 +48,10 @@ export interface IREdge {
 
 export interface IRFunction {
   name: string;
-  /** 原始的 define 行，用于 IR 文本视图 */
+  /** 原始的 define 行（MIR 里是 `---` 文档起点），用于 IR 文本视图 */
   header: string;
+  /** 函数在源文本里的原始片段；IR 文本视图和「复制」都用它，避免重建时丢格式 */
+  source: string;
   blocks: IRBlock[];
   edges: IREdge[];
 }
@@ -113,6 +118,11 @@ function opcodeOf(text: string): string {
 function makeInstruction(text: string): IRInstruction {
   const opcode = opcodeOf(text);
   return { text, opcode, terminator: TERMINATORS.has(opcode) };
+}
+
+/** 语法高亮和 CFG 行分类共用：这个词是不是终结指令 */
+export function isLLVMTerminator(opcode: string): boolean {
+  return TERMINATORS.has(opcode);
 }
 
 const LABEL_PATTERN = /^%?("[^"]+"|[-$\w.]+):$/;
@@ -201,6 +211,7 @@ export function parseIR(source: string, locale: Locale = defaultLocale): IRParse
     }
 
     const defineLine = index + 1;
+    const startIndex = index;
     const nameMatch = /define\b[^@]*@("([^"]+)"|[-$\w.]+)/.exec(raw);
     const name = nameMatch
       ? normaliseLabel(nameMatch[2] ?? nameMatch[1] ?? 'anonymous')
@@ -296,7 +307,13 @@ export function parseIR(source: string, locale: Locale = defaultLocale): IRParse
       }
     }
 
-    functions.push({ name, header: raw.trim(), blocks, edges });
+    functions.push({
+      name,
+      header: raw.trim(),
+      source: lines.slice(startIndex, index).join('\n'),
+      blocks,
+      edges,
+    });
   }
 
   if (functions.length === 0 && source.trim() !== '') {

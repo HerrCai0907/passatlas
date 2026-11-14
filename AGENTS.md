@@ -61,19 +61,26 @@ src/
     StepPlayer.tsx      分步 IR 播放器（唯一的播放器）
     CFGViewer.tsx       IR → 基本块有向图（含 CFG / IR 模式切换）
     CFGCanvas.tsx       纯渲染层：节点 + SVG 连边，被 viewer 与播放器复用
-    CFGLab.tsx          实验室：textarea + CFGViewer，实时解析
+    CFGLab.tsx          实验室：textarea + CFGViewer，LLVM IR / MIR 两种格式
     ViewModeSwitch.tsx  「CFG | IR」切换控件
+    IRFormatTag.tsx     「LLVM IR / Machine IR」格式标签
+    IRText.tsx          带语法高亮的 IR 行（客户端）
+    IRText.astro        同一套 token 的服务端渲染版本
     MachineTrack.astro  机器 IR 的 x86-64 / AArch64 两条目标线
   content/passes/zh/    每篇一个中文 .mdx（frontmatter 由 content.config.ts 校验）
   content/passes/en/    同一 id 的英文 .mdx
   demos/                分步演示数据：types.ts + 每个 pass 一个文件 + registry.ts
   lib/                  url() / passes.ts / categories / 站点常量
-    ir/parse.ts         IR → 函数 / 基本块 / 边（纯函数，无依赖）
+    ir/parse.ts         LLVM IR → 函数 / 基本块 / 边（纯函数，无依赖）
+    ir/source.ts        按 IRFormat 选择解析器
+    ir/highlight.ts     LLVM IR / MIR 两套语法高亮
     ir/layout.ts        分层布局 + 回边识别（纯函数，输出坐标）
+    mir/parse.ts        Machine IR → 机器函数 / 基本块 / 边
+    mir/opcodes.ts      MIR 终结指令、条件跳转与 %bb 引用
   data/pipeline.ts      LLVM 默认管线（Module → CGSCC → Function → Loop → Machine IR）与待绘制节点
   data/machine.ts       Machine IR 六阶段、target-specific pass lane 与 MIR 快照
   data/pass-registry.ts  LLVM 23.1.4 PassRegistry.def 的静态快照（完整注册表）
-  styles/               tokens.css（设计令牌）· global.css（基础与 prose）
+  styles/               tokens.css（设计令牌）· ir.css（IR token 调色板）· global.css（基础与 prose）
 ```
 
 ## 4. Internationalization (中文 / English)
@@ -95,7 +102,8 @@ truth is `src/i18n/config.ts` (`locales`, `defaultLocale`, `localeMeta`). Routes
   `summary` are written in the language of the file.
 - **Data with copy is localized.** Demos take `{ en: { steps: [...] } }` as the fourth argument of
   `makeDemo`; categories, the pipeline map and CFG samples use `Record<Locale, string>`; the SCC lab copy
-  lives in `src/i18n/lab-scc.ts`; `parseIR(ir, locale)` localizes parser messages.
+  lives in `src/i18n/lab-scc.ts`; `parseSource(ir, format, locale)` localizes LLVM IR and MIR parser
+  messages.
 - **Head metadata follows the locale.** `BaseLayout` emits `<html lang>`, `og:locale`, the canonical
   URL and `hreflang` alternates; the sitemap integration emits the same alternates.
 - **The language selector lists 中文 and English and keeps the reader on the same page.**
@@ -173,9 +181,10 @@ slot   weight  color
 - The `after` of step *n* should be the `before` of step *n + 1* — the reader may replay it.
 - Register it once in `src/demos/registry.ts` under the same id; `getDemo(id, locale)` picks the
   localized title and note.
-- **Machine IR demos** pass `{ format: 'mir' }` as the fifth argument of `makeDemo()`. MIR is not
-  LLVM IR: `StepPlayer` skips the CFG parser, fixes the text view, and shows a MIR-specific note.
-  Do not put `define`-based IR in a MIR demo or vice versa.
+- **Machine IR demos** pass `{ format: 'mir' }` as the fifth argument of `makeDemo()`. The player
+  uses the MIR parser, labels every IR block as Machine IR, and still draws the CFG from machine
+  basic blocks, `successors:` lines and `%bb.N` jump targets. Do not put `define`-based IR in a
+  MIR demo or vice versa.
 - The fourth argument to `makeDemo` supplies English copy. It is indexed by step, so the number of
   translated steps must match the number of source steps. IR comments are shared by both locales —
   keep them language-neutral or in English.
@@ -233,7 +242,7 @@ updated: 2026-11-01
       snapshot; the player shows the current instruction and the pass's internal state alongside
       the IR, not only the before/after diff
 - [ ] Machine IR pages set `format: 'mir'`, show real MIR (MBBs, virtual registers, register
-      classes), and end with `llc` commands instead of `opt`
+      classes), end with `llc` commands instead of `opt`, and their player shows a MIR CFG
 - [ ] frontmatter `demo` matches a registry key, and English step titles / notes exist
 - [ ] prev/next navigation works in both locales (automatic via `order`)
 - [ ] page renders at 390px, 768px and 1440px without horizontal scroll
@@ -249,24 +258,39 @@ updated: 2026-11-01
 not a per-page choice: `StepPlayer` and `CFGViewer` both use `ViewModeSwitch` and pass
 `defaultMode="cfg"`. If you add a new IR surface, wire the same switch and keep CFG as default.
 
-The one exception is `StepPlayer`: CFG mode draws a single function, so a demo whose before or
-after IR defines more than one function has no CFG mode. A demo with `format: 'mir'` has no CFG
-mode either: MIR is not LLVM IR and must not be fed to the CFG parser. In both cases the player
-disables the CFG option (with an explanatory note) and stays in IR mode, because the graph would
-silently drop every function but the first. `CFGViewer` keeps its per-function tabs and still
+The two IR formats have **separate parsers and highlighters**, chosen by an `IRFormat`
+(`'llvm-ir' | 'mir'`). Every IR block must say which one it shows (`IRFormatTag`), and no component
+may feed one format to the other parser. Use `parseSource(text, format, locale)` from
+`src/lib/ir/source.ts` when the format is a prop.
+
+The one exception to CFG-by-default is `StepPlayer`: CFG mode draws a single function, so a demo
+whose before or after IR defines more than one function has no CFG mode. The player disables the
+CFG option (with an explanatory note) and stays in IR mode, because the graph would silently drop
+every function but the first. Machine IR is **not** an exception: `parseMIR` builds machine basic
+blocks from `bb.N` labels and edges from `successors:` / `JMP_1` / `JCC_1` / `B %bb.N`, and the
+player draws that CFG like any LLVM IR graph. `CFGViewer` keeps its per-function tabs and still
 supports multi-function input. Use `canRenderCFG()` from `src/lib/ir/parse.ts` for this check.
 
-- `src/lib/ir/parse.ts`: functions → blocks → instructions → edges (`br`, `br i1`, `switch`,
-  `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via `issues`.
+- `src/lib/ir/parse.ts`: LLVM IR functions → blocks → instructions → edges (`br`, `br i1`,
+  `switch`, `invoke`, `callbr`, `indirectbr`, `catchswitch`). Never throw: report problems via
+  `issues`.
+- `src/lib/mir/parse.ts`: MIR documents (`---`, `name:`, `body: |`) → machine functions → machine
+  blocks. Successors come from `successors:` when present, otherwise from branch targets; a
+  conditional branch's target is a `taken` edge and the next block in layout order is a
+  `fallthrough` edge. Block attributes (`bb.2.cold (bbsections Cold):`) stay in the label.
 - `src/lib/ir/layout.ts`: DFS back-edge detection, longest-path ranks, barycentre ordering,
   content-based node widths. Returns plain coordinates; no DOM.
 - Multi-line instructions (e.g. `switch` label arrays) are joined with a literal newline and rendered with `white-space: pre-wrap`; height estimation must use the same per-line counting.
 - Geometry constants (`NODE_LINE`, `NODE_CHAR`, paddings) must stay in sync with
   `CFGCanvas.css`, otherwise text gets clipped. If you change one, change both.
-- Edges: solid = forward, dashed accent = back edge, teal/red labels = true/false branch.
+- Edges: solid = forward, dashed accent = back edge, teal/red labels = LLVM true/false branch;
+  MIR uses the same colours with `taken` / `fallthrough` labels.
+- Syntax highlighting: `src/lib/ir/highlight.ts` tokenizes a line per format. `IRText.tsx` renders
+  tokens in client components and `IRText.astro` renders the same tokens on the server; the
+  container class `is-llvm` / `is-mir` selects the palette in `src/styles/ir.css`.
 - Interactive requirements: nodes are keyboard focusable (`role="button"`, Enter/Space),
   fit-to-width on first render, zoom range 0.25–1.5.
-- `npm run test:ir` must pass. Add a case when you teach the parser new syntax.
+- `npm run test:ir` must pass. Add a case when you teach either parser new syntax.
 
 When embedding a graph in a pass page, prefer the frontmatter field (`cfg: <sample-id>`) over
 importing the component into MDX: it keeps full-width layout and one implementation. The section
@@ -288,8 +312,11 @@ is only rendered when the page has no step demo (`demo`), because the player alr
 Rules:
 
 - One player per page. It is a teaching device, not decoration.
+- Every IR pane and CFG pane carries an `IRFormatTag`; the format comes from `Demo.format`, never
+  from guessing the text. LLVM IR and MIR use different parsers and different token palettes.
 - IR mode keeps the diff colours: green = added line, red = removed, amber = "look at this"
   (`focus`). CFG mode shows the same steps as before/after graphs; do not drop either mode.
+  Syntax highlighting must not override those diff colours.
 - CFG mode reuses `CFGCanvas` (non-interactive) so node geometry stays identical to `CFGViewer`.
 - The cursor is the current instruction, not a highlight: `StepPlayer` draws a small arrow at the
   far left of exactly one IR line, reads it from `DemoStep.cursor`, and every step must have one.

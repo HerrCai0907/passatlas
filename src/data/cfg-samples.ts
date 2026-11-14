@@ -1,7 +1,10 @@
 import type { Locale } from '../i18n/config';
+import type { IRFormat } from '../lib/ir/format';
 
 export interface CFGSample {
   id: string;
+  /** 这一段是 LLVM IR 还是 Machine IR；实验室按它切换解析器 */
+  format: IRFormat;
   label: Record<Locale, string>;
   description: Record<Locale, string>;
   ir: string;
@@ -10,6 +13,7 @@ export interface CFGSample {
 /** 传给客户端组件的形状：文案已经按当前语言展开，避免把两套文案都塞进 island */
 export interface LocalizedCFGSample {
   id: string;
+  format: IRFormat;
   label: string;
   description: string;
   ir: string;
@@ -19,6 +23,7 @@ export interface LocalizedCFGSample {
 export const cfgSamples: CFGSample[] = [
   {
     id: 'diamond',
+    format: 'llvm-ir',
     label: { zh: '菱形分支', en: 'Diamond branch' },
     description: {
       zh: '一个 if/else 汇合：两条分支分别 store，merge 处一次 load。',
@@ -45,6 +50,7 @@ merge:
   },
   {
     id: 'loop',
+    format: 'llvm-ir',
     label: { zh: '循环与 φ', en: 'Loop and φ' },
     description: {
       zh: '循环头部的两个 φ，回边用虚线标出，可以看到归纳变量的闭环。',
@@ -72,6 +78,7 @@ exit:
   },
   {
     id: 'switch',
+    format: 'llvm-ir',
     label: { zh: 'switch 多路', en: 'switch dispatch' },
     description: {
       zh: 'switch 的 default 与每个 case 都会成为一条边，边上标着 case 的常量。',
@@ -101,6 +108,7 @@ other:
   },
   {
     id: 'scan',
+    format: 'llvm-ir',
     label: { zh: '提前退出', en: 'Early exit' },
     description: {
       zh: '带 break 的循环：done 是提前返回，exit 是正常结束，dead 永远不可达。',
@@ -135,11 +143,70 @@ dead:
 }
 `,
   },
+  {
+    id: 'mir-diamond',
+    format: 'mir',
+    label: { zh: 'MIR 菱形', en: 'MIR diamond' },
+    description: {
+      zh: '机器基本块的菱形：JCC 的目标是 else，顺序落到 then；两个分支都跳到 merge。',
+      en: 'A machine-basic-block diamond: JCC takes else, then falls through to then, and both arms jump to merge.',
+    },
+    ir: `---
+name: pick
+tracksRegLiveness: true
+body: |
+  bb.0.entry:
+    successors: %bb.1.then(32), %bb.2.else(32)
+    liveins: $edi
+    TEST8ri $dil, 1, implicit-def $eflags
+    JCC_1 %bb.2.else, 5, implicit $eflags
+  bb.1.then:
+    successors: %bb.3.merge(32)
+    $eax = MOV32ri 1
+    JMP_1 %bb.3.merge
+  bb.2.else:
+    successors: %bb.3.merge(32)
+    $eax = MOV32ri 2
+    JMP_1 %bb.3.merge
+  bb.3.merge:
+    RET64 $eax
+`,
+  },
+  {
+    id: 'mir-loop',
+    format: 'mir',
+    label: { zh: 'MIR 循环', en: 'MIR loop' },
+    description: {
+      zh: 'JCC 的 taken 边去 exit，fallthrough 落到 body，body 末尾的 JMP 构成回边。',
+      en: 'The JCC taken edge leaves to exit, fallthrough enters body, and body’s trailing JMP closes the back edge.',
+    },
+    ir: `---
+name: sum
+tracksRegLiveness: true
+body: |
+  bb.0.entry:
+    successors: %bb.1.loop(32)
+    liveins: $edi
+    $eax = MOV32ri 0
+    JMP_1 %bb.1.loop
+  bb.1.loop:
+    successors: %bb.2.body(32), %bb.3.exit(32)
+    CMP32ri $edi, 0, implicit-def $eflags
+    JCC_1 %bb.3.exit, 14, implicit $eflags
+  bb.2.body:
+    successors: %bb.1.loop(32)
+    $eax = INC32r $eax, implicit-def dead $eflags
+    JMP_1 %bb.1.loop
+  bb.3.exit:
+    RET64 $eax
+`,
+  },
 ];
 
 export function localizeSample(sample: CFGSample, locale: Locale): LocalizedCFGSample {
   return {
     id: sample.id,
+    format: sample.format,
     label: sample.label[locale],
     description: sample.description[locale],
     ir: sample.ir,

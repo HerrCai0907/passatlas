@@ -265,6 +265,15 @@
   color: var(--muted);
 }
 
+/* 面板标题 + IR 格式标签（LLVM IR / Machine IR） */
+.pa-cfg__head-left,
+.pa-pane__head-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .pa-cfg__count {
   display: inline-flex;
   align-items: baseline;
@@ -495,6 +504,13 @@
 
 .pa-line--focus .pa-line__code {
   color: var(--focus-text);
+}
+
+/* diff 行整行保持红 / 绿 / 琥珀，语法高亮不能把「这行变了」盖掉 */
+.pa-line--del .pa-line__code .ir-tok,
+.pa-line--add .pa-line__code .ir-tok,
+.pa-line--focus .pa-line__code .ir-tok {
+  color: inherit;
 }
 
 .pa-note {

@@ -7,6 +7,7 @@
  */
 
 import { defaultLocale, type Locale } from '../i18n/config.ts';
+import type { IRFormat } from '../lib/ir/format.ts';
 
 export type Mark = 'keep' | 'add' | 'del' | 'focus';
 
@@ -52,7 +53,7 @@ export interface DemoLocalization {
   steps: Array<{ title: string; note: string }>;
 }
 
-export type DemoFormat = 'llvm-ir' | 'mir';
+export type DemoFormat = IRFormat;
 
 export interface Demo {
   id: string;
@@ -60,7 +61,7 @@ export interface Demo {
   steps: DemoStep[];
   /**
    * 面板里放的是 LLVM IR 还是 Machine IR。
-   * MIR 不是 LLVM IR：播放器不解析 CFG，也不做指令级 diff，只做行级文本 diff。
+   * 播放器按它选择解析器与语法高亮方案；两种格式都能画 CFG。
    */
   format: DemoFormat;
   /**

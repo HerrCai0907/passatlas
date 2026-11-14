@@ -1,0 +1,82 @@
+/* 两种 IR 的语法高亮。token 类名共享，format 作用域只换调色板。 */
+
+.ir-text {
+  font-variant-ligatures: none;
+}
+
+.ir-tok--comment {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+
+.ir-tok--keyword {
+  color: var(--tok-keyword);
+}
+
+.ir-tok--type {
+  color: var(--tok-type);
+}
+
+.ir-tok--value {
+  color: var(--tok-value);
+}
+
+.ir-tok--label {
+  color: var(--tok-label);
+  font-weight: 600;
+}
+
+.ir-tok--number {
+  color: var(--tok-number);
+}
+
+.ir-tok--opcode {
+  color: var(--tok-opcode);
+  font-weight: 600;
+}
+
+.ir-tok--control {
+  color: var(--tok-control);
+  font-weight: 600;
+}
+
+.ir-tok--meta {
+  color: var(--tok-meta);
+}
+
+.ir-tok--string {
+  color: var(--tok-string);
+}
+
+.ir-tok--punct {
+  color: var(--tok-punct);
+}
+
+.ir-tok--register {
+  color: var(--tok-register);
+}
+
+.ir-tok--class {
+  color: var(--tok-class);
+}
+
+/* ---------- Machine IR 的高亮方案 ---------- */
+.ir-text.is-mir {
+  /* 虚拟寄存器偏蓝，物理寄存器偏赭，寄存器类回到紫色斜体 */
+  --tok-value: var(--tok-mir-value);
+  --tok-register: var(--tok-mir-register);
+  --tok-class: var(--tok-mir-class);
+  --tok-keyword: var(--tok-mir-keyword);
+  --tok-label: var(--tok-mir-label);
+  --tok-control: var(--tok-mir-control);
+  --tok-opcode: var(--tok-mir-opcode);
+  --tok-meta: var(--tok-mir-meta);
+}
+
+.ir-text.is-mir .ir-tok--class {
+  font-style: italic;
+}
+
+.ir-text.is-mir .ir-tok--label {
+  font-weight: 600;
+}

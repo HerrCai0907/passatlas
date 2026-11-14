@@ -198,6 +198,10 @@
   color: var(--focus-text);
 }
 
+.cfg__ir li.is-meta code {
+  color: var(--faint);
+}
+
 .cfg__ir li.is-brace code {
   color: var(--muted);
 }

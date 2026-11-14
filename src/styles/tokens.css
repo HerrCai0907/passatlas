@@ -41,6 +41,31 @@
   --cfg-node-head: #f8f2e6;
   --cfg-edge: #877a63;
 
+  /* IR 语法高亮：默认是 LLVM IR 的调色板，.is-mir 会覆盖其中几项 */
+  --tok-comment: #746c5d;
+  --tok-keyword: #6330c4;
+  --tok-type: #0a5f8f;
+  --tok-value: #8f3406;
+  --tok-label: #1e7a4b;
+  --tok-number: #ad1036;
+  --tok-opcode: #15181e;
+  --tok-control: #7a4d00;
+  --tok-meta: #746c5d;
+  --tok-string: #1e7a4b;
+  --tok-punct: #66707f;
+  --tok-register: #8f3406;
+  --tok-class: #6330c4;
+
+  /* Machine IR 的同一批语义槽位：虚拟寄存器 / 物理寄存器 / 寄存器类分开 */
+  --tok-mir-value: #0a5f8f;
+  --tok-mir-register: #b5450b;
+  --tok-mir-class: #6330c4;
+  --tok-mir-keyword: #a9500a;
+  --tok-mir-label: #0d6e66;
+  --tok-mir-control: #ad1036;
+  --tok-mir-opcode: #15181e;
+  --tok-mir-meta: #746c5d;
+
   /* pass 分类色 */
   --cat-dataflow: #a9500a;
   --cat-scalar: #0d6e66;

@@ -5,10 +5,14 @@ import { t } from '../i18n/ui';
 import type { Demo, DemoCursor, DemoStep, IRLine } from '../demos/types';
 import { diffInstructions } from '../lib/ir/diff';
 import type { InstructionDiff, InstructionMark } from '../lib/ir/diff';
+import type { IRFormat } from '../lib/ir/format';
 import { layoutCFG } from '../lib/ir/layout';
 import type { CFGGraph } from '../lib/ir/layout';
-import { canRenderCFG, parseIR } from '../lib/ir/parse';
+import { canRenderCFG } from '../lib/ir/parse';
+import { parseSource } from '../lib/ir/source';
 import CFGCanvas from './CFGCanvas';
+import IRFormatTag from './IRFormatTag';
+import IRText from './IRText';
 import ViewModeSwitch from './ViewModeSwitch';
 import type { ViewMode } from './ViewModeSwitch';
 import './StepPlayer.css';
@@ -55,9 +59,9 @@ interface StepGraph {
 }
 
 /** 解析这一步的两侧 IR，并按指令文本做 diff；注释变化不会把整块染红染绿 */
-function graphOfStep(step: DemoStep, locale: Locale): StepGraph {
-  const beforeParsed = parseIR(toIR(step.before), locale);
-  const afterParsed = parseIR(toIR(step.after), locale);
+function graphOfStep(step: DemoStep, locale: Locale, format: IRFormat): StepGraph {
+  const beforeParsed = parseSource(toIR(step.before), format, locale);
+  const afterParsed = parseSource(toIR(step.after), format, locale);
   const beforeFn = beforeParsed.functions[0] ?? null;
   const afterFn = afterParsed.functions[0] ?? null;
   const focus = [...step.before, ...step.after]
@@ -80,10 +84,12 @@ function CFGPanel({
   marks,
   delta,
   locale,
+  format,
 }: {
   label: string;
   side: 'before' | 'after';
   locale: Locale;
+  format: IRFormat;
   /** 这个面板在所有步骤里的图；用最大值预留高度，切步时尺寸保持不变 */
   graphs: ReadonlyArray<CFGGraph | null>;
   index: number;
@@ -131,7 +137,10 @@ function CFGPanel({
       aria-label={t(locale, side === 'before' ? 'player.cfgBefore' : 'player.cfgAfter')}
     >
       <header className="pa-cfg__head">
-        <span className="pa-cfg__label">{label}</span>
+        <span className="pa-cfg__head-left">
+          <span className="pa-cfg__label">{label}</span>
+          <IRFormatTag format={format} locale={locale} />
+        </span>
         <span className="pa-cfg__count">
           {graph ? t(locale, 'player.blocks', { count: graph.blocks.length }) : '—'}
           {delta && delta.count > 0 ? (
@@ -155,7 +164,14 @@ function CFGPanel({
         style={viewportHeight ? { height: viewportHeight } : undefined}
       >
         {graph ? (
-          <CFGCanvas graph={graph} scale={scale} interactive={false} marks={marks} locale={locale} />
+          <CFGCanvas
+            graph={graph}
+            scale={scale}
+            interactive={false}
+            marks={marks}
+            locale={locale}
+            format={format}
+          />
         ) : (
           <p className="pa-cfg__empty">{t(locale, 'player.emptyCfg')}</p>
         )}
@@ -191,7 +207,7 @@ function IRPane({
   side,
   locale,
   cursor,
-  mir = false,
+  format,
 }: {
   label: string;
   lines: IRLine[];
@@ -199,21 +215,25 @@ function IRPane({
   side: 'before' | 'after';
   locale: Locale;
   cursor?: DemoCursor;
-  mir?: boolean;
+  format: IRFormat;
 }) {
-  const ariaKey = mir
-    ? side === 'before'
-      ? 'player.mirBefore'
-      : 'player.mirAfter'
-    : side === 'before'
-      ? 'player.irBefore'
-      : 'player.irAfter';
+  const ariaKey =
+    format === 'mir'
+      ? side === 'before'
+        ? 'player.mirBefore'
+        : 'player.mirAfter'
+      : side === 'before'
+        ? 'player.irBefore'
+        : 'player.irAfter';
   const cursorIndex = cursor?.side === side ? cursor.index : undefined;
 
   return (
     <section className="pa-pane" aria-label={t(locale, ariaKey)}>
       <header className="pa-pane__head">
-        <span className="pa-pane__label">{label}</span>
+        <span className="pa-pane__head-left">
+          <span className="pa-pane__label">{label}</span>
+          <IRFormatTag format={format} locale={locale} />
+        </span>
       </header>
       {lines.length === 0 ? (
         <p className="pa-pane__empty">{t(locale, 'player.emptyIr')}</p>
@@ -233,7 +253,7 @@ function IRPane({
                   {i + 1}
                 </span>
                 <code className="pa-line__code">
-                  {line.text === '' ? '\u00a0' : line.text}
+                  {line.text === '' ? '\u00a0' : <IRText text={line.text} format={format} />}
                 </code>
                 {isCursor ? (
                   <span className="sr-only">{t(locale, 'player.currentInstruction')}</span>
@@ -266,31 +286,23 @@ export default function StepPlayer({
   const steps = demo.steps;
   const total = steps.length;
   const step = steps[index];
-  const isMir = demo.format === 'mir';
+  const format = demo.format;
 
   const graphs = useMemo(
-    () =>
-      isMir
-        ? steps.map(() => ({
-            before: null,
-            after: null,
-            diff: null,
-            multiFunction: true,
-          }))
-        : steps.map((item) => graphOfStep(item, locale)),
-    [isMir, steps, locale],
+    () => steps.map((item) => graphOfStep(item, locale, format)),
+    [steps, locale, format],
   );
   // CFG 一次只画一个函数。只要任一步的任一侧是多函数 IR，整个播放器就不能切到
   // CFG 模式：否则切步时会看到「只有第一个函数」的图，像是其他函数被优化掉了。
-  // MIR 不是 LLVM IR，解析器没有可用的函数/基本块模型，同样固定在文本视图。
+  // Machine IR 由 MIR 解析器切成机器基本块，和 LLVM IR 一样可以画 CFG。
   const cfgAvailable = useMemo(
-    () => !isMir && graphs.every((graph) => !graph.multiFunction),
-    [isMir, graphs],
+    () => graphs.every((graph) => !graph.multiFunction),
+    [graphs],
   );
   const shownMode: ViewMode = cfgAvailable ? mode : 'ir';
   const cfgDisabledReason = cfgAvailable
     ? undefined
-    : t(locale, isMir ? 'player.cfgMirUnavailable' : 'player.cfgUnavailable');
+    : t(locale, 'player.cfgUnavailable');
   const cfgSides = useMemo(
     () => ({
       before: graphs.map((graph) => graph.before),
@@ -495,6 +507,7 @@ export default function StepPlayer({
               marks={current?.diff?.before}
               delta={{ count: current?.diff?.removed ?? 0, kind: 'del' }}
               locale={locale}
+              format={format}
             />
             <CFGPanel
               label="after"
@@ -504,6 +517,7 @@ export default function StepPlayer({
               marks={current?.diff?.after}
               delta={{ count: current?.diff?.added ?? 0, kind: 'add' }}
               locale={locale}
+              format={format}
             />
           </div>
         </>
@@ -526,7 +540,7 @@ export default function StepPlayer({
               stepIndex={index}
               locale={locale}
               cursor={step.cursor}
-              mir={isMir}
+              format={format}
             />
             <IRPane
               label="after"
@@ -535,7 +549,7 @@ export default function StepPlayer({
               stepIndex={index}
               locale={locale}
               cursor={step.cursor}
-              mir={isMir}
+              format={format}
             />
           </div>
         </div>

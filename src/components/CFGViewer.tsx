@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { defaultLocale, type Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
+import type { IRFormat } from '../lib/ir/format';
 import { layoutCFG } from '../lib/ir/layout';
-import { functionToIR, parseIR } from '../lib/ir/parse';
+import { functionToIR } from '../lib/ir/parse';
 import type { IRFunction } from '../lib/ir/parse';
+import { parseSource } from '../lib/ir/source';
+import { isMIRTerminator, mirOpcode } from '../lib/mir/opcodes';
 import CFGCanvas from './CFGCanvas';
+import IRFormatTag from './IRFormatTag';
+import IRText from './IRText';
 import ViewModeSwitch from './ViewModeSwitch';
 import type { ViewMode } from './ViewModeSwitch';
 import './CFGViewer.css';
 
 export interface CFGViewerProps {
-  /** LLVM 文本 IR，可以包含多个函数 */
+  /** IR 源文本；格式由 `format` 指定，可以包含多个函数 */
   ir: string;
+  /** 这一段是 LLVM IR 还是 Machine IR；决定解析器、行分类与高亮方案 */
+  format?: IRFormat;
   title?: string;
   /** 视口最大高度，超出后内部滚动 */
   height?: number;
@@ -24,7 +31,7 @@ export interface CFGViewerProps {
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 1.5;
 
-type IRRow = { text: string; kind: 'header' | 'label' | 'ins' | 'term' | 'brace' };
+type IRRow = { text: string; kind: 'header' | 'label' | 'ins' | 'term' | 'brace' | 'meta' };
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -45,15 +52,30 @@ function buildRows(fn: IRFunction): IRRow[] {
   return rows;
 }
 
+/** MIR 的 IR 文本视图直接展示源文档，保留 YAML 头、块属性和缩进 */
+function buildMIRRows(source: string): IRRow[] {
+  return source.split('\n').map((text) => {
+    const trimmed = text.trim();
+    if (trimmed === '') return { text, kind: 'header' };
+    if (/^bb\.[\w.]+/.test(trimmed)) return { text, kind: 'label' };
+    if (/^(liveins|successors):/.test(trimmed)) return { text, kind: 'meta' };
+    if (trimmed === '---' || /^[A-Za-z_][\w]*:/.test(trimmed)) {
+      return { text, kind: 'header' };
+    }
+    return { text, kind: isMIRTerminator(mirOpcode(trimmed)) ? 'term' : 'ins' };
+  });
+}
+
 export default function CFGViewer({
   ir,
+  format = 'llvm-ir',
   title,
   height = 560,
   collapsedByDefault = false,
   defaultMode = 'cfg',
   locale = defaultLocale,
 }: CFGViewerProps) {
-  const parsed = useMemo(() => parseIR(ir, locale), [ir, locale]);
+  const parsed = useMemo(() => parseSource(ir, format, locale), [ir, format, locale]);
   const [mode, setMode] = useState<ViewMode>(defaultMode);
   const [activeFunction, setActiveFunction] = useState(0);
   const [collapsed, setCollapsed] = useState(collapsedByDefault);
@@ -65,13 +87,16 @@ export default function CFGViewer({
 
   const fn = parsed.functions[activeFunction];
   const graph = useMemo(() => (fn ? layoutCFG(fn, { collapsed }) : null), [fn, collapsed]);
-  const rows = useMemo(() => (fn ? buildRows(fn) : []), [fn]);
+  const rows = useMemo(
+    () => (fn ? (format === 'mir' ? buildMIRRows(fn.source) : buildRows(fn)) : []),
+    [fn, format],
+  );
 
   useEffect(() => {
     setActiveFunction(0);
     setSelected(null);
     setAutoFit(true);
-  }, [ir]);
+  }, [ir, format]);
 
   useEffect(() => {
     if (mode !== 'cfg') return;
@@ -100,7 +125,7 @@ export default function CFGViewer({
   const copyIR = async () => {
     if (!fn) return;
     try {
-      await navigator.clipboard.writeText(functionToIR(fn));
+      await navigator.clipboard.writeText(format === 'mir' ? fn.source : functionToIR(fn));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
@@ -111,6 +136,7 @@ export default function CFGViewer({
   return (
     <section className="cfg" aria-label={title ?? t(locale, 'cfg.group')}>
       <header className="cfg__bar">
+        <IRFormatTag format={format} locale={locale} />
         <div className="cfg__tabs" role="group" aria-label={t(locale, 'cfg.functions')}>
           {parsed.functions.map((item, index) => (
             <button
@@ -123,7 +149,7 @@ export default function CFGViewer({
                 setSelected(null);
               }}
             >
-              @{item.name}
+              {format === 'mir' ? item.name : `@${item.name}`}
             </button>
           ))}
         </div>
@@ -195,7 +221,9 @@ export default function CFGViewer({
       ) : null}
 
       {!fn || !graph ? (
-        <p className="cfg__empty">{t(locale, 'cfg.empty')}</p>
+        <p className="cfg__empty">
+          {t(locale, format === 'mir' ? 'cfg.emptyMir' : 'cfg.empty')}
+        </p>
       ) : mode === 'cfg' ? (
         <>
           <div className="cfg__viewport" ref={viewportRef} style={{ maxHeight: `${height}px` }}>
@@ -204,6 +232,7 @@ export default function CFGViewer({
               scale={scale}
               selected={selected}
               onSelect={selectBlock}
+              format={format}
               locale={locale}
             />
           </div>
@@ -224,7 +253,11 @@ export default function CFGViewer({
             className="cfg__ir"
             style={{ maxHeight: `${height}px` }}
             role="region"
-            aria-label={t(locale, 'cfg.irRegion', { name: fn.name })}
+            aria-label={
+              format === 'mir'
+                ? t(locale, 'cfg.irRegionMir', { name: fn.name })
+                : t(locale, 'cfg.irRegion', { name: fn.name })
+            }
           >
             <ol>
               {rows.map((row, index) => (
@@ -232,7 +265,9 @@ export default function CFGViewer({
                   <span className="no" aria-hidden="true">
                     {index + 1}
                   </span>
-                  <code>{row.text}</code>
+                  <code>
+                    <IRText text={row.text} format={format} />
+                  </code>
                 </li>
               ))}
             </ol>

@@ -10,6 +10,7 @@ import {
 import { machineStageAnchor } from '../lib/pipeline';
 import { passSlug, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
+import IRText from './IRText.astro';
 
 interface Props {
   pages: PassEntry[];
@@ -135,9 +136,9 @@ function hrefFor(item: { name: string; page?: string }): string | undefined {
             <div class="code-block code-block--before">
               <h4>
                 <span>{t(locale, 'passes.machine.before')}</span>
-                <code>LLVM IR</code>
+                <code>{t(locale, 'format.llvmIr')}</code>
               </h4>
-              <pre><code>{snapshot.before}</code></pre>
+              <pre class="ir-text is-llvm"><code><IRText text={snapshot.before} format="llvm-ir" /></code></pre>
             </div>
           ) : null}
           <div class="snapshot__pair">
@@ -145,9 +146,9 @@ function hrefFor(item: { name: string; page?: string }): string | undefined {
               <div class="code-block cat-codegen">
                 <h4>
                   <span>{t(locale, 'passes.machine.after')}</span>
-                  <code>{machineTargets[id].label} MIR</code>
+                  <code>{machineTargets[id].label} {t(locale, 'format.machineIr')}</code>
                 </h4>
-                <pre><code>{snapshot.targets[id]}</code></pre>
+                <pre class="ir-text is-mir"><code><IRText text={snapshot.targets[id]} format="mir" /></code></pre>
               </div>
             ))}
           </div>

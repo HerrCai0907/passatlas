@@ -4,7 +4,9 @@ import { defaultLocale, type Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import { instructionKey } from '../lib/ir/diff';
 import type { InstructionMark } from '../lib/ir/diff';
+import type { IRFormat } from '../lib/ir/format';
 import type { CFGGraph, LaidOutBlock } from '../lib/ir/layout';
+import IRText from './IRText';
 import './CFGCanvas.css';
 
 export interface CFGCanvasProps {
@@ -16,6 +18,8 @@ export interface CFGCanvasProps {
   interactive?: boolean;
   /** 指令级 diff 标记，键由 instructionKey() 生成；用于分步播放器的 CFG 视图 */
   marks?: ReadonlyMap<string, InstructionMark>;
+  /** 节点里的指令是 LLVM IR 还是 Machine IR；决定语法高亮方案 */
+  format?: IRFormat;
   locale?: Locale;
 }
 
@@ -25,6 +29,7 @@ function BlockNode({
   interactive,
   onSelect,
   marks,
+  format,
   locale,
 }: {
   block: LaidOutBlock;
@@ -32,6 +37,7 @@ function BlockNode({
   interactive: boolean;
   onSelect?: (id: string) => void;
   marks?: ReadonlyMap<string, InstructionMark>;
+  format: IRFormat;
   locale: Locale;
 }) {
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -77,7 +83,7 @@ function BlockNode({
           return (
             <li key={`${instruction.text}-${index}`} className={classes || undefined}>
               {mark ? <span className="sr-only">{t(locale, `diff.${mark}`)}</span> : null}
-              {instruction.text}
+              <IRText text={instruction.text} format={format} />
             </li>
           );
         })}
@@ -93,6 +99,7 @@ export default function CFGCanvas({
   onSelect,
   interactive = true,
   marks,
+  format = 'llvm-ir',
   locale = defaultLocale,
 }: CFGCanvasProps) {
   const uid = useId().replace(/[:]/g, '');
@@ -139,6 +146,8 @@ export default function CFGCanvas({
               active ? 'is-active' : '',
               edge.kind === 'true' ? 'cfg-edge--true' : '',
               edge.kind === 'false' ? 'cfg-edge--false' : '',
+              edge.kind === 'taken' ? 'cfg-edge--taken' : '',
+              edge.kind === 'fallthrough' ? 'cfg-edge--fallthrough' : '',
             ]
               .filter(Boolean)
               .join(' ');
@@ -173,6 +182,7 @@ export default function CFGCanvas({
             interactive={interactive}
             onSelect={onSelect}
             marks={marks}
+            format={format}
             locale={locale}
           />
         ))}

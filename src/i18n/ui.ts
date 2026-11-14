@@ -121,7 +121,7 @@ const zh = {
   'pass.demoHeading': '分步动画',
   'pass.demoHint': '点按「下一步」，或用键盘 <kbd>←</kbd> <kbd>→</kbd> 单步，<kbd>空格</kbd> 播放。',
   'pass.demoHintMir':
-    '这是 Machine IR，不是 LLVM IR：播放器只做文本 diff，不解析 CFG。用 <kbd>←</kbd> <kbd>→</kbd> 单步，<kbd>空格</kbd> 播放。',
+    '这是 Machine IR：播放器用 MIR 解析器切出机器基本块，CFG 里能看到 successors 与跳转指令。用 <kbd>←</kbd> <kbd>→</kbd> 单步，<kbd>空格</kbd> 播放。',
   'pass.cfgHeading': '控制流图',
   'pass.cfgHint': '基本块、跳转与分支条件的一张地图。',
   'pass.sourcePrefix': '在 LLVM 源码中：',
@@ -159,6 +159,9 @@ const zh = {
 
   'pipeline.label': '启用级别',
 
+  'format.llvmIr': 'LLVM IR',
+  'format.machineIr': 'Machine IR',
+
   'player.group': '{name} 分步演示',
   'player.mode': '分步演示的展示模式',
   'player.algorithmState': '算法状态',
@@ -166,7 +169,6 @@ const zh = {
   'player.currentInstruction': '当前指令',
   'player.irRegion': 'IR 文本区域，可用 PageUp / PageDown 滚动',
   'player.cfgUnavailable': '多函数 IR 不支持 CFG 视图，已固定使用 IR 文本',
-  'player.cfgMirUnavailable': 'Machine IR 不按 LLVM IR 解析，已固定使用 MIR 文本',
   'player.cfgBefore': '改写前的控制流图',
   'player.cfgAfter': '改写后的控制流图',
   'player.irBefore': '改写前的 IR',
@@ -213,10 +215,12 @@ const zh = {
   'cfg.copied': '已复制',
   'cfg.issueLine': '第 {line} 行：{message}',
   'cfg.empty': '没有可展示的函数。粘贴一个包含 define 的 LLVM IR 试试。',
+  'cfg.emptyMir': '没有可展示的机器函数。粘贴一段以 --- 和 body: | 开头的 MIR 试试。',
   'cfg.metaBlocks': '{blocks} 个基本块 · {edges} 条控制流边',
   'cfg.selected': '已选中 {block}，再次点击取消',
   'cfg.selectHint': '点击基本块可高亮它相关的边',
   'cfg.irRegion': '@{name} 的 IR 文本',
+  'cfg.irRegionMir': '机器函数 {name} 的 MIR 文本',
   'cfg.metaLines': '{blocks} 个基本块 · {lines} 行 IR',
   'cfg.irHint': '切回 CFG 可以看这些指令之间的跳转关系',
 
@@ -226,27 +230,29 @@ const zh = {
   'diff.focus': '重点',
 
   'lab.samples': '示例',
+  'lab.format': 'IR 类型',
   'lab.stats': '{functions} 函数 · {blocks} 块 · {edges} 边',
   'lab.editorTitle': 'IR 输入',
   'lab.lines': '{count} 行',
   'lab.irLabel': 'LLVM IR 源码',
+  'lab.mirLabel': 'Machine IR（MIR）源码',
   'lab.custom': '自定义 IR',
   'lab.local': '· 全程在浏览器本地解析，不会上传',
   'lab.viewerTitle': '输入 IR 的控制流图',
 
   'ir.metaTitle': 'CFG 实验室',
   'ir.metaDescription':
-    '把任意 LLVM IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。',
+    '把 LLVM IR 或 Machine IR 粘贴进来，按基本块切成有向图，直接在浏览器里看清控制流。',
   'ir.eyebrow': 'Lab · CFG',
   'ir.heading': '把 IR 摊开看',
   'ir.lead':
-    '一段 IR 读起来是线性的，跑起来却是跳来跳去的。把函数切成基本块、连成有向图，分支、汇合、循环和不可达代码就一眼可辨了。改左边的 IR，右边的图会跟着变。',
+    '一段 IR 读起来是线性的，跑起来却是跳来跳去的。把函数切成基本块、连成有向图，分支、汇合、循环和不可达代码就一眼可辨了。LLVM IR 和 Machine IR 都能解析：改左边的 IR，右边的图会跟着变。',
   'ir.tip1': '实线是顺序跳转，虚线是回边（循环）',
-  'ir.tip2': '绿色 true / 红色 false 是条件分支的两条出边',
+  'ir.tip2': 'LLVM IR 的条件边标 true / false，Machine IR 的条件边标 taken / fallthrough',
   'ir.tip3': '点击基本块，可以高亮与它相关的边',
   'ir.noteTitle': '它不是编译器',
   'ir.noteBody':
-    '这里只做语法层面的切分：找函数、找标签、读终结指令，然后把跳转关系画出来。它不会验证这段 IR 是否真的合法，也不会执行任何优化——真正的检查交给 opt -verify。',
+    '这里只做语法层面的切分：找函数、找基本块、读终结指令与跳转目标，然后把跳转关系画出来。它不会验证这段 IR 是否真的合法，也不会执行任何优化——真正的检查交给 opt -verify（MIR 用 llc -run-pass 验证）。',
 
   'about.metaTitle': '关于',
   'about.metaDescription':
@@ -270,6 +276,11 @@ const zh = {
   'parse.missingTerminator': '基本块 {label} 没有终结指令（br / ret / switch…）',
   'parse.unknownTarget': '基本块 {label} 跳转到了不存在的 {to}',
   'parse.noFunctions': '没有找到 define 定义的函数',
+  'parse.mirNoBody': '机器函数 {name} 缺少 body: |',
+  'parse.mirEmptyFunction': '机器函数 {name} 里没有机器基本块',
+  'parse.mirDuplicateBlock': '机器基本块 {label} 重复定义',
+  'parse.mirUnknownTarget': '机器基本块 {label} 跳转到了不存在的 {to}',
+  'parse.mirNoFunctions': '没有找到 MIR 函数（需要 --- 与 body: |）',
 } as const;
 
 type ZhMessages = typeof zh;
@@ -395,7 +406,7 @@ const en: Messages = {
   'pass.demoHint':
     'Press Next, or use <kbd>←</kbd> <kbd>→</kbd> to step and <kbd>Space</kbd> to play.',
   'pass.demoHintMir':
-    'This is Machine IR, not LLVM IR: the player only diffs text and does not parse a CFG. Use <kbd>←</kbd> <kbd>→</kbd> to step and <kbd>Space</kbd> to play.',
+    'This is Machine IR: the player parses machine basic blocks, so the CFG shows successors and branch instructions. Use <kbd>←</kbd> <kbd>→</kbd> to step and <kbd>Space</kbd> to play.',
   'pass.cfgHeading': 'Control-flow graph',
   'pass.cfgHint': 'A map of basic blocks, branches and conditions.',
   'pass.sourcePrefix': 'In the LLVM source:',
@@ -433,6 +444,9 @@ const en: Messages = {
 
   'pipeline.label': 'Enabled at',
 
+  'format.llvmIr': 'LLVM IR',
+  'format.machineIr': 'Machine IR',
+
   'player.group': '{name} step-by-step demo',
   'player.mode': 'Step player display mode',
   'player.algorithmState': 'Algorithm state',
@@ -440,7 +454,6 @@ const en: Messages = {
   'player.currentInstruction': 'Current instruction',
   'player.irRegion': 'IR text region; scroll with PageUp / PageDown',
   'player.cfgUnavailable': 'CFG view is unavailable for multi-function IR; showing IR text',
-  'player.cfgMirUnavailable': 'Machine IR is not parsed as LLVM IR; showing MIR text',
   'player.cfgBefore': 'Control-flow graph before the rewrite',
   'player.cfgAfter': 'Control-flow graph after the rewrite',
   'player.irBefore': 'IR before the rewrite',
@@ -487,10 +500,12 @@ const en: Messages = {
   'cfg.copied': 'Copied',
   'cfg.issueLine': 'Line {line}: {message}',
   'cfg.empty': 'No function to show. Paste LLVM IR containing a define.',
+  'cfg.emptyMir': 'No machine function to show. Paste MIR that starts with --- and body: |.',
   'cfg.metaBlocks': 'Basic blocks: {blocks} · control-flow edges: {edges}',
   'cfg.selected': 'Selected {block}; click again to clear',
   'cfg.selectHint': 'Click a block to highlight its edges',
   'cfg.irRegion': 'IR text of @{name}',
+  'cfg.irRegionMir': 'MIR text of machine function {name}',
   'cfg.metaLines': 'Basic blocks: {blocks} · IR lines: {lines}',
   'cfg.irHint': 'Switch back to CFG to see how these instructions branch',
 
@@ -500,27 +515,30 @@ const en: Messages = {
   'diff.focus': 'Focus',
 
   'lab.samples': 'Samples',
+  'lab.format': 'IR format',
   'lab.stats': 'Functions: {functions} · blocks: {blocks} · edges: {edges}',
   'lab.editorTitle': 'IR input',
   'lab.lines': 'Lines: {count}',
   'lab.irLabel': 'LLVM IR source',
+  'lab.mirLabel': 'Machine IR (MIR) source',
   'lab.custom': 'Custom IR',
   'lab.local': '· parsed locally in your browser; nothing is uploaded',
   'lab.viewerTitle': 'Control-flow graph of the input IR',
 
   'ir.metaTitle': 'CFG lab',
   'ir.metaDescription':
-    'Paste any LLVM IR, split it into basic blocks and draw the control flow in your browser.',
+    'Paste LLVM IR or Machine IR, split it into basic blocks and draw the control flow in your browser.',
   'ir.eyebrow': 'Lab · CFG',
   'ir.heading': 'Spread the IR out',
   'ir.lead':
-    'IR reads linearly but runs by jumping around. Split a function into basic blocks, wire them into a directed graph, and branches, merges, loops and unreachable code become obvious. Edit the IR on the left and the graph follows.',
+    'IR reads linearly but runs by jumping around. Split a function into basic blocks, wire them into a directed graph, and branches, merges, loops and unreachable code become obvious. Both LLVM IR and Machine IR are parsed: edit the IR on the left and the graph follows.',
   'ir.tip1': 'Solid edges are fall-through and branches; dashed edges are back edges (loops)',
-  'ir.tip2': 'Green true / red false are the two outgoing edges of a conditional branch',
+  'ir.tip2':
+    'LLVM IR labels conditional edges true / false; Machine IR labels them taken / fallthrough',
   'ir.tip3': 'Click a basic block to highlight the edges around it',
   'ir.noteTitle': 'It is not a compiler',
   'ir.noteBody':
-    'This only does a syntactic split: find functions, find labels, read terminators, then draw the edges. It does not verify that the IR is legal and does not run any optimisation — that is what opt -verify is for.',
+    'This only does a syntactic split: find functions and basic blocks, read terminators and branch targets, then draw the edges. It does not verify that the IR is legal and does not run any optimisation — that is what opt -verify is for (use llc -run-pass to verify MIR).',
 
   'about.metaTitle': 'About',
   'about.metaDescription':
@@ -544,6 +562,11 @@ const en: Messages = {
   'parse.missingTerminator': 'Basic block {label} has no terminator (br / ret / switch…)',
   'parse.unknownTarget': 'Basic block {label} branches to missing block {to}',
   'parse.noFunctions': 'No function defined with define',
+  'parse.mirNoBody': 'Machine function {name} is missing body: |',
+  'parse.mirEmptyFunction': 'Machine function {name} has no machine basic blocks',
+  'parse.mirDuplicateBlock': 'Machine basic block {label} is defined twice',
+  'parse.mirUnknownTarget': 'Machine basic block {label} branches to missing block {to}',
+  'parse.mirNoFunctions': 'No MIR function found (needs --- and body: |)',
 };
 
 export const messages: Record<Locale, Messages> = { zh, en };

@@ -36,6 +36,15 @@
   stroke: color-mix(in srgb, var(--cat-interproc) 50%, var(--cfg-edge));
 }
 
+/* MIR：条件跳转的目标边 / 顺序落下的边 */
+.cfg-edge--taken {
+  stroke: color-mix(in srgb, var(--cat-scalar) 60%, var(--cfg-edge));
+}
+
+.cfg-edge--fallthrough {
+  stroke: color-mix(in srgb, var(--cat-interproc) 50%, var(--cfg-edge));
+}
+
 .cfg-edge--back {
   stroke: color-mix(in srgb, var(--accent) 70%, var(--cfg-edge));
   stroke-dasharray: 5 4;
@@ -206,6 +215,13 @@
   background: linear-gradient(90deg, var(--focus-bg), transparent 82%);
   box-shadow: inset 2px 0 0 var(--focus-ring);
   color: var(--focus-text);
+}
+
+/* 被 diff 标记的指令整行保持标记色，语法高亮不覆盖红 / 绿 / 琥珀 */
+.cfg-node__body li.is-add .ir-tok,
+.cfg-node__body li.is-del .ir-tok,
+.cfg-node__body li.is-focus .ir-tok {
+  color: inherit;
 }
 
 @media (prefers-reduced-motion: no-preference) {

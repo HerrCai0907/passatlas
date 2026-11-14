@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import CFGViewer from './CFGViewer';
+import IRFormatTag from './IRFormatTag';
 import type { LocalizedCFGSample } from '../data/cfg-samples';
 import { defaultLocale, type Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
-import { parseIR } from '../lib/ir/parse';
+import type { IRFormat } from '../lib/ir/format';
+import { parseSource } from '../lib/ir/source';
 import './CFGLab.css';
 
 interface Props {
@@ -11,8 +13,12 @@ interface Props {
   locale?: Locale;
 }
 
+const FORMATS: IRFormat[] = ['llvm-ir', 'mir'];
+
 export default function CFGLab({ samples, locale = defaultLocale }: Props) {
-  const [text, setText] = useState(samples[0]?.ir ?? '');
+  const first = samples[0];
+  const [format, setFormat] = useState<IRFormat>(first?.format ?? 'llvm-ir');
+  const [text, setText] = useState(first?.ir ?? '');
   const [debounced, setDebounced] = useState(text);
 
   useEffect(() => {
@@ -20,17 +26,18 @@ export default function CFGLab({ samples, locale = defaultLocale }: Props) {
     return () => window.clearTimeout(timer);
   }, [text]);
 
-  // 支持 /ir/?sample=loop 这样的直达链接，方便在文档里引用某个示例
+  // 支持 /ir/?sample=loop、/ir/?sample=mir-loop 这样的直达链接
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('sample');
     if (!id) return;
     const sample = samples.find((item) => item.id === id);
     if (!sample) return;
+    setFormat(sample.format);
     setText(sample.ir);
     setDebounced(sample.ir);
   }, [samples]);
 
-  const parsed = useMemo(() => parseIR(debounced, locale), [debounced, locale]);
+  const parsed = useMemo(() => parseSource(debounced, format, locale), [debounced, format, locale]);
 
   const stats = useMemo(() => {
     const blocks = parsed.functions.reduce((sum, fn) => sum + fn.blocks.length, 0);
@@ -38,8 +45,13 @@ export default function CFGLab({ samples, locale = defaultLocale }: Props) {
     return { functions: parsed.functions.length, blocks, edges };
   }, [parsed]);
 
+  const visibleSamples = useMemo(
+    () => samples.filter((sample) => sample.format === format),
+    [samples, format],
+  );
+
   // 用文本反推当前示例：用户一改 IR 就不再高亮任何示例，永远不会和 textarea 不一致
-  const activeSample = samples.find((sample) => sample.ir === text);
+  const activeSample = visibleSamples.find((sample) => sample.ir === text);
   const lines = text.split('\n').length;
 
   const loadSample = (sample: LocalizedCFGSample) => {
@@ -47,12 +59,40 @@ export default function CFGLab({ samples, locale = defaultLocale }: Props) {
     setDebounced(sample.ir);
   };
 
+  // 切换 IR 类型时，如果当前文本正好是一个示例，就换到新格式的第一个示例；
+  // 自定义文本保留下来，直接交给新格式的解析器。
+  const changeFormat = (next: IRFormat) => {
+    if (next === format) return;
+    const currentSample = samples.find((sample) => sample.ir === text);
+    setFormat(next);
+    if (!currentSample) return;
+    const nextSample = samples.find((sample) => sample.format === next);
+    if (nextSample) {
+      setText(nextSample.ir);
+      setDebounced(nextSample.ir);
+    }
+  };
+
   return (
     <div className="lab">
       <div className="lab__toolbar">
+        <span className="lab__label">{t(locale, 'lab.format')}</span>
+        <div className="lab__formats" role="group" aria-label={t(locale, 'lab.format')}>
+          {FORMATS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className="lab__format"
+              aria-pressed={format === item}
+              onClick={() => changeFormat(item)}
+            >
+              {t(locale, item === 'mir' ? 'format.machineIr' : 'format.llvmIr')}
+            </button>
+          ))}
+        </div>
         <span className="lab__label">{t(locale, 'lab.samples')}</span>
         <div className="lab__samples">
-          {samples.map((sample) => (
+          {visibleSamples.map((sample) => (
             <button
               key={sample.id}
               type="button"
@@ -76,7 +116,10 @@ export default function CFGLab({ samples, locale = defaultLocale }: Props) {
       <div className="lab__grid">
         <section className="lab__editor" aria-labelledby="lab-editor-title">
           <header className="lab__editor-head">
-            <h2 id="lab-editor-title">{t(locale, 'lab.editorTitle')}</h2>
+            <div className="lab__editor-title">
+              <h2 id="lab-editor-title">{t(locale, 'lab.editorTitle')}</h2>
+              <IRFormatTag format={format} locale={locale} />
+            </div>
             <span className="lab__lines">{t(locale, 'lab.lines', { count: lines })}</span>
           </header>
           <textarea
@@ -87,7 +130,7 @@ export default function CFGLab({ samples, locale = defaultLocale }: Props) {
             autoCapitalize="off"
             autoCorrect="off"
             wrap="off"
-            aria-label={t(locale, 'lab.irLabel')}
+            aria-label={t(locale, format === 'mir' ? 'lab.mirLabel' : 'lab.irLabel')}
           />
           <p className="lab__note">
             {activeSample ? activeSample.description : t(locale, 'lab.custom')}
@@ -98,6 +141,7 @@ export default function CFGLab({ samples, locale = defaultLocale }: Props) {
         <div className="lab__viewer">
           <CFGViewer
             ir={debounced}
+            format={format}
             locale={locale}
             title={t(locale, 'lab.viewerTitle')}
             height={640}
