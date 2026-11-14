@@ -28,6 +28,42 @@
   gap: 4px;
 }
 
+/* IR 类型切换：LLVM IR / Machine IR，两种解析器的入口 */
+.lab__formats {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.lab__format {
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    color 0.15s var(--ease),
+    background-color 0.15s var(--ease);
+}
+
+.lab__format + .lab__format {
+  border-left: 1px solid var(--line);
+}
+
+.lab__format:hover {
+  background: var(--paper-deep);
+  color: var(--ink);
+}
+
+.lab__format[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--surface);
+}
+
 .lab__sample {
   padding: 5px 10px;
   border: 1px solid var(--line);
@@ -97,6 +133,13 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink);
+}
+
+.lab__editor-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .lab__lines {

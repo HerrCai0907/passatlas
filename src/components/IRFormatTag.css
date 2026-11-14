@@ -1,0 +1,30 @@
+/* IR block 的格式标签：LLVM IR / Machine IR */
+.ir-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ir-tag--llvm {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  color: var(--accent-strong);
+}
+
+.ir-tag--mir {
+  border-color: color-mix(in srgb, var(--cat-codegen) 36%, var(--line));
+  background: color-mix(in srgb, var(--cat-codegen) 7%, var(--surface));
+  color: var(--cat-codegen);
+}

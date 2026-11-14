@@ -1,0 +1,15 @@
+---
+import type { IRFormat } from '../lib/ir/format';
+import { highlightToHtml } from '../lib/ir/highlight';
+
+interface Props {
+  text: string;
+  format: IRFormat;
+}
+
+const { text, format } = Astro.props;
+// highlightToHtml 会转义所有源文本，只额外插入站点自己的 token span。
+const html = highlightToHtml(text, format);
+---
+
+<Fragment set:html={html} />

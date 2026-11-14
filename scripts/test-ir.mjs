@@ -13,6 +13,10 @@ import { t } from '../src/i18n/ui.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { canRenderCFG, functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
+import { tokenizeIR, highlightToHtml } from '../src/lib/ir/highlight.ts';
+import { prefersIRView } from '../src/lib/ir/mode.ts';
+import { parseSource } from '../src/lib/ir/source.ts';
+import { parseMIR } from '../src/lib/mir/parse.ts';
 
 const diamond = `define i32 @pick(i1 %c) {
 entry:
@@ -436,7 +440,7 @@ entry:
     const zh = getDemo(id, 'zh');
     const en = getDemo(id, 'en');
     assert.ok(zh && en, `${id} 演示应存在`);
-    assert.equal(zh.format, 'mir', `${id} 应标记为 MIR，播放器不解析 CFG`);
+    assert.equal(zh.format, 'mir', `${id} 应标记为 MIR`);
     assert.ok(zh.steps.length >= 2, `${id} 至少两步`);
     assert.equal(zh.steps.length, en.steps.length, `${id} 中英文步骤数一致`);
     assert.ok(zh.steps.every((step) => step.before.length > 0 && step.after.length > 0));
@@ -459,6 +463,137 @@ entry:
       return step.cursor.index >= 0 && step.cursor.index < lines.length;
     }),
     'cursor 必须落在对应面板的行号范围内',
+  );
+}
+
+// ---- Machine IR：独立解析器、successors / 跳转目标与 CFG ----
+{
+  const toIR = (lines) => lines.map((line) => line.text).join('\n');
+  const pickMIR = toIR(getDemo('phi-elim', 'zh').steps[0].before);
+  const parsed = parseMIR(pickMIR);
+  assert.equal(parsed.issues.length, 0, 'phi-elim 的 MIR 不应有解析问题');
+  assert.equal(parsed.functions.length, 1);
+
+  const fn = parsed.functions[0];
+  assert.equal(fn.name, 'pick');
+  assert.ok(fn.source.includes('body: |'));
+  assert.deepEqual(fn.blocks.map((block) => block.id), [
+    'bb.0.entry',
+    'bb.1.then',
+    'bb.2.else',
+    'bb.3.merge',
+    'bb.4.other',
+  ]);
+  assert.deepEqual(
+    fn.edges.map((edge) => `${edge.from}>${edge.to}:${edge.kind}`),
+    [
+      'bb.0.entry>bb.1.then:branch',
+      'bb.0.entry>bb.2.else:taken',
+      'bb.1.then>bb.3.merge:branch',
+      'bb.2.else>bb.3.merge:taken',
+      'bb.2.else>bb.4.other:branch',
+    ],
+  );
+
+  const graph = layoutCFG(fn);
+  assert.equal(graph.blocks.length, 5);
+  assert.equal(graph.edges.filter((edge) => edge.back).length, 0);
+
+  // 没有 successors 行时，条件跳转后的下一个块要补一条 fallthrough
+  const splitter = parseMIR(
+    toIR(getDemo('machine-function-splitter', 'zh').steps[0].before),
+  ).functions[0];
+  const hot = splitter.edges.find((edge) => edge.to === 'bb.1.hot');
+  const cold = splitter.edges.find((edge) => edge.to === 'bb.2.cold');
+  assert.equal(hot?.kind, 'fallthrough');
+  assert.equal(cold?.kind, 'taken');
+
+  // 块属性属于标签的一部分：MFS 只改属性，指令不变
+  const splitStep = parseMIR(
+    toIR(getDemo('machine-function-splitter', 'zh').steps[1].after),
+  ).functions[0];
+  assert.equal(
+    splitStep.blocks.find((block) => block.id === 'bb.2.cold')?.label,
+    'bb.2.cold (bbsections Cold)',
+  );
+
+  // MIR 循环：body 的 JMP 是回边
+  const loopSample = cfgSamples.find((sample) => sample.id === 'mir-loop');
+  assert.ok(loopSample && loopSample.format === 'mir');
+  const loopFn = parseMIR(loopSample.ir).functions[0];
+  const loopGraph = layoutCFG(loopFn);
+  const backEdges = loopGraph.edges.filter((edge) => edge.back);
+  assert.equal(backEdges.length, 1);
+  assert.equal(backEdges[0].from, 'bb.2.body');
+  assert.equal(backEdges[0].to, 'bb.1.loop');
+
+  // 按格式分发：同一个入口不会把 MIR 喂给 LLVM IR 解析器
+  assert.equal(parseSource(pickMIR, 'mir').functions[0].name, 'pick');
+  assert.equal(parseSource(diamond, 'llvm-ir').functions[0].name, 'pick');
+  assert.equal(canRenderCFG(parseMIR(pickMIR)), true);
+
+  const brokenMIR = parseMIR('---\nname: f\nbody: |\n  bb.0:\n    JMP_1 %bb.9\n');
+  assert.ok(brokenMIR.issues.some((issue) => issue.message.includes('不存在')));
+}
+
+// ---- 两种 IR 的高亮方案：token 可无损拼回原文，且 MIR 用独立 token 类 ----
+{
+  const join = (tokens) => tokens.map((token) => token.text).join('');
+  const mirLine = '    %0:gr32 = COPY $edi';
+  const mirTokens = tokenizeIR(mirLine, 'mir');
+  assert.equal(join(mirTokens), mirLine);
+  assert.ok(mirTokens.some((token) => token.kind === 'value' && token.text === '%0'));
+  assert.ok(mirTokens.some((token) => token.kind === 'class' && token.text === 'gr32'));
+  assert.ok(mirTokens.some((token) => token.kind === 'register' && token.text === '$edi'));
+  assert.ok(mirTokens.some((token) => token.kind === 'opcode' && token.text === 'COPY'));
+
+  const mirJump = tokenizeIR('    JCC_1 %bb.2.else, 5, implicit $eflags', 'mir');
+  assert.equal(join(mirJump), '    JCC_1 %bb.2.else, 5, implicit $eflags');
+  assert.ok(mirJump.some((token) => token.kind === 'control' && token.text === 'JCC_1'));
+  assert.ok(mirJump.some((token) => token.kind === 'label' && token.text === '%bb.2.else'));
+
+  const llvmLine = '  br i1 %c, label %then, label %else';
+  const llvmTokens = tokenizeIR(llvmLine, 'llvm-ir');
+  assert.equal(join(llvmTokens), llvmLine);
+  assert.ok(llvmTokens.some((token) => token.kind === 'control' && token.text === 'br'));
+  assert.ok(llvmTokens.some((token) => token.kind === 'type' && token.text === 'i1'));
+  assert.ok(llvmTokens.some((token) => token.kind === 'value' && token.text === '%c'));
+
+  const html = highlightToHtml('define void @f() {', 'llvm-ir');
+  assert.match(html, /ir-tok--keyword">define/);
+  assert.ok(!highlightToHtml('<script>alert(1)</script>', 'mir').includes('<script>'));
+}
+
+// ---- 默认展示模式：单基本块（LLVM IR / MIR）用 IR 文本 ----
+{
+  const toIR = (lines) => lines.map((line) => line.text).join('\n');
+  assert.equal(prefersIRView(parseIR(diamond)), false, '菱形的默认是 CFG');
+  assert.equal(prefersIRView(parseIR(loopIR)), false, '循环的默认是 CFG');
+  assert.equal(
+    prefersIRView(parseIR('define void @f() {\nentry:\n  ret void\n}\n')),
+    true,
+    '单基本块 LLVM IR 默认 IR',
+  );
+  assert.equal(prefersIRView(parseIR('')), true, '空输入没有图可画，默认 IR');
+  assert.equal(
+    prefersIRView(
+      parseIR(
+        'define void @a() {\nentry:\n  ret void\n}\n\ndefine void @b() {\nentry:\n  ret void\n}\n',
+      ),
+    ),
+    true,
+    '多个单基本块函数也不需要 CFG',
+  );
+
+  assert.equal(
+    prefersIRView(parseMIR(toIR(getDemo('regalloc', 'zh').steps[0].before))),
+    true,
+    '单基本块 MIR 默认 IR',
+  );
+  assert.equal(
+    prefersIRView(parseMIR(toIR(getDemo('phi-elim', 'zh').steps[0].before))),
+    false,
+    '多基本块 MIR 默认 CFG',
   );
 }
 
