@@ -10,7 +10,7 @@
 
 ## 特性
 
-- **分步动画**：before / after 双栏对照，构建期自动做行级 diff；绿线是新增、红线是删除、琥珀色是「看这里」。支持 `←` `→` 单步、`空格` 播放、速度调节与跳步。
+- **分步动画**：before / after 双栏对照，构建期自动做行级 diff；绿线是新增、红线是删除、琥珀色是这一步的重点，IR 最左侧的小箭头指向当前处理的指令。支持 `←` `→` 单步、`空格` 播放、速度调节与跳步。
 - **默认 CFG 视图**：所有 IR 展示模块（分步动画、实验室、独立图组件）都默认把 IR 画成基本块有向图，右上角一键切回 IR 文本。循环回边用虚线、条件分支的 `true` / `false` 分开着色，点击基本块高亮相关边。
 - **100% 静态**：构建产物是纯 HTML / CSS / JS，无后端、无数据库、无追踪脚本，扔进任何静态托管都能跑，也可以完全离线阅读。
 - **内容即代码**：每篇 pass 是一个 MDX 文件，frontmatter 由 Zod 校验；写错字段、写错分类，构建直接失败。
@@ -217,11 +217,12 @@ Function → Loop，最后切到 Machine IR。主图覆盖默认优化管线的�
 调度、寄存器分配、栈帧与后分配优化、MC 发射六段，并把 x86-64 与 AArch64 的 target-specific
 pass 用 `x86` / `arm64` 徽标标出。地图下方还有两条目标线的并排视图：同一段 IR 在两条线上
 的 MIR 落点、每个阶段由 `X86PassConfig` / `AArch64PassConfig` 插入的 pass，以及分配前后的
-物理寄存器对比。已收录的五篇机器级页面是：
+物理寄存器对比。已收录的六篇机器级页面是：
 
 - [`/passes/isel/`](src/content/passes/zh/isel.mdx)：IR → Machine IR，SelectionDAG 与 GlobalISel
 - [`/passes/phi-elim/`](src/content/passes/zh/phi-elim.mdx)：φ 变 COPY、critical edge 拆分
 - [`/passes/regalloc/`](src/content/passes/zh/regalloc.mdx)：greedy、coalescing、spill
+- [`/passes/stack-slot-coloring/`](src/content/passes/zh/stack-slot-coloring.mdx)：把生命周期不重叠的 spill slot 合并到同一个栈位置
 - [`/passes/machine-function-splitter/`](src/content/passes/zh/machine-function-splitter.mdx)：按 profile 把冷块拆到 `.text.split` section
 - [`/passes/x86-insert-vzeroupper/`](src/content/passes/zh/x86-insert-vzeroupper.mdx)：在 AVX 与 SSE 的边界插 `vzeroupper`，清掉 YMM 的高位状态
 

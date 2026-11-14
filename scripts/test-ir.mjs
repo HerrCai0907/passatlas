@@ -287,6 +287,62 @@ entry:
   );
 }
 
+// ---- 算法状态：快照逐步 diff，新增行标绿，高度按最长快照预留 ----
+{
+  const demo = makeDemo('state', 'state', [
+    {
+      title: '一',
+      note: '',
+      before: 'define void @f() {\nentry:\n  ret void\n}',
+      after: 'define void @f() {\nentry:\n  ret void\n}',
+      state: 'slot  color\n.0    -',
+    },
+    {
+      title: '二',
+      note: '',
+      before: 'define void @f() {\nentry:\n  ret void\n}',
+      after: 'define void @f() {\nentry:\n  ret void\n}',
+      state: 'slot  color\n.0    0',
+    },
+    {
+      title: '三',
+      note: '',
+      before: 'define void @f() {\nentry:\n  ret void\n}',
+      after: 'define void @f() {\nentry:\n  ret void\n}',
+      state: 'slot  color\n.0    0\n.1    1',
+    },
+  ]);
+  assert.equal(demo.stateMaxLines, 3);
+  assert.equal(demo.steps[0].state[1].mark, 'keep');
+  assert.equal(demo.steps[1].state[1].mark, 'add');
+  assert.equal(demo.steps[2].state[1].mark, 'keep');
+  assert.equal(demo.steps[2].state[2].mark, 'add');
+  assert.equal(demo.steps[2].state.length, 3);
+}
+
+// ---- cursor：指向当前处理的指令，一步最多一个，构建期解析成面板行号 ----
+{
+  const source = {
+    title: 'cursor',
+    note: '',
+    before: 'define void @f() {\nentry:\n  %x = add i32 1, 2\n  ret void\n}',
+    after: 'define void @f() {\nentry:\n  %x = add i32 1, 2\n  ret void\n}',
+  };
+  const onBefore = makeStep({ ...source, cursor: { line: '%x = add i32 1, 2' } });
+  assert.equal(onBefore.cursor.side, 'before');
+  assert.equal(onBefore.cursor.index, 2);
+  assert.equal(onBefore.cursor.line.trim(), '%x = add i32 1, 2');
+
+  const onAfter = makeStep({ ...source, cursor: { line: 'ret void', side: 'after' } });
+  assert.equal(onAfter.cursor.side, 'after');
+  assert.equal(onAfter.cursor.index, 3);
+
+  assert.throws(
+    () => makeStep({ ...source, cursor: { line: '%missing' } }),
+    /cursor not found/,
+  );
+}
+
 // ---- 播放器高度预留：maxLines 取所有步骤、两侧的最大行数 ----
 {
   const demo = makeDemo('height', 'height', [
@@ -304,6 +360,7 @@ entry:
     },
   ]);
   assert.equal(demo.maxLines, 5);
+  assert.equal(demo.stateMaxLines, 0);
 }
 
 
@@ -375,7 +432,7 @@ entry:
   assert.match(machineSnapshots.find((snapshot) => snapshot.id === 'ra').targets['x86-64'], /\$eax/);
   assert.match(machineSnapshots.find((snapshot) => snapshot.id === 'ra').targets.aarch64, /\$w0/);
 
-  for (const id of ['isel', 'phi-elim', 'regalloc', 'machine-function-splitter']) {
+  for (const id of ['isel', 'phi-elim', 'regalloc', 'machine-function-splitter', 'stack-slot-coloring']) {
     const zh = getDemo(id, 'zh');
     const en = getDemo(id, 'en');
     assert.ok(zh && en, `${id} 演示应存在`);
@@ -386,6 +443,23 @@ entry:
     assert.match(zh.steps[0].title, /第 1 步/);
     assert.match(en.steps[0].title, /^Step 1/);
   }
+
+  const ssc = getDemo('stack-slot-coloring', 'zh');
+  assert.ok(ssc, 'stack-slot-coloring 演示应存在');
+  assert.ok(ssc.stateMaxLines >= 5, '栈槽着色演示应带算法状态');
+  assert.ok(ssc.steps.every((step) => (step.state?.length ?? 0) > 0), '每一步都应有状态快照');
+  assert.ok(
+    ssc.steps.some((step) => step.state.some((line) => line.mark === 'add')),
+    '状态快照应显示新增的中间状态',
+  );
+  assert.ok(ssc.steps.every((step) => step.cursor), '栈槽着色每一步都应有 cursor');
+  assert.ok(
+    ssc.steps.every((step) => {
+      const lines = step.cursor.side === 'before' ? step.before : step.after;
+      return step.cursor.index >= 0 && step.cursor.index < lines.length;
+    }),
+    'cursor 必须落在对应面板的行号范围内',
+  );
 }
 
 console.log('IR parser, CFG layout, Machine IR & i18n: all assertions passed');

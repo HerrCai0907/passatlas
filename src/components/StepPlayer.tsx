@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent } from 'react';
 import { defaultLocale, type Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
-import type { Demo, DemoStep, IRLine } from '../demos/types';
+import type { Demo, DemoCursor, DemoStep, IRLine } from '../demos/types';
 import { diffInstructions } from '../lib/ir/diff';
 import type { InstructionDiff, InstructionMark } from '../lib/ir/diff';
 import { layoutCFG } from '../lib/ir/layout';
@@ -190,6 +190,7 @@ function IRPane({
   stepIndex,
   side,
   locale,
+  cursor,
   mir = false,
 }: {
   label: string;
@@ -197,6 +198,7 @@ function IRPane({
   stepIndex: number;
   side: 'before' | 'after';
   locale: Locale;
+  cursor?: DemoCursor;
   mir?: boolean;
 }) {
   const ariaKey = mir
@@ -206,6 +208,7 @@ function IRPane({
     : side === 'before'
       ? 'player.irBefore'
       : 'player.irAfter';
+  const cursorIndex = cursor?.side === side ? cursor.index : undefined;
 
   return (
     <section className="pa-pane" aria-label={t(locale, ariaKey)}>
@@ -217,18 +220,28 @@ function IRPane({
         <p className="pa-pane__empty">{t(locale, 'player.emptyIr')}</p>
       ) : (
         <ol className="pa-ir" key={stepIndex}>
-          {lines.map((line, i) => (
-            <li
-              key={`${line.text}-${i}`}
-              className={`pa-line pa-line--${line.mark}`}
-              style={{ '--i': i } as CSSProperties}
-            >
-              <span className="pa-line__no" aria-hidden="true">
-                {i + 1}
-              </span>
-              <code className="pa-line__code">{line.text === '' ? '\u00a0' : line.text}</code>
-            </li>
-          ))}
+          {lines.map((line, i) => {
+            const isCursor = cursorIndex === i;
+            return (
+              <li
+                key={`${line.text}-${i}`}
+                className={`pa-line pa-line--${line.mark}${isCursor ? ' pa-line--cursor' : ''}`}
+                style={{ '--i': i } as CSSProperties}
+                aria-current={isCursor ? 'step' : undefined}
+              >
+                <span className="pa-line__cursor" aria-hidden="true" />
+                <span className="pa-line__no" aria-hidden="true">
+                  {i + 1}
+                </span>
+                <code className="pa-line__code">
+                  {line.text === '' ? '\u00a0' : line.text}
+                </code>
+                {isCursor ? (
+                  <span className="sr-only">{t(locale, 'player.currentInstruction')}</span>
+                ) : null}
+              </li>
+            );
+          })}
         </ol>
       )}
     </section>
@@ -349,6 +362,8 @@ export default function StepPlayer({
 
   const progress = ((index + 1) / total) * 100;
   const current = graphs[index];
+  const stateLines = step.state ?? [];
+  const hasState = demo.stateMaxLines > 0;
 
   return (
     <div
@@ -401,6 +416,39 @@ export default function StepPlayer({
         </span>
       </p>
 
+      {hasState ? (
+        <section
+          className="pa-state"
+          aria-label={t(locale, 'player.algorithmState')}
+          style={{ '--pa-state-lines': demo.stateMaxLines } as CSSProperties}
+        >
+          <header className="pa-state__head">
+            <span className="pa-state__label">{t(locale, 'player.algorithmState')}</span>
+            <span className="pa-state__count">
+              {t(locale, 'player.stateLines', { count: stateLines.length })}
+            </span>
+          </header>
+          {stateLines.length > 0 ? (
+            <ol className="pa-state__list" key={index}>
+              {stateLines.map((line, i) => (
+                <li
+                  key={`${line.text}-${i}`}
+                  className={`pa-state__line pa-state__line--${line.mark}`}
+                  style={{ '--i': i } as CSSProperties}
+                >
+                  <span className="pa-state__no" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  <code>{line.text === '' ? '\u00a0' : line.text}</code>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="pa-state__empty">{t(locale, 'player.emptyState')}</p>
+          )}
+        </section>
+      ) : null}
+
       {shownMode === 'cfg' ? (
         <>
           <DiffLegend locale={locale} />
@@ -436,6 +484,7 @@ export default function StepPlayer({
             lines={step.before}
             stepIndex={index}
             locale={locale}
+            cursor={step.cursor}
             mir={isMir}
           />
           <IRPane
@@ -444,6 +493,7 @@ export default function StepPlayer({
             lines={step.after}
             stepIndex={index}
             locale={locale}
+            cursor={step.cursor}
             mir={isMir}
           />
         </div>

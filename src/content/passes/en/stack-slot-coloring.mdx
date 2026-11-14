@@ -1,0 +1,229 @@
+---
+title: stack-slot-coloring
+subtitle: "Stack slot coloring: sharing stack locations between spill slots"
+summary: Register allocation leaves many spill slots behind. Slots whose live ranges do not overlap can reuse one stack location; StackSlotColoring merges them with LiveStacks intervals, spill weights and first-fit coloring, then rewrites frame indices and drops the unused objects.
+category: codegen
+difficulty: 2
+status: ready
+order: 25
+stage: ['-O1', '-O2', '-O3', '-Os']
+tags: ['Live Interval', 'Graph Coloring', 'Spill Slot', 'Frame Layout', 'MIR']
+demo: stack-slot-coloring
+source: llvm/lib/CodeGen/StackSlotColoring.cpp
+updated: 2026-11-14
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+When register pressure is high, the allocator spills values to the stack. Each spilled value usually gets its own spill slot, printed as `%stack.N` in MIR:
+
+```text
+%12:gr32 = MOV32ri 42
+MOV32mr %stack.0, 1, _, 0, _, %12:gr32   ; spill
+...
+%13:gr32 = MOV32rm %stack.0, 1, _, 0, _  ; reload
+```
+
+Those slots are not all live at the same time. One value may be spilled in the first half of the function and another only after a call; their live ranges are completely disjoint, yet each occupies its own 8-byte stack location. With enough such slots the frame grows: more cache lines, a larger stack-pointer adjustment, and more save/restore work in the prologue and epilogue.
+
+StackSlotColoring is essentially register allocation with stack slots instead of registers:
+
+- **Input**: live intervals of the spill slots left by the register allocator (`LiveStacks`).
+- **Constraint**: two slots whose live ranges overlap cannot share one stack location.
+- **Goal**: pack all spill slots into as few stack locations as possible and shrink the `MachineFrameInfo` frame.
+
+It mainly changes the slot to which a value is assigned. It does not change instruction semantics and does not systematically reduce spill and reload counts; only `RemoveDeadStores` removes a few adjacent dead loads or stores. The win is a smaller frame and better stack-cache locality.
+
+It is not the same pass as `stack-coloring`: `StackColoring` runs before register allocation and merges `alloca` objects, i.e. user variables; `StackSlotColoring` runs after register allocation and merges **spill slots**, the temporaries created by the allocator. Keep the two pages separate.
+
+## Algorithm
+
+### Inputs and bail-outs
+
+`StackSlotColoring::run` first checks whether there is anything to do:
+
+- `LiveStacks->getNumIntervals() == 0`: there are no spill slots, return immediately;
+- `MF.exposesReturnsTwice()`: the function calls `setjmp` / `sigsetjmp`, whose stack may be restored by a later `longjmp`, so coloring must not reuse locations;
+- the legacy path also calls `skipFunction`, so functions marked `optnone` never enter.
+
+`LiveStacks` is not computed by this pass: the register allocator registers intervals when it spills. This is also why feeding a printed MIR file to `llc -run-pass=stack-slot-coloring` usually does nothing—MIR does not serialise the `LiveStacks` intervals. To see the effect, run full code generation from IR with `-stop-before` / `-stop-after`.
+
+### Step one: scan references and accumulate weights
+
+`ScanForSpillSlotRefs` walks every block and instruction:
+
+- every FI operand (`%stack.N`) increments that slot's weight, scaled by block frequency through `LiveIntervals::getSpillWeight`, so references in loops count more;
+- every `MachineMemOperand` whose pseudo source value is a `FixedStackPseudoSourceValue` is recorded, because it has to be rewritten as well;
+- debug instructions do not add weight but are still scanned.
+
+Weight decides the processing order: hotter slots get a color earlier. `InitializeSlots` sorts intervals by frame index, then stably by weight, skipping stack objects that are already dead.
+
+### Step two: initialise colors
+
+A “color” here is not a new abstract number: it is the frame index of an existing spill slot. For each stack ID the pass keeps:
+
+```text
+AllColors[StackID]   the set of all spill slots with this stack ID
+UsedColors[StackID]  slots already used as colors
+NextColors[StackID]  the next unused slot (smallest frame index first)
+```
+
+`stack-id` separates stack objects with different purposes (for example AMDGPU SGPR spills or AArch64 SVE scalable-vector slots); slots with different stack IDs must not be shared.
+
+### Step three: first-fit coloring
+
+For each slot, `ColorSlot` does two things:
+
+1. **Try to reuse a used color**, starting from the smallest one. `LiveIntervalUnion` answers whether the current interval overlaps any interval already assigned to that color; if not, the slot shares the color.
+2. **Otherwise take the next free color**: `NextColors` gives the first unused slot for this stack ID.
+
+Sharing also updates the color slot's size and alignment:
+
+```text
+size  = max(existing size, new object size)
+align = max(existing align, new object align)
+```
+
+Two spill slots of different sizes can share a location, but the color slot must be large enough for the largest one. A larger alignment can add padding, which is one reason coloring does not always shrink the frame.
+
+### Step four: rewrite and clean up
+
+Once the colors are fixed, `ColorSlots` builds a `SlotMapping` and then:
+
+- rewrites every FI operand in every instruction from the old slot to its color slot;
+- rewrites the `FixedStackPseudoSourceValue` in the `MachineMemOperand` to the new frame index;
+- calls `RemoveDeadStores` to delete a store that writes a value straight back to the slot it was just loaded from (the target recognises it with `isLoadFromStackSlot` / `isStoreToStackSlot`; `-ssc-dce-limit` caps the number removed);
+- removes stack objects that no color uses from `MachineFrameInfo`.
+
+At this point the `stack:` list is shorter and references such as `%stack.1` are gone. The real stack offsets only appear later, in `prolog-epilog`.
+
+### Reading it in MIR
+
+This function has two disjoint spill regions: `%stack.0` around the first call, and `%stack.1` around the second.
+
+```text
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
+
+...
+MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx
+...
+renamable $rcx = MOV64rm %stack.1, 1, $noreg, 0, $noreg
+```
+
+The live range of `%stack.0` ends after the first call, while that of `%stack.1` starts later. The colorer maps 1 to 0:
+
+```text
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8 }
+
+...
+MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
+...
+renamable $rcx = MOV64rm %stack.0, 1, $noreg, 0, $noreg
+```
+
+Two slots become one and the frame drops from 16 bytes to 8; not one `MOV64mr` / `MOV64rm` disappears. The algorithm-state panel in the animation shows the weights, colors, sharing decisions and the final frame change step by step, while the arrow points at the instruction being processed.
+
+## Cost and pitfalls
+
+- **First fit is not optimal coloring.** Processing order comes from spill weight and color order comes from frame index; either can leave one more slot in use than the optimum. `-no-stack-slot-sharing` disables sharing and gives a baseline.
+- **Only spill slots are handled.** User `alloca` objects belong to the earlier `StackColoring` pass; this pass never touches them. Treating the two as one leads to the wrong expectation that it merges local arrays.
+- **Dynamic memory traffic is not systematically reduced.** On the main path, spill and reload counts stay the same; only the conservative dead-store removal deletes a few adjacent loads or stores. The win is mainly frame size, stack-pointer adjustment and stack-cache locality. In a function whose frame is already small, the gain can be close to zero.
+- **Sharing can increase size and alignment.** A color slot must hold every object assigned to it, so the largest one sets size and alignment; extra alignment can add padding and cancel part of the gain.
+- **Stack IDs are a hard boundary.** Slots with different `stack-id` values cannot be shared; this is a semantic requirement, not conservatism.
+- **`setjmp` / `sigsetjmp` functions are skipped.** A `longjmp` can restore the stack at any point, and a shared slot would then be reused incorrectly; when `exposesReturnsTwice()` is true the pass does not run.
+- **Dead-store elimination is conservative.** It only handles adjacent load / store pairs and depends on target hooks; anything in between prevents the deletion. `-ssc-dce-limit` caps the number removed to keep compile time in check.
+- **Not run at `-O0`.** The pass is added inside `addOptimizedRegAlloc`, so only the greedy / basic allocator path gets it; the fast allocator path does not. On the legacy PM path, functions marked `optnone` are also skipped by `skipFunction`.
+- **A saved MIR file has no LiveStacks.** Running `llc -run-pass=stack-slot-coloring saved.mir` usually has no intervals to work with; use `-stop-before` / `-stop-after` from IR to see the real effect.
+- **It does not change allocation decisions.** If every spill slot overlaps every other one, coloring cannot do anything; the real fix is lower register pressure, not this pass.
+
+## Where it sits in the pipeline
+
+`stack-slot-coloring` lives in `addOptimizedRegAlloc`, right after `virtregrewriter` and before `machine-cp`:
+
+```text
+greedy → virtregrewriter → stack-slot-coloring
+  → machine-cp → machinelicm → prolog-epilog → ...
+```
+
+It works on abstract frame indices in `MachineFrameInfo`, before the real stack layout; `prolog-epilog` assigns offsets and emits the prologue / epilogue. After that come post-RA scheduling, block placement and <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink>.
+
+It is the downstream neighbour of <I18nLink href="/passes/regalloc/">regalloc</I18nLink>: greedy decides which values spill and gives them `%stack.N`, then `stack-slot-coloring` merges `%stack.N` slots whose live ranges do not overlap. Use `-stop-after=greedy` to see the allocation decisions and `-stop-after=stack-slot-coloring` to see the merged slots.
+
+## Run it yourself
+
+Start with a function under enough register pressure: eight values per phase stay live across a call, forcing the allocator to spill around each `use`.
+
+```c
+extern void use(long);
+
+__attribute__((noinline))
+long spill_merge(long *p) {
+  long a0 = p[0] * 3 + p[1];
+  long a1 = p[2] * 3 + p[3];
+  long a2 = p[4] * 3 + p[5];
+  long a3 = p[6] * 3 + p[7];
+  long a4 = p[8] * 3 + p[9];
+  long a5 = p[10] * 3 + p[11];
+  long a6 = p[12] * 3 + p[13];
+  long a7 = p[14] * 3 + p[15];
+  use(0);
+  long s = a0 ^ (a1 << 1) ^ (a2 << 2) ^ (a3 << 3)
+         ^ (a4 << 4) ^ (a5 << 5) ^ (a6 << 6) ^ (a7 << 7);
+  long b0 = p[20] * 5 - p[21];
+  long b1 = p[22] * 5 - p[23];
+  long b2 = p[24] * 5 - p[25];
+  long b3 = p[26] * 5 - p[27];
+  long b4 = p[28] * 5 - p[29];
+  long b5 = p[30] * 5 - p[31];
+  long b6 = p[32] * 5 - p[33];
+  long b7 = p[34] * 5 - p[35];
+  use(1);
+  long t = b0 ^ (b1 << 1) ^ (b2 << 2) ^ (b3 << 3)
+         ^ (b4 << 4) ^ (b5 << 5) ^ (b6 << 6) ^ (b7 << 7);
+  return s + t;
+}
+```
+
+Then generate MIR before and after coloring from the IR:
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo.ll
+
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-before=stack-slot-coloring demo.ll -o before.mir
+
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -stop-after=stack-slot-coloring demo.ll -o after.mir
+
+grep -n -A12 "^stack:" before.mir
+grep -n -A12 "^stack:" after.mir
+```
+
+Compare the references:
+
+```bash
+grep -n "%stack" before.mir
+grep -n "%stack" after.mir
+```
+
+Turn sharing off to see first-fit on its own:
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -no-stack-slot-sharing -stop-after=stack-slot-coloring \
+  demo.ll -o no-share.mir
+```
+
+Disable the pass and compare the final frame:
+
+```bash
+llc -mtriple=x86_64-linux-gnu -O2 -simplify-mir \
+  -disable-ssc -stop-before=prolog-epilog demo.ll -o no-ssc.mir
+```
+
+In a build with statistics enabled, `-stats` reports `NumEliminated` / `NumDead`; a debug build can use `-debug-only=stack-slot-coloring` to see which color each slot receives. Finish with `-verify-machineinstrs` to confirm the rewritten frame indices and MachineMemOperands still agree.
