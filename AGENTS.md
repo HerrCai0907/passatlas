@@ -297,6 +297,8 @@ Rules:
   “this is the instruction being processed”.
 - Algorithm state is part of the animation: when a demo supplies `state`, `StepPlayer` renders it
   above the IR panes and reserves `Demo.stateMaxLines`. Do not leave internal state only in `note`.
+- Layout order is title → algorithm state (if present) → step note → IR/CFG panes. The note always
+  sits above the IR; when a state panel exists it is the layer between state and IR.
 - Do not add new semantic colours without changing `tokens.css` and this file.
 - No layout shift between steps: IR mode reserves `Demo.maxLines` (computed at build time),
   CFG mode reserves the tallest step's scaled graph, `Demo.stateMaxLines` reserves the algorithm

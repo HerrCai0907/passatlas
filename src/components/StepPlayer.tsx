@@ -214,7 +214,6 @@ function IRPane({
     <section className="pa-pane" aria-label={t(locale, ariaKey)}>
       <header className="pa-pane__head">
         <span className="pa-pane__label">{label}</span>
-        <span className="pa-pane__count">{t(locale, 'player.lines', { count: lines.length })}</span>
       </header>
       {lines.length === 0 ? (
         <p className="pa-pane__empty">{t(locale, 'player.emptyIr')}</p>
@@ -262,6 +261,7 @@ export default function StepPlayer({
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(autoplay);
   const [speed, setSpeed] = useState(1);
+  const irViewportRef = useRef<HTMLDivElement | null>(null);
 
   const steps = demo.steps;
   const total = steps.length;
@@ -302,6 +302,32 @@ export default function StepPlayer({
   useEffect(() => {
     if (!cfgAvailable) setMode('ir');
   }, [cfgAvailable]);
+
+  // IR 视口有固定高度：切步后把 cursor 滚到可见位置。
+  useEffect(() => {
+    if (shownMode !== 'ir') return;
+    const viewport = irViewportRef.current;
+    if (!viewport) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const cursor = viewport.querySelector<HTMLElement>('.pa-line--cursor');
+      if (!cursor) {
+        viewport.scrollTop = 0;
+        return;
+      }
+
+      const box = viewport.getBoundingClientRect();
+      const line = cursor.getBoundingClientRect();
+      // 顶部 34px 留给吸顶的 BEFORE / AFTER 面板头
+      const safeTop = box.top + 34;
+      if (line.top < safeTop) viewport.scrollTop -= safeTop - line.top;
+      else if (line.bottom > box.bottom - 8) {
+        viewport.scrollTop += line.bottom - box.bottom + 8;
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [index, shownMode]);
 
   const goTo = useCallback(
     (next: number) => {
@@ -424,9 +450,6 @@ export default function StepPlayer({
         >
           <header className="pa-state__head">
             <span className="pa-state__label">{t(locale, 'player.algorithmState')}</span>
-            <span className="pa-state__count">
-              {t(locale, 'player.stateLines', { count: stateLines.length })}
-            </span>
           </header>
           {stateLines.length > 0 ? (
             <ol className="pa-state__list" key={index}>
@@ -448,6 +471,17 @@ export default function StepPlayer({
           )}
         </section>
       ) : null}
+
+      <div className="pa-note">
+        <p className="pa-note__live" aria-live="polite">
+          {step.note}
+        </p>
+        <span className="pa-note__ghost" aria-hidden="true">
+          {steps.map((item, i) => (
+            <span key={i}>{item.note}</span>
+          ))}
+        </span>
+      </div>
 
       {shownMode === 'cfg' ? (
         <>
@@ -475,40 +509,37 @@ export default function StepPlayer({
         </>
       ) : (
         <div
-          className="pa-panes"
-          style={{ '--pa-ir-lines': demo.maxLines } as CSSProperties}
+          className="pa-ir-viewport"
+          ref={irViewportRef}
+          role="region"
+          aria-label={t(locale, 'player.irRegion')}
+          tabIndex={0}
         >
-          <IRPane
-            label="before"
-            side="before"
-            lines={step.before}
-            stepIndex={index}
-            locale={locale}
-            cursor={step.cursor}
-            mir={isMir}
-          />
-          <IRPane
-            label="after"
-            side="after"
-            lines={step.after}
-            stepIndex={index}
-            locale={locale}
-            cursor={step.cursor}
-            mir={isMir}
-          />
+          <div
+            className="pa-panes pa-panes--ir"
+            style={{ '--pa-ir-lines': demo.maxLines } as CSSProperties}
+          >
+            <IRPane
+              label="before"
+              side="before"
+              lines={step.before}
+              stepIndex={index}
+              locale={locale}
+              cursor={step.cursor}
+              mir={isMir}
+            />
+            <IRPane
+              label="after"
+              side="after"
+              lines={step.after}
+              stepIndex={index}
+              locale={locale}
+              cursor={step.cursor}
+              mir={isMir}
+            />
+          </div>
         </div>
       )}
-
-      <div className="pa-note">
-        <p className="pa-note__live" aria-live="polite">
-          {step.note}
-        </p>
-        <span className="pa-note__ghost" aria-hidden="true">
-          {steps.map((item, i) => (
-            <span key={i}>{item.note}</span>
-          ))}
-        </span>
-      </div>
 
       <div className="pa-controls">
         <button
