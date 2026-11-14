@@ -31,6 +31,8 @@ export const site = {
   llvmSource: 'https://github.com/llvm/llvm-project',
   llvmTree: `https://github.com/llvm/llvm-project/tree/${llvmCommit}`,
   license: 'MIT',
+  /** Google Search Console 的 HTML 标记验证令牌；不作为秘密处理。 */
+  googleSiteVerification: 'i04eq2n6TyrqDYBWnlEh1QXuEIBkkXH74fwQ_E18lM8',
 } as const;
 
 /** Permanent link to one LLVM source file: a commit hash, never a moving branch. */
