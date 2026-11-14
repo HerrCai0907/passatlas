@@ -13,6 +13,7 @@ import { pgoInstrGenDemo } from './pgo-instr-gen.ts';
 import { phiElimDemo } from './phi-elim.ts';
 import { regallocDemo } from './regalloc.ts';
 import { sampleProfileInlineDemo } from './sample-profile-inline.ts';
+import { x86InsertVZeroUpperDemo } from './x86-insert-vzeroupper.ts';
 
 /**
  * pass 内容里的 frontmatter `demo: <id>` 通过这里找到对应的分步演示。
@@ -31,6 +32,7 @@ export const demos: Record<string, Demo> = {
   'phi-elim': phiElimDemo,
   regalloc: regallocDemo,
   'sample-profile-inline': sampleProfileInlineDemo,
+  'x86-insert-vzeroupper': x86InsertVZeroUpperDemo,
 };
 
 export function getDemo(id?: string, locale: Locale = defaultLocale): Demo | undefined {

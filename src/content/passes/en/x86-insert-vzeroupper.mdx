@@ -1,0 +1,234 @@
+---
+title: x86-insert-vzeroupper
+subtitle: "Cleaning up after AVX: vzeroupper at the SSE boundary"
+summary: AVX instructions leave the upper 128 bits of YMM dirty, and the next legacy SSE instruction pays the transition penalty. After the machine instructions are fixed, this pass runs a block-level dataflow and inserts vzeroupper before calls and returns.
+category: codegen
+difficulty: 2
+status: ready
+order: 24
+stage: []
+tags: ['AVX', 'SSE', 'MIR', 'ABI', 'x86-64']
+demo: x86-insert-vzeroupper
+source: llvm/lib/Target/X86/X86InsertVZeroUpper.cpp
+updated: 2026-11-14
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+AVX added 256-bit `ymm0`–`ymm15` but did not replace SSE. VEX-encoded AVX instructions and legacy SSE instructions can run in the same binary, so the hardware has to track one thing: whether the upper 128 bits of YMM are dirty.
+
+Two rules create that state:
+
+- a VEX-encoded instruction writing a 128-bit result **zeroes** the upper 128 bits;
+- a legacy SSE instruction writes only the low 128 bits and **leaves** the upper half untouched.
+
+So as soon as an AVX instruction puts non-zero data in the upper half, the next legacy SSE instruction runs against a non-zero upper state. On Sandy Bridge / Ivy Bridge this costs a pipeline-level AVX–SSE transition penalty, on the order of tens of cycles. Later cores changed the shape of the cost rather than removing it: from Haswell on it looks more like a per-instruction overhead, on Skylake client the classic transition penalty is essentially gone but a dirty upper state turns into false dependencies on SSE instructions, and on server parts such as Skylake-SP it becomes visible again. AMD's Zen family does not have this penalty at all.
+
+```text
+after AVX: upper 128 ≠ 0 (dirty)
+
+  ├─ run legacy SSE directly
+  │    → transition penalty
+  └─ vzeroupper
+       → upper = 0 (clean)
+```
+
+Why would AVX-enabled code contain legacy SSE at all? Because "this function uses AVX" is a per-translation-unit decision, and the compiler cannot see the other side of a boundary:
+
+- separately compiled TUs, static libraries or third-party `.a` files that only enable SSE2;
+- code reached through function pointers, callbacks, `qsort` comparators;
+- libc implementations such as `memcpy`;
+- SSE instructions inside hand-written inline assembly.
+
+`vzeroupper` exists for that boundary: a 3-byte instruction that zeroes bits 128 and above of `ymm0`–`ymm15` (and of `zmm0`–`zmm15` under AVX-512), leaves the low 128 bits alone, and returns the processor to the clean state. It is not a save/restore; it **discards the upper half and declares the state clean**.
+
+The pass's job is therefore narrow: after instructions and registers are final, find the points where the YMM state is dirty and insert `vzeroupper` before leaving the function or calling into someone else. It changes no computation and does no interprocedural analysis.
+
+## Algorithm
+
+`x86-insert-vzeroupper` is a `MachineFunctionPass` that requires `NoVRegs`, and runs after register allocation and frame lowering. It reads MIR only, never IR.
+
+### Gating and the fast exit
+
+`insertVZeroUpper(MF)` checks three conditions and returns immediately if any fails. The third is the target's `+vzeroupper` tuning feature, which `-mno-vzeroupper` clears:
+
+```text
+-x86-use-vzeroupper (default true)
+  && subtarget.hasAVX()
+  && subtarget.insertVZEROUPPER()
+```
+
+It then does a constant-time check: scan the function's live-ins and the `VR256RegClass` / `VR512_0_15RegClass` register classes for any non-empty physical register. A function that never touches YMM/ZMM returns right there — the common case for integer code and SSE-only code.
+
+### Three block states
+
+Each basic block is in one of three states:
+
+| State | Meaning |
+| --- | --- |
+| `PASS_THROUGH` | neither a YMM/ZMM-dirtying instruction nor a `vzeroupper` in the block; the entry state reaches the exit unchanged |
+| `EXITS_CLEAN` | the block contains (or will contain) a `vzeroupper`, so its exit is clean |
+| `EXITS_DIRTY` | something dirtied YMM/ZMM and no `vzeroupper` cleared it |
+
+Each block also records a `FirstUnguardedCall`: the first call that might need a guard. It exists because a block's entry state is unknown at first — there is no way to decide on the spot whether that call needs one.
+
+### Two phases: scan, then propagate along dirty predecessors
+
+The first pass walks the MBBs in layout order and keeps a local `CurState` inside each block:
+
+```text
+for each MBB:
+  Cur = PASS_THROUGH
+  for each MI:
+    VZERO* → Cur = CLEAN
+    YMM/ZMM operand → Cur = DIRTY
+    call or return:
+      DIRTY → insert VZEROUPPER
+      PASS_THROUGH → save first call
+  exit DIRTY → successors to worklist
+YMM/ZMM live-in → entry to worklist
+```
+
+The second phase drains that worklist. A block lands in it because one of its predecessors exits dirty:
+
+```text
+while worklist not empty:
+  MBB = pop()
+  if MBB.first call:
+    insert VZEROUPPER
+  if MBB was PASS_THROUGH:
+    push successors
+```
+
+That is why the first phase only records a call whose entry state is unknown: the block may be clean on its own, and the dirty state has to arrive from a predecessor. The worklist inserts the guard only when such a predecessor is found, then keeps propagating through `PASS_THROUGH` blocks until it reaches one that cleans up on its own (`EXITS_CLEAN`) or has already been handled.
+
+### What counts as dirty
+
+Any instruction with a YMM/ZMM register operand — explicit or implicit, debug operands excluded — makes the state dirty. Calls get two special cases:
+
+- a call with a RegMask that does **not** clobber every YMM/ZMM: treated as a YMM use and makes the state dirty. If the callee only clobbers part of the vector state, the remaining upper state is unknown, so the pass is conservative;
+- a call with **no** RegMask (`_chkstk`, `_ftol2` and similar helpers): skipped. They do not follow the standard calling convention and spell out their register usage in the instruction.
+
+Conversely, a call that carries YMM/ZMM operands itself — for example one returning `__m256` — is treated as an AVX instruction and gets **no** guard. The callee is AVX code too; both sides of the boundary are in the AVX domain, so cleaning up would be pointless.
+
+### Exceptions and details
+
+- **An existing `vzeroupper` / `vzeroall` resets the state to clean.** A hand-written intrinsic is respected; the pass will not add a second one.
+- **`iret` in an interrupt handler is skipped.** Its epilogue restores YMM/ZMM, and a `vzeroupper` would destroy the interrupted state.
+- **A `ret` that returns a YMM/ZMM value gets no guard.** `RET64 $ymm0` has a YMM operand, so the state machine treats it as a YMM use, marks the state dirty and moves on. Otherwise `vzeroupper` would zero the upper half of the return value.
+- **Only `ymm0`–`ymm15` / `zmm0`–`zmm15` matter.** `vzeroupper` does not clean 16–31, and legacy SSE cannot encode them, so there is nothing to do.
+- **YMM/ZMM live-ins make the entry block a dirty predecessor.** Arguments arriving in YMM mean the caller has already used 256-bit state; the entry block's first call must be guarded too.
+
+### What the insertion looks like
+
+In MIR, `VZEROUPPER` lists every register it clobbers:
+
+```text
+VZEROUPPER implicit-def $ymm0, implicit-def $ymm1, implicit-def $ymm2, ...
+CALL64pcrel32 target-flags(x86-plt) @sse_sum, csr_64, implicit $rsp, implicit $ssp, ...
+```
+
+That is also why the pass only dares to insert at calls and returns: the ABI does not allow a live YMM value across those points, so zeroing cannot destroy anything. Inside a function the compiler assumes that AVX-enabled code does not produce legacy SSE, so no guard is needed before an inlined SSE instruction.
+
+## Cost and pitfalls
+
+- **One uop, but not free.** In a hot loop that calls a helper every iteration, the guard travels with the loop. Call overhead usually hides it, but on very small functions called very often it shows up. When the callee is AVX code too, the guard is pure waste.
+- **It is conservative and has no interprocedural information.** Even a callee in the same TU — one that LTO can see — gets a guard as long as it might execute SSE. Inlining removes some calls and with them some guards.
+- **Two ways to turn it off.** `-mno-vzeroupper` clears the target's `+vzeroupper` tuning feature for that target; `-mllvm -x86-use-vzeroupper=false` disables the pass entirely. AMD has no AVX–SSE transition penalty, so dropping these instructions can pay off there; on Intel, do not disable it as long as code mixes with SSE.
+- **Inline assembly is a blind spot.** The pass only reads MIR registers and RegMasks; it cannot see what an assembly string does. It may miss a guard (asm dirtied YMM) or add a useless one. If you mix hand-written SSE and AVX, you own the boundary — call `_mm256_zeroupper()` yourself.
+- **The convention is two-way.** The caller cleans before the call, and the model then assumes the state is clean after the call returns — which relies on every callee cleaning before its return. A hand-written assembly callee that returns dirty leaves the caller unaware, and the next SSE instruction still pays.
+- **`RET64 $ymm0` is a deliberate exception.** Returning a vector value suppresses the guard, and the caller receives a dirty state; if the caller then enters SSE code, it must clean up itself. That is why "every call returns clean" is not an absolute invariant.
+- **Code size.** Each guard is 3 bytes. Large C++ programs have many call sites, so the total is visible, though usually much smaller than the alignment changes caused by layout work such as MFS.
+- **It only distinguishes "touched YMM/ZMM" from "did not".** It does not distinguish VEX from EVEX, and does not model the cost of mixing EVEX and VEX under AVX-512; those are separate mechanisms. `vzeroupper` also does nothing for `zmm16`–`zmm31`, but legacy SSE cannot address them, so correctness is unaffected.
+- **`-stop-after=x86-insert-vzeroupper` reports "not registered" in LLVM 23's `llc`.** The pass has been ported to the new pass manager and the name only survives as `DEBUG_TYPE`. Use `-stop-before=x86-asm-printer` or `-print-after-all` to see the result.
+- **It does not make code faster; it keeps mixed code from getting slower.** In a pure AVX program every guard is pure overhead; in a pure SSE program the pass returns at the fast-exit check.
+
+## Where it sits in the pipeline
+
+The pass lives in `X86PassConfig::addPreEmitPass`, after register allocation, frame lowering, post-RA scheduling and block placement, and before AsmPrinter:
+
+```text
+prolog-epilog → post-RA scheduling → block-placement
+  → x86-expand-pseudo → kcfi → indirect-branch-tracking
+  → x86-insert-vzeroupper
+  → x86-fixup-bw-insts → x86-pad-short-functions → x86-fixup-leas
+  → x86-compress-evex → x86-insert-x87-wait → asm-printer
+```
+
+It requires `NoVRegs`, so it sees physical registers; only target-specific fixups follow it, and none of them introduce new YMM uses. Before it come the instructions chosen by <I18nLink href="/passes/isel/">isel</I18nLink> and the physical registers assigned by <I18nLink href="/passes/regalloc/">regalloc</I18nLink>. As machine-level finalisation it is a sibling of <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink>, except that MFS changes which section a block goes in, while this pass edits the instruction stream itself.
+
+It is not part of the IR optimisation pipeline, and adding it does not depend on the optimisation level: it runs at `-O0` too, and has work to do whenever the code actually touches YMM/ZMM. AVX-enabled `-O0` code that uses vector intrinsics gets guards at its boundaries just the same.
+
+## Run it yourself
+
+Start with a function that does AVX arithmetic and also calls an SSE helper. `-ffast-math` matters here: without it the floating-point reduction is not vectorised to 256 bits, no YMM appears in the function, and the pass returns at the fast-exit check.
+
+```bash
+cat > demo.c <<'EOF'
+__attribute__((noinline)) float sse_sum(const float *p, int n);
+
+__attribute__((noinline)) float avx_dot(const float *a, const float *b, int n) {
+  float acc = 0.0f;
+  for (int i = 0; i < n; i++)
+    acc += a[i] * b[i];
+  acc += sse_sum(a, n);
+  for (int i = 0; i < n; i++)
+    acc += a[i] * b[i];
+  return acc;
+}
+EOF
+
+clang -O2 -mavx -ffast-math -S demo.c -o demo.s
+grep -n -B2 -A2 vzeroupper demo.s
+```
+
+In this example there are two: one before the call to `sse_sum`, one before the function returns. `sse_sum` has no definition, so it stays an external symbol; that does not affect the pass's behaviour.
+
+To see the insertion points in MIR (in LLVM 23 the pass name cannot be used with `-stop-after`, so use `-stop-before`):
+
+```bash
+clang -O2 -mavx -ffast-math -emit-llvm -S demo.c -o demo.ll
+llc -mtriple=x86_64-linux-gnu -mattr=+avx -O2 \
+  -stop-before=x86-asm-printer demo.ll -o demo.mir
+grep -n -B3 -A1 VZEROUPPER demo.mir
+```
+
+To watch the change around the pass itself, turn on `-print-after-all`:
+
+```bash
+llc -mtriple=x86_64-linux-gnu -mattr=+avx -O2 -print-after-all demo.ll -o /dev/null 2>&1 \
+  | grep -B3 -A1 VZEROUPPER
+```
+
+Confirm that the switches really work:
+
+```bash
+# turn it off at the target level
+clang -O2 -mavx -ffast-math -mno-vzeroupper -S demo.c -o off.s
+grep -c vzeroupper off.s        # 0
+
+# turn the whole pass off
+clang -O2 -mavx -ffast-math -mllvm -x86-use-vzeroupper=false -S demo.c -o off2.s
+grep -c vzeroupper off2.s       # 0
+```
+
+Find it in the object file:
+
+```bash
+clang -O2 -mavx -ffast-math -c demo.c -o demo.o
+llvm-objdump -d demo.o | grep -n -B2 -A2 vzeroupper
+```
+
+To see that a YMM return value suppresses the guard, return `__m256` instead:
+
+```bash
+cat > vec.c <<'EOF'
+typedef float v8f __attribute__((vector_size(32)));
+__attribute__((noinline)) v8f ret_vec(v8f a) { return a; }
+EOF
+clang -O2 -march=haswell -S vec.c -o - | grep -E "vzeroupper|retq"
+```
+
+Only `retq` shows up: `ret_vec` returns its value in `ymm0`, `vzeroupper` would zero the upper half of it, so the pass leaves the state dirty and hands the cleanup to the caller.

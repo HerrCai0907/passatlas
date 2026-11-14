@@ -27,8 +27,13 @@ const difficulty = pass.data.difficulty;
 const demoData = getDemo(demo, locale);
 const cfgSample = cfg ? cfgSamples.find((sample) => sample.id === cfg) : undefined;
 const editUrl = `${site.github}/blob/main/src/content/passes/${pass.id}.mdx`;
+// 中文页在分类名后附英文对照；两者相同时（如 Machine IR）只写一次。
 const categoryLine =
-  locale === 'zh' ? `${categoryMeta.zh} · ${categoryMeta.en}` : categoryMeta.en;
+  locale === 'zh'
+    ? categoryMeta.zh === categoryMeta.en
+      ? categoryMeta.zh
+      : `${categoryMeta.zh} · ${categoryMeta.en}`
+    : categoryMeta.en;
 const slug = passSlug(pass);
 const passStages = stagesForPass(slug);
 const atlasHref = url('/passes/', locale);
