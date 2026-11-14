@@ -15,6 +15,23 @@ export interface IRLine {
   mark: Mark;
 }
 
+/** 作者写的 cursor：当前正在处理的那条指令 */
+export interface StepCursor {
+  /** 指令文本；比较时忽略两侧缩进 */
+  line: string;
+  /** 箭头画在 before 还是 after 一侧；默认 before */
+  side?: 'before' | 'after';
+  /** 同一行出现多次时选第几个（从 1 开始）；默认 1 */
+  occurrence?: number;
+}
+
+/** 构建期解析后的 cursor：直接指向某个面板里的行号 */
+export interface DemoCursor {
+  line: string;
+  side: 'before' | 'after';
+  index: number;
+}
+
 export interface DemoStep {
   title: string;
   note: string;
@@ -25,6 +42,8 @@ export interface DemoStep {
    * 它让「算法怎么跑」和「IR 怎么变」出现在同一帧里。
    */
   state?: IRLine[];
+  /** 这一步正在处理的那条指令；一步最多一个 */
+  cursor?: DemoCursor;
 }
 
 /** 一种语言的标题与说明；IR 本身不需要翻译，所以只覆盖文案 */
@@ -62,8 +81,16 @@ export interface StepSource {
   note: string;
   before: string;
   after: string;
-  /** 需要在前后两个面板同时高亮的行（用于「这一步只是观察，没有改写」的场景） */
+  /**
+   * 这一步需要重点关注的 IR 行，可以在前后两个面板同时高亮。
+   * 它不表示「当前指令」；当前指令用 `cursor` 单独标出。
+   */
   focus?: string[];
+  /**
+   * 当前正在处理的那条指令。箭头画在 IR 最左边，一步只能有一个。
+   * 用 `side` 指定画在 before 还是 after；默认 before。
+   */
+  cursor?: StepCursor;
   /**
    * 算法内部状态快照，写这一步结束时的完整状态。
    * `makeDemo()` 会把它和上一步做行级 diff，新增行标绿；
@@ -147,6 +174,29 @@ const applyFocus = (lines: IRLine[], focus: Set<string>): IRLine[] =>
     line.mark === 'keep' && focus.has(line.text.trim()) ? { ...line, mark: 'focus' } : line,
   );
 
+/** 把作者写的 cursor 解析成具体面板里的行号；找不到就是内容错误，构建期直接报错 */
+function resolveCursor(source: StepCursor, before: IRLine[], after: IRLine[]): DemoCursor {
+  const side = source.side ?? 'before';
+  const lines = side === 'after' ? after : before;
+  const wanted = source.line.trim();
+  const occurrence = source.occurrence ?? 1;
+
+  if (occurrence < 1 || !Number.isInteger(occurrence)) {
+    throw new Error(`[demo] cursor occurrence must be a positive integer: ${source.line}`);
+  }
+
+  let seen = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].text.trim() !== wanted) continue;
+    seen += 1;
+    if (seen === occurrence) return { line: lines[index].text, side, index };
+  }
+
+  throw new Error(
+    `[demo] cursor not found on ${side} (occurrence ${occurrence}): ${wanted}`,
+  );
+}
+
 export function makeStep(source: StepSource): DemoStep {
   const { before, after } = diff(toLines(source.before), toLines(source.after));
   // 作者写的 focus 行不带缩进；IRLine 保留缩进，比较前统一 trim
@@ -156,6 +206,7 @@ export function makeStep(source: StepSource): DemoStep {
         focusSet(source.stateFocus),
       )
     : undefined;
+  const cursor = source.cursor ? resolveCursor(source.cursor, before, after) : undefined;
 
   return {
     title: source.title,
@@ -163,6 +214,7 @@ export function makeStep(source: StepSource): DemoStep {
     before: applyFocus(before, focusSet(source.focus)),
     after: applyFocus(after, focusSet(source.focus)),
     ...(state ? { state } : {}),
+    ...(cursor ? { cursor } : {}),
   };
 }
 

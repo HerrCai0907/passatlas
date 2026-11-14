@@ -97,31 +97,28 @@ Once the colors are fixed, `ColorSlots` builds a `SlotMapping` and then:
 - calls `RemoveDeadStores` to delete a store that writes a value straight back to the slot it was just loaded from (the target recognises it with `isLoadFromStackSlot` / `isStoreToStackSlot`; `-ssc-dce-limit` caps the number removed);
 - removes stack objects that no color uses from `MachineFrameInfo`.
 
-At this point the `stack:` list is shorter and references such as `%stack.2` / `%stack.3` are gone. The real stack offsets only appear later, in `prolog-epilog`.
+At this point the `stack:` list is shorter and references such as `%stack.1` are gone. The real stack offsets only appear later, in `prolog-epilog`.
 
 ### Reading it in MIR
 
-This function has two disjoint spill regions: `%stack.0` / `%stack.1` around the first call, and `%stack.2` / `%stack.3` around the second.
+This function has two disjoint spill regions: `%stack.0` around the first call, and `%stack.1` around the second.
 
 ```text
 stack:
   - { id: 0, type: spill-slot, size: 8, alignment: 8 }
   - { id: 1, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 2, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 3, type: spill-slot, size: 8, alignment: 8 }
 
 ...
-MOV64mr %stack.2, 1, $noreg, 0, $noreg, killed renamable $rcx
+MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx
 ...
-renamable $rcx = MOV64rm %stack.2, 1, $noreg, 0, $noreg
+renamable $rcx = MOV64rm %stack.1, 1, $noreg, 0, $noreg
 ```
 
-The live ranges of `%stack.0` / `%stack.1` end after the first call, while those of `%stack.2` / `%stack.3` start later. The colorer maps 2 to 0 and 3 to 1:
+The live range of `%stack.0` ends after the first call, while that of `%stack.1` starts later. The colorer maps 1 to 0:
 
 ```text
 stack:
   - { id: 0, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
 
 ...
 MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
@@ -129,7 +126,7 @@ MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
 renamable $rcx = MOV64rm %stack.0, 1, $noreg, 0, $noreg
 ```
 
-Four slots become two and the frame drops from 32 bytes to 16; not one `MOV64mr` / `MOV64rm` disappears. The algorithm-state panel in the animation shows the weights, colors, sharing decisions and the final frame change step by step.
+Two slots become one and the frame drops from 16 bytes to 8; not one `MOV64mr` / `MOV64rm` disappears. The algorithm-state panel in the animation shows the weights, colors, sharing decisions and the final frame change step by step, while the arrow points at the instruction being processed.
 
 ## Cost and pitfalls
 

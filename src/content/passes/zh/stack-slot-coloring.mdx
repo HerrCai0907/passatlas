@@ -97,31 +97,28 @@ align  = max(已有 align, 新对象 align)
 - 调用 `RemoveDeadStores` 删掉“load 之后又原样 store 回同一个槽”的死存储（目标用 `isLoadFromStackSlot` / `isStoreToStackSlot` 识别，`-ssc-dce-limit` 可以限制数量）；
 - 从 `MachineFrameInfo` 删除没有任何颜色使用的栈对象。
 
-此时 `stack:` 列表变短，`%stack.2` / `%stack.3` 这样的引用已经不存在了。真正的栈偏移要等 `prolog-epilog` 才落地。
+此时 `stack:` 列表变短，像 `%stack.1` 这样的引用已经不存在了。真正的栈偏移要等 `prolog-epilog` 才落地。
 
 ### 在 MIR 里看
 
-下面这个函数有两段互不相交的溢出区：第一个 call 两侧用 `%stack.0` / `%stack.1`，第二个 call 两侧用 `%stack.2` / `%stack.3`。
+下面这个函数有两个互不相交的溢出区：第一个 call 两侧用 `%stack.0`，第二个 call 两侧用 `%stack.1`。
 
 ```text
 stack:
   - { id: 0, type: spill-slot, size: 8, alignment: 8 }
   - { id: 1, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 2, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 3, type: spill-slot, size: 8, alignment: 8 }
 
 ...
-MOV64mr %stack.2, 1, $noreg, 0, $noreg, killed renamable $rcx
+MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx
 ...
-renamable $rcx = MOV64rm %stack.2, 1, $noreg, 0, $noreg
+renamable $rcx = MOV64rm %stack.1, 1, $noreg, 0, $noreg
 ```
 
-`%stack.0` / `%stack.1` 的区间在第一个 call 之后就结束了，`%stack.2` / `%stack.3` 的区间从后面才开始。着色器把 2 映射到 0、3 映射到 1：
+`%stack.0` 的区间在第一个 call 之后就结束了，`%stack.1` 的区间从后面才开始。着色器把 1 映射到 0：
 
 ```text
 stack:
   - { id: 0, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
 
 ...
 MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
@@ -129,7 +126,7 @@ MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
 renamable $rcx = MOV64rm %stack.0, 1, $noreg, 0, $noreg
 ```
 
-四个槽变成两个，frame 从 32 字节降到 16 字节；`MOV64mr` / `MOV64rm` 的数量一条没少。动画里的「算法状态」面板会逐步显示权重、颜色、共享关系和最终的 frame 变化。
+两个槽变成一个，frame 从 16 字节降到 8 字节；`MOV64mr` / `MOV64rm` 的数量一条没少。动画里的「算法状态」面板会逐步显示权重、颜色、共享关系和最终的 frame 变化，箭头则指向这一步正在处理的那条指令。
 
 ## 代价与坑
 

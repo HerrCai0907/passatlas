@@ -2,9 +2,9 @@ import { makeDemo } from './types.ts';
 
 /**
  * 一个函数里有两段互不相交的溢出区：
- * - 第一个 call 两侧用 %stack.0 / %stack.1；
- * - 第二个 call 两侧用 %stack.2 / %stack.3。
- * 两段之间没有活跃值，所以 2 可以复用 0、3 可以复用 1。
+ * - 第一个 call 两侧用 %stack.0；
+ * - 第二个 call 两侧用 %stack.1。
+ * 两段之间没有活跃值，所以 1 可以复用 0。
  *
  * MIR 取自 x86-64 的真实形态，删掉了无关的 debug 信息和 prologue，
  * 保留 stack 列表以便在动画里直接看到栈对象被删掉。
@@ -16,26 +16,41 @@ tracksRegLiveness: true
 stack:
   - { id: 0, type: spill-slot, size: 8, alignment: 8 }
   - { id: 1, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 2, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 3, type: spill-slot, size: 8, alignment: 8 }
 body: |
   bb.0:
     liveins: $rdi
     renamable $rbx = COPY $rdi
     renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 0, $noreg
     MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rax
-    renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 8, $noreg
-    MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rax
     CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
     renamable $rax = MOV64rm %stack.0, 1, $noreg, 0, $noreg
-    renamable $rax = ADD64rm killed renamable $rax, %stack.1, 1, $noreg, 0, $noreg, implicit-def dead $eflags
-    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 16, $noreg
-    MOV64mr %stack.2, 1, $noreg, 0, $noreg, killed renamable $rcx
-    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 24, $noreg
-    MOV64mr %stack.3, 1, $noreg, 0, $noreg, killed renamable $rcx
+    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 8, $noreg
+    MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx
     CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
-    renamable $rcx = MOV64rm %stack.2, 1, $noreg, 0, $noreg
-    renamable $rcx = ADD64rm killed renamable $rcx, %stack.3, 1, $noreg, 0, $noreg, implicit-def dead $eflags
+    renamable $rcx = MOV64rm %stack.1, 1, $noreg, 0, $noreg
+    renamable $rax = ADD64rr killed renamable $rax, killed renamable $rcx, implicit-def dead $eflags
+    RET64 $rax
+`;
+
+const storeRewritten = `
+---
+name: spill_merge
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
+body: |
+  bb.0:
+    liveins: $rdi
+    renamable $rbx = COPY $rdi
+    renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 0, $noreg
+    MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rax
+    CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
+    renamable $rax = MOV64rm %stack.0, 1, $noreg, 0, $noreg
+    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 8, $noreg
+    MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
+    CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
+    renamable $rcx = MOV64rm %stack.1, 1, $noreg, 0, $noreg
     renamable $rax = ADD64rr killed renamable $rax, killed renamable $rcx, implicit-def dead $eflags
     RET64 $rax
 `;
@@ -46,185 +61,189 @@ name: spill_merge
 tracksRegLiveness: true
 stack:
   - { id: 0, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 2, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 3, type: spill-slot, size: 8, alignment: 8 }
 body: |
   bb.0:
     liveins: $rdi
     renamable $rbx = COPY $rdi
     renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 0, $noreg
     MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rax
-    renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 8, $noreg
-    MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rax
     CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
     renamable $rax = MOV64rm %stack.0, 1, $noreg, 0, $noreg
-    renamable $rax = ADD64rm killed renamable $rax, %stack.1, 1, $noreg, 0, $noreg, implicit-def dead $eflags
-    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 16, $noreg
+    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 8, $noreg
     MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
-    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 24, $noreg
-    MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx
     CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
     renamable $rcx = MOV64rm %stack.0, 1, $noreg, 0, $noreg
-    renamable $rcx = ADD64rm killed renamable $rcx, %stack.1, 1, $noreg, 0, $noreg, implicit-def dead $eflags
     renamable $rax = ADD64rr killed renamable $rax, killed renamable $rcx, implicit-def dead $eflags
     RET64 $rax
 `;
 
-const compact = `
----
-name: spill_merge
-tracksRegLiveness: true
-stack:
-  - { id: 0, type: spill-slot, size: 8, alignment: 8 }
-  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
-body: |
-  bb.0:
-    liveins: $rdi
-    renamable $rbx = COPY $rdi
-    renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 0, $noreg
-    MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rax
-    renamable $rax = MOV64rm renamable $rbx, 1, $noreg, 8, $noreg
-    MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rax
-    CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
-    renamable $rax = MOV64rm %stack.0, 1, $noreg, 0, $noreg
-    renamable $rax = ADD64rm killed renamable $rax, %stack.1, 1, $noreg, 0, $noreg, implicit-def dead $eflags
-    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 16, $noreg
-    MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rcx
-    renamable $rcx = MOV64rm renamable $rbx, 1, $noreg, 24, $noreg
-    MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx
-    CALL64pcrel32 @use, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp
-    renamable $rcx = MOV64rm %stack.0, 1, $noreg, 0, $noreg
-    renamable $rcx = ADD64rm killed renamable $rcx, %stack.1, 1, $noreg, 0, $noreg, implicit-def dead $eflags
-    renamable $rax = ADD64rr killed renamable $rax, killed renamable $rcx, implicit-def dead $eflags
-    RET64 $rax
-`;
+const spill0 = 'MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rax';
+const reload0 = 'renamable $rax = MOV64rm %stack.0, 1, $noreg, 0, $noreg';
+const spill1 = 'MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rcx';
+const reload1 = 'renamable $rcx = MOV64rm %stack.1, 1, $noreg, 0, $noreg';
 
-const slots = [
-  'slot   live     refs  weight  color',
-  '.0     call 1     2     2.0     -',
-  '.1     call 1     2     2.0     -',
-  '.2     call 2     2     2.0     -',
-  '.3     call 2     2     2.0     -',
+const scanSpill0 = [
+  'slot  live    refs  weight  color',
+  '.0    call 1    1     1.0     -',
+  '.1    -         -     -       -',
 ].join('\n');
 
-const firstColors = [
-  'slot   live     refs  weight  color',
-  '.0     call 1     2     2.0     0',
-  '.1     call 1     2     2.0     1',
-  '.2     call 2     2     2.0     -',
-  '.3     call 2     2     2.0     -',
-  'colors: 0 1   (both newly used)',
+const scanReload0 = [
+  'slot  live    refs  weight  color',
+  '.0    call 1    2     2.0     -',
+  '.1    -         -     -       -',
 ].join('\n');
 
-const shared = [
-  'slot   live     refs  weight  color',
-  '.0     call 1     2     2.0     0',
-  '.1     call 1     2     2.0     1',
-  '.2     call 2     2     2.0     0   share .0',
-  '.3     call 2     2     2.0     1   share .1',
-  'overlap: .0/.1  .2/.3   cross-call: none',
+const scanSpill1 = [
+  'slot  live    refs  weight  color',
+  '.0    call 1    2     2.0     -',
+  '.1    call 2    1     1.0     -',
 ].join('\n');
 
-const mapped = [
-  'slot   live     refs  weight  color  new',
-  '.0     call 1     2     2.0     0     .0',
-  '.1     call 1     2     2.0     1     .1',
-  '.2     call 2     2     2.0     0     .0',
-  '.3     call 2     2     2.0     1     .1',
-  'mapping: 0->0  1->1  2->0  3->1',
+const scanReload1 = [
+  'slot  live    refs  weight  color',
+  '.0    call 1    2     2.0     -',
+  '.1    call 2    2     2.0     -',
+  'overlap: none   order: .0 .1',
 ].join('\n');
 
-const dropped = [
-  'slot   live     refs  weight  color  new',
-  '.0     call 1     2     2.0     0     .0',
-  '.1     call 1     2     2.0     1     .1',
-  '.2     call 2     2     2.0     0     .0',
-  '.3     call 2     2     2.0     1     .1',
-  'frame: 4 slots / 32 B  ->  2 slots / 16 B',
-  'removed: %stack.2 %stack.3',
+const color0 = [
+  'slot  live    refs  weight  color',
+  '.0    call 1    2     2.0     0',
+  '.1    call 2    2     2.0     -',
+  'colors: 0',
 ].join('\n');
 
-const stackRefs = [
-  'MOV64mr %stack.0, 1, $noreg, 0, $noreg, killed renamable $rax',
-  'MOV64mr %stack.1, 1, $noreg, 0, $noreg, killed renamable $rax',
-];
+const color1 = [
+  'slot  live    refs  weight  color',
+  '.0    call 1    2     2.0     0',
+  '.1    call 2    2     2.0     0   share .0',
+  'colors: 0',
+].join('\n');
 
-const phaseBStores = [
-  'MOV64mr %stack.2, 1, $noreg, 0, $noreg, killed renamable $rcx',
-  'MOV64mr %stack.3, 1, $noreg, 0, $noreg, killed renamable $rcx',
-];
+const rewriteStore = [
+  'slot  live    refs  weight  color  new',
+  '.0    call 1    2     2.0     0     .0',
+  '.1    call 2    2     2.0     0     .0',
+  'rewrite: %stack.1 -> %stack.0 (store)',
+].join('\n');
+
+const rewriteLoad = [
+  'slot  live    refs  weight  color  new',
+  '.0    call 1    2     2.0     0     .0',
+  '.1    call 2    2     2.0     0     .0',
+  'rewrite: %stack.1 -> %stack.0 (load)',
+  'frame: 2 slots / 16 B -> 1 slot / 8 B',
+  'removed: %stack.1',
+].join('\n');
 
 export const stackSlotColoringDemo = makeDemo(
   'stack-slot-coloring',
   'stack-slot-coloring · x86-64',
   [
     {
-      title: '第 1 步 · 收集 spill slot 与活跃区间',
-      note: 'StackSlotColoring 不新建栈槽：它从 LiveStacks 取寄存器分配器留下的 4 个 spill slot，扫描 FI 操作数并按块频率给每个槽累加 spill weight，同时记下 MachineMemOperand 以便后面改写。此时 4 个槽仍然各自独立，颜色列是空的。',
+      title: '第 1 步 · 扫描 %stack.0 的 spill',
+      note: '当前指令把 %rax 溢出到 %stack.0。LiveStacks 从这条 store 开始记录 .0 的活跃区间：refs=1，按块频率累加一次 spill weight。',
       before,
       after: before,
-      state: slots,
-      focus: [
-        '- { id: 0, type: spill-slot, size: 8, alignment: 8 }',
-        '- { id: 1, type: spill-slot, size: 8, alignment: 8 }',
-        '- { id: 2, type: spill-slot, size: 8, alignment: 8 }',
-        '- { id: 3, type: spill-slot, size: 8, alignment: 8 }',
-      ],
+      state: scanSpill0,
+      cursor: { line: spill0 },
+      focus: ['- { id: 0, type: spill-slot, size: 8, alignment: 8 }'],
     },
     {
-      title: '第 2 步 · 第一个槽拿到基准色',
-      note: '按 spill weight 从高到低处理，权重相同则保持 frame index 顺序。ColorSlot 先看已用颜色，再取下一个空闲槽：%stack.0 拿到颜色 0，%stack.1 与它重叠，只能拿颜色 1。MIR 还没改写，变化只发生在内部状态里。',
+      title: '第 2 步 · 扫描 %stack.0 的 reload',
+      note: '第一个 call 之后重新载入 %stack.0。这是 .0 的最后一条引用：refs=2，权重 2.0，区间在这里结束。',
       before,
       after: before,
-      state: firstColors,
-      focus: stackRefs,
+      state: scanReload0,
+      cursor: { line: reload0 },
+      focus: ['- { id: 0, type: spill-slot, size: 8, alignment: 8 }'],
     },
     {
-      title: '第 3 步 · 跨 call 复用颜色',
-      note: '%stack.2 检查颜色 0：它和 %stack.0 的活跃区间分处两个 call 的两侧，不相交，于是共享颜色 0。%stack.3 与 %stack.2 重叠，颜色 0 不行；颜色 1 里的 %stack.1 已经死亡，于是共享颜色 1。四个槽收敛到两个颜色。',
+      title: '第 3 步 · 扫描 %stack.1 的 spill',
+      note: '第二个 call 之前，%rcx 被溢出到 %stack.1。此时 .0 已经死亡；新区间从这条 store 开始，refs=1。',
       before,
       after: before,
-      state: shared,
-      focus: phaseBStores,
+      state: scanSpill1,
+      cursor: { line: spill1 },
+      focus: ['- { id: 1, type: spill-slot, size: 8, alignment: 8 }'],
     },
     {
-      title: '第 4 步 · 改写所有 frame index',
-      note: 'SlotMapping 把每条 FI 操作数从旧槽改成颜色槽，MachineMemOperand 里的 FixedStackPseudoSourceValue 也一起改。这里 %stack.2 的 store/load 变成 %stack.0，%stack.3 变成 %stack.1；指令条数不变。',
+      title: '第 4 步 · 扫描 %stack.1 的 reload',
+      note: '第二个 call 之后载入 %stack.1，.1 的区间也结束。两个区间分处两个 call 两侧，互不重叠；扫描完成，处理顺序是 .0、.1。',
       before,
+      after: before,
+      state: scanReload1,
+      cursor: { line: reload1 },
+      focus: ['- { id: 1, type: spill-slot, size: 8, alignment: 8 }'],
+    },
+    {
+      title: '第 5 步 · 给 .0 分配颜色',
+      note: '按 frame index 顺序处理区间。.0 是第一个，颜色 0 还没有被占用；它直接拿颜色 0（也就是 %stack.0 自己）。这一步没有改写 MIR。',
+      before,
+      after: before,
+      state: color0,
+      cursor: { line: spill0 },
+    },
+    {
+      title: '第 6 步 · 让 .1 共享颜色 0',
+      note: '处理 .1 时，已用颜色只有 0。ColorSlot 检查 .1 和颜色 0 里的 .0 是否重叠：两者分处两个 call 两侧，没有交集，于是 .1 共享颜色 0。',
+      before,
+      after: before,
+      state: color1,
+      cursor: { line: spill1 },
+    },
+    {
+      title: '第 7 步 · 改写 .1 的 store',
+      note: 'SlotMapping 把 .1 的 store 改成颜色槽 %stack.0，MachineMemOperand 也一起改。这一步只处理这一条指令，所以 MIR 只变一行。',
+      before,
+      after: storeRewritten,
+      state: rewriteStore,
+      cursor: { line: spill1 },
+    },
+    {
+      title: '第 8 步 · 改写 .1 的 reload 并回收对象',
+      note: '最后一条 %stack.1 引用也改成 %stack.0。此后 .1 不再被任何指令使用，从 MachineFrameInfo 删除；stack 列表只剩 .0，frame 从 16 字节降到 8 字节。',
+      before: storeRewritten,
       after: rewritten,
-      state: mapped,
-    },
-    {
-      title: '第 5 步 · 删掉空出来的栈对象',
-      note: '最后从 MachineFrameInfo 里删除没有任何颜色使用的对象。stack: 从 4 项降到 2 项，栈帧从 32 字节降到 16 字节；动态 load/store 次数没变，收益来自更小的 frame 和更好的栈缓存局部性。',
-      before: rewritten,
-      after: compact,
-      state: dropped,
+      state: rewriteLoad,
+      cursor: { line: reload1 },
     },
   ],
   {
     en: {
       steps: [
         {
-          title: 'Step 1 · Collect spill slots and live ranges',
-          note: 'StackSlotColoring does not create slots: it takes the four spill slots left by the register allocator from LiveStacks, scans FI operands to accumulate a spill weight per slot from block frequency, and records MachineMemOperands for the rewrite. The four slots are still independent; the color column is empty.',
+          title: 'Step 1 · Scan the spill into %stack.0',
+          note: 'This instruction spills %rax to %stack.0. LiveStacks starts recording the live range of .0 at this store: refs=1 and one block-frequency-weighted spill weight.',
         },
         {
-          title: 'Step 2 · The first slots take the base colors',
-          note: 'Slots are processed by spill weight, highest first, with ties kept in frame-index order. ColorSlot looks at the used colors first, then takes the next free slot: %stack.0 gets color 0, and %stack.1 overlaps it, so it gets color 1. MIR is unchanged; only the internal state moves.',
+          title: 'Step 2 · Scan the reload of %stack.0',
+          note: 'After the first call, %stack.0 is reloaded. This is the last reference of .0: refs=2, weight 2.0, and the interval ends here.',
         },
         {
-          title: 'Step 3 · Reuse colors across the calls',
-          note: '%stack.2 checks color 0: its live range and %stack.0’s sit on opposite sides of two calls, so they do not overlap and it shares color 0. %stack.3 overlaps %stack.2, so color 0 is out; but %stack.1 in color 1 is already dead, so it shares color 1. Four slots collapse to two colors.',
+          title: 'Step 3 · Scan the spill into %stack.1',
+          note: 'Before the second call, %rcx is spilled to %stack.1. .0 is already dead; the new interval starts at this store with refs=1.',
         },
         {
-          title: 'Step 4 · Rewrite every frame index',
-          note: 'SlotMapping rewrites each FI operand from its old slot to its color slot, and updates the FixedStackPseudoSourceValue in the MachineMemOperands with it. Here %stack.2’s store/load become %stack.0, and %stack.3 becomes %stack.1; the instruction count does not change.',
+          title: 'Step 4 · Scan the reload of %stack.1',
+          note: 'After the second call, %stack.1 is reloaded and the interval of .1 ends too. The two intervals sit on opposite sides of the two calls and do not overlap; the scan is complete and the order is .0, .1.',
         },
         {
-          title: 'Step 5 · Drop the objects that are now unused',
-          note: 'Finally, objects that no color uses are removed from MachineFrameInfo. stack: shrinks from four entries to two, and the frame from 32 bytes to 16. The number of dynamic loads and stores is unchanged; the win is a smaller frame and better stack-cache locality.',
+          title: 'Step 5 · Give .0 a color',
+          note: 'Intervals are processed in frame-index order. .0 is first and color 0 is unused, so it takes color 0 — the frame index of %stack.0 itself. MIR is unchanged at this step.',
+        },
+        {
+          title: 'Step 6 · Let .1 share color 0',
+          note: 'When .1 is processed, the only used color is 0. ColorSlot checks whether .1 overlaps .0 in color 0: they sit on opposite sides of the two calls, so .1 shares color 0.',
+        },
+        {
+          title: 'Step 7 · Rewrite the store of .1',
+          note: 'SlotMapping rewrites the store of .1 to its color slot %stack.0 and updates the MachineMemOperand with it. This step processes one instruction, so exactly one MIR line changes.',
+        },
+        {
+          title: 'Step 8 · Rewrite the reload and drop the object',
+          note: 'The last %stack.1 reference becomes %stack.0 as well. Nothing uses .1 any more, so it is removed from MachineFrameInfo; the stack list keeps only .0 and the frame shrinks from 16 bytes to 8.',
         },
       ],
     },

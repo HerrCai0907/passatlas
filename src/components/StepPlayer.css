@@ -417,12 +417,32 @@
 
 .pa-line {
   display: grid;
-  grid-template-columns: 2.1em minmax(0, 1fr);
+  grid-template-columns: 0.9em 2.1em minmax(0, 1fr);
   align-items: baseline;
-  gap: 10px;
-  padding: 0 12px;
+  gap: 8px;
+  padding: 0 12px 0 8px;
   line-height: 1.72;
   border-left: 2px solid transparent;
+}
+
+/* cursor：贴在 IR 最左边的小箭头，指向这一步正在处理的那条指令 */
+.pa-line__cursor {
+  position: relative;
+  display: block;
+  width: 0.9em;
+  height: 1.72em;
+}
+
+.pa-line--cursor .pa-line__cursor::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 0;
+  height: 0;
+  border-block: 4px solid transparent;
+  border-left: 6px solid var(--accent);
+  transform: translateY(-50%);
 }
 
 .pa-line__no {

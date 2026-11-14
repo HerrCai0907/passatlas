@@ -320,6 +320,29 @@ entry:
   assert.equal(demo.steps[2].state.length, 3);
 }
 
+// ---- cursor：指向当前处理的指令，一步最多一个，构建期解析成面板行号 ----
+{
+  const source = {
+    title: 'cursor',
+    note: '',
+    before: 'define void @f() {\nentry:\n  %x = add i32 1, 2\n  ret void\n}',
+    after: 'define void @f() {\nentry:\n  %x = add i32 1, 2\n  ret void\n}',
+  };
+  const onBefore = makeStep({ ...source, cursor: { line: '%x = add i32 1, 2' } });
+  assert.equal(onBefore.cursor.side, 'before');
+  assert.equal(onBefore.cursor.index, 2);
+  assert.equal(onBefore.cursor.line.trim(), '%x = add i32 1, 2');
+
+  const onAfter = makeStep({ ...source, cursor: { line: 'ret void', side: 'after' } });
+  assert.equal(onAfter.cursor.side, 'after');
+  assert.equal(onAfter.cursor.index, 3);
+
+  assert.throws(
+    () => makeStep({ ...source, cursor: { line: '%missing' } }),
+    /cursor not found/,
+  );
+}
+
 // ---- 播放器高度预留：maxLines 取所有步骤、两侧的最大行数 ----
 {
   const demo = makeDemo('height', 'height', [
@@ -428,6 +451,14 @@ entry:
   assert.ok(
     ssc.steps.some((step) => step.state.some((line) => line.mark === 'add')),
     '状态快照应显示新增的中间状态',
+  );
+  assert.ok(ssc.steps.every((step) => step.cursor), '栈槽着色每一步都应有 cursor');
+  assert.ok(
+    ssc.steps.every((step) => {
+      const lines = step.cursor.side === 'before' ? step.before : step.after;
+      return step.cursor.index >= 0 && step.cursor.index < lines.length;
+    }),
+    'cursor 必须落在对应面板的行号范围内',
   );
 }
 
