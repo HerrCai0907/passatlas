@@ -151,10 +151,12 @@ slot   weight  color
 - `before` / `after` are **raw IR strings**; indentation is dedented automatically.
 - Do **not** hand-write diff marks. `makeStep()` computes an LCS line diff at build time and
   marks added / removed lines.
-- From `stack-slot-coloring` onward, every step also supplies a `state` snapshot of the pass's
-  internal state (worklist, slot table, coloring, live intervals, …). `makeDemo()` diffs consecutive
-  snapshots, so the animation shows the algorithm running, not just the IR before and after. Keep
-  state lines language-neutral (identifiers, numbers, arrows, `-`) and explain them in `note`.
+- **Required from `stack-slot-coloring` onward: every step supplies a `state` snapshot** of the
+  pass's internal state (worklist, slot table, coloring, live intervals, …). `makeDemo()` diffs
+  consecutive snapshots, so the animation shows the algorithm running, not just the IR before and
+  after. This is part of the page, not an optional extra: a step that only changes IR without
+  showing the decision that produced it is incomplete. Keep state lines language-neutral
+  (identifiers, numbers, arrows, `-`) and explain them in `note`.
 - Keep each step focused on one change. 2–4 steps per pass, 5–16 lines per side. Machine IR demos
   may run to ~30 lines because each step needs its MBB/PHI context; still change one thing per step.
 - The `after` of step *n* should be the `before` of step *n + 1* — the reader may replay it.
@@ -216,6 +218,8 @@ updated: 2026-11-01
 - [ ] `npm run build` passes, page appears under `/passes/<id>/` and `/en/passes/<id>/`
 - [ ] local review server is running and the URLs are reported (see §11)
 - [ ] animation has ≥ 2 steps, each step's IR is valid-looking LLVM (opaque `ptr`, `phi`, …)
+- [ ] from `stack-slot-coloring` onward, every step has a `state` snapshot and the player shows
+      the pass's internal state alongside the IR, not only the before/after diff
 - [ ] Machine IR pages set `format: 'mir'`, show real MIR (MBBs, virtual registers, register
       classes), and end with `llc` commands instead of `opt`
 - [ ] frontmatter `demo` matches a registry key, and English step titles / notes exist
@@ -275,6 +279,8 @@ Rules:
 - IR mode keeps the diff colours: green = added line, red = removed, amber = "look at this"
   (`focus`). CFG mode shows the same steps as before/after graphs; do not drop either mode.
 - CFG mode reuses `CFGCanvas` (non-interactive) so node geometry stays identical to `CFGViewer`.
+- Algorithm state is part of the animation: when a demo supplies `state`, `StepPlayer` renders it
+  above the IR panes and reserves `Demo.stateMaxLines`. Do not leave internal state only in `note`.
 - Do not add new semantic colours without changing `tokens.css` and this file.
 - No layout shift between steps: IR mode reserves `Demo.maxLines` (computed at build time),
   CFG mode reserves the tallest step's scaled graph, `Demo.stateMaxLines` reserves the algorithm
