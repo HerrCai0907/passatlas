@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Liveness', 'ADCE', 'CFG']
 demo: dce
 source: llvm/lib/Transforms/Scalar/DCE.cpp
-updated: 2026-11-05
+updated: 2026-11-15
 ---
 
 ## What problem does it solve
@@ -55,6 +55,8 @@ ADCE also does a CFG simplification step: unreachable blocks are cut out, empty 
 Dataflow direction is determined by dependencies: `ret %x` uses `%x`, so the definition of `%x` must stay; `%dead` has no users, so its definition can disappear. Following the use-def chain from results back to sources is exactly backwards propagation.
 
 This also explains why DCE feels so natural on SSA: the use-def chains are explicit, so no additional reaching-definitions analysis is needed.
+
+The animation splits ADCE into six steps: mark the store and ret roots, walk the use-def chain to `%live`, then sweep the three dead instructions in reverse dependency order. The state panel tracks the worklist, the live set and the remaining dead set, and the arrow sits on the instruction being processed, so you can see why each value lives or dies in both the IR and the state.
 
 ## Cost and caveats
 

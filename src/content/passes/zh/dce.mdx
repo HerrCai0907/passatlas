@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Liveness', 'ADCE', 'CFG']
 demo: dce
 source: llvm/lib/Transforms/Scalar/DCE.cpp
-updated: 2026-11-05
+updated: 2026-11-15
 ---
 
 ## 它解决什么问题
@@ -55,6 +55,8 @@ ADCE 还会多做一步 CFG 简化：不可达的基本块直接摘掉，空的�
 数据流方向由依赖决定：`ret %x` 使用 `%x`，所以 `%x` 的定义必须保留；而 `%dead` 没人使用，它的定义就可以消失。沿着 use-def 链从结果往源头走，就是反向传播。
 
 这也解释了为什么 DCE 对 SSA 形式特别自然：use-def 链显式存在，不需要额外的到达定值分析。
+
+上面的动画把 ADCE 拆成六步：先标 store / ret 两个根，再沿 use-def 链标 `%live`，最后按逆依赖顺序清扫三条死指令。状态面板始终显示 worklist、live 集合和待清扫的 dead 集合；箭头指向当前处理的指令，所以每一条指令为什么活、为什么死，都能在 IR 和状态里同时看到。
 
 ## 代价与注意点
 
