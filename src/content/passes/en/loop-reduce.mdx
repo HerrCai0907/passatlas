@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['ScalarEvolution', 'Induction Variable', 'Addressing Mode', 'Cost Model']
 demo: loop-reduce
 source: llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp
-updated: 2026-11-12
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -140,6 +140,8 @@ store i32 7, ptr %lsr.iv, align 4
 ```
 
 `%mul` and `%p` are gone and the address becomes a single add. `%i` survives because the exit comparison still uses it — rewriting the loop condition is not LSR's job.
+
+The animation splits LSR's decision chain into seven steps: establish `%p = %a + 12*%i`, enumerate candidates and compare their cost, insert the pointer φ, compute `%scevgep` on the back edge, retarget the store, and delete `%p` and `%mul`. The state panel moves from the address formula to the candidate costs to the chosen IV and step, while the arrow stays on the instruction being processed.
 
 ## Cost and pitfalls
 

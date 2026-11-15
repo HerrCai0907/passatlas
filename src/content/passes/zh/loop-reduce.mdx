@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['ScalarEvolution', 'Induction Variable', 'Addressing Mode', 'Cost Model']
 demo: loop-reduce
 source: llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp
-updated: 2026-11-12
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -140,6 +140,8 @@ store i32 7, ptr %lsr.iv, align 4
 ```
 
 `%mul` 和 `%p` 消失了，地址变成一次 `add`。`%i` 还在，因为它仍被出口比较使用——LSR 不负责改写循环条件。
+
+动画把 LSR 的决策链拆成七步：先建立 `%p = %a + 12*%i` 的公式，再枚举候选并比较代价，然后插入指针 φ、在回边算 `%scevgep`、替换 store 地址，最后删除 `%p` 和 `%mul`。状态面板从「地址公式」切到「候选与代价」再到「选中的 IV 和步长」，箭头始终停在当前处理的那条指令。
 
 ## 代价与坑
 
