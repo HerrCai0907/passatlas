@@ -10,7 +10,7 @@ stage: []
 tags: ['AVX', 'SSE', 'MIR', 'ABI', 'x86-64']
 demo: x86-insert-vzeroupper
 source: llvm/lib/Target/X86/X86InsertVZeroUpper.cpp
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -131,6 +131,8 @@ CALL64pcrel32 target-flags(x86-plt) @sse_sum, csr_64, implicit $rsp, implicit $s
 ```
 
 That is also why the pass only dares to insert at calls and returns: the ABI does not allow a live YMM value across those points, so zeroing cannot destroy anything. Inside a function the compiler assumes that AVX-enabled code does not produce legacy SSE, so no guard is needed before an inlined SSE instruction.
+
+The animation scans the block and tracks the upper YMM state: two 256-bit loads and the multiply make it dirty, so `VZEROUPPER` goes in before the call; the call returns clean, the later 256-bit load/add dirty it again, and one more `VZEROUPPER` goes in before the return. The state panel keeps only the state, the last write and the insertion points, while the arrow stops at the current instruction.
 
 ## Cost and pitfalls
 
