@@ -10,7 +10,7 @@ stage: []
 tags: ['PGO', 'Code Layout', 'Section', 'MIR', 'AutoFDO']
 demo: machine-function-splitter
 source: llvm/lib/CodeGen/MachineFunctionSplitter.cpp
-updated: 2026-11-12
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -128,6 +128,8 @@ bb.2.cold (bbsections Cold):
 ### Relation to basic block sections
 
 MFS borrows the basic block section machinery (section IDs, sorting, symbols), but its granularity is “the cold region of one function”, not “one section per block”. In LLVM 23 the two can coexist: if a function appears in the basic-block-sections profile, `BasicBlockSections` owns it and MFS skips it; with `-basic-block-sections=all`, MFS does not run at all. In earlier versions they were mutually exclusive — `TargetPassConfig` simply did not add MFS when BB sections were enabled.
+
+The animation splits MFS into four steps: read the profile, classify each block, mark `bb.2.cold` with `bbsections Cold`, and hand it to AsmPrinter for `.text.split`. The state panel shows the block counts, the cold decision and the section assignment; the arrow stops at the profile or the block being marked, and no instruction changes.
 
 ## Cost and pitfalls
 

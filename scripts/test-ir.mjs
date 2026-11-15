@@ -509,9 +509,12 @@ entry:
   assert.equal(cold?.kind, 'taken');
 
   // 块属性属于标签的一部分：MFS 只改属性，指令不变
-  const splitStep = parseMIR(
-    toIR(getDemo('machine-function-splitter', 'zh').steps[1].after),
-  ).functions[0];
+  const mfsSteps = getDemo('machine-function-splitter', 'zh').steps;
+  const markedStep = mfsSteps.find((step) =>
+    step.after.some((line) => line.text.includes('(bbsections Cold)')),
+  );
+  assert.ok(markedStep, 'MFS 演示应包含带 bbsections 属性的步骤');
+  const splitStep = parseMIR(toIR(markedStep.after)).functions[0];
   assert.equal(
     splitStep.blocks.find((block) => block.id === 'bb.2.cold')?.label,
     'bb.2.cold (bbsections Cold)',
