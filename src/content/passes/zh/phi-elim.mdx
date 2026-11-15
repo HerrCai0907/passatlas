@@ -10,7 +10,7 @@ stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
 tags: ['SSA', 'PHI', 'Critical Edge', 'MIR']
 demo: phi-elim
 source: llvm/lib/CodeGen/PHIElimination.cpp
-updated: 2026-11-10
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -109,6 +109,8 @@ bb.5.crit:
   %2:gr32 = COPY %1:gr32
   JMP_1 %bb.3.merge
 ```
+
+动画把 φ 拆除拆成六步：读入边、发现 critical edge、拆边、在两个前驱里各写一条 COPY、删除 PHI。状态面板列出每条入边对应的前驱和值，以及 COPY 的落点；箭头停在 PHI 或当前写 COPY 的块上。
 
 ## 代价与坑
 
