@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Cloning', 'ValueMap', 'CFG']
 demo: inline-function
 source: llvm/lib/Transforms/Utils/InlineFunction.cpp
-updated: 2026-11-09
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -27,7 +27,7 @@ import I18nLink from '../../../components/I18nLink.astro';
 
 `InlineFunction` 是 `llvm/lib/Transforms/Utils/InlineFunction.cpp` 里的一个 utility，不是独立 pass。`InlinerPass` 在 advisor 说 yes 之后调用它；`AlwaysInlinerPass` 也会复用同一套机制。
 
-上面的分步动画走了一遍带分支的 callee：`@pick` 从 `%pos` 和 `%neg` 各返回一次，内联后 caller 多出两个分支目标和一个 `%cont` 块。
+上面的分步动画用一个单块 callee，把下面这套机制一条指令一条指令地演一遍；带分支和多个 `ret` 的 CFG 缝合在「拆分与缝合」里单独说明。
 
 ### 先过 CanInlineCallSite
 
@@ -92,6 +92,8 @@ entry ──> callee.entry.i ──> pos.i ──┐
 - pass 随后调用 `updateCGAndAnalysisManagerForCGSCCPass` 更新调用图、失效分析、必要时拆分 SCC。
 
 callee 如果 internal、零 live use、又不是 lib function，`InlinerPass` 会把函数体掏空并排队，最后统一 `CG.markDeadFunction`。这一步在 `InlineFunction` 之外，属于 pass 的收尾。
+
+动画用一个单块 callee 把机制拆成六步：检查 call site、在 call 处拆块、逐条克隆并用 ValueMap 重映射、用克隆后的返回值替换 call 结果、删除 callee。状态面板显示 ValueMap、返回点映射和块结构，箭头停在当前处理的那条指令；带多个 `ret` 的完整 CFG 缝合见本节前面的说明。
 
 ## 代价与坑
 
