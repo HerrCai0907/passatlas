@@ -10,7 +10,7 @@ stage: []
 tags: ['PGO', 'Instrumentation', 'Counters', 'ValueProfile']
 demo: pgo-instr-gen
 source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
-updated: 2026-11-09
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -93,6 +93,8 @@ Constant-length memory operations are not instrumented; `memmove` is sampled, bu
 - `llvm.instrprof.increment` → load / add / store on the `@__profc_<func>` array; loops may get counter promotion.
 - `llvm.instrprof.value.profile` → `__llvm_profile_instrument_target` (kind 0/2) or `__llvm_profile_instrument_memop` (kind 1).
 - Every function also gets an `@__profd_<func>` profile-data structure with the function-name hash, CFG hash, counter pointer and number of value sites.
+
+The animation first computes the spanning tree and the number of counters, then inserts each increment and value.profile. The state panel records the counted edges, the counter index and the value kind; the arrow stops at the current insertion point, so edge counting and value profiling remain visibly different operations.
 
 ## Cost and pitfalls
 

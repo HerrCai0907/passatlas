@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Peephole', 'Worklist', 'Canonicalization']
 demo: instcombine
 source: llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
-updated: 2026-11-03
+updated: 2026-11-15
 ---
 
 ## 它解决什么问题
@@ -67,6 +67,8 @@ LLVM IR 有 `poison` 与 `undef`，还有 `nsw` / `nuw` / `exact` 这类承诺�
 - 删指令前必须确认它没有副作用，`store`、`call`、`fence` 都不行。
 
 这也是为什么本页的演示里，`sub %b, %b` 折叠成 `0` 之后，那条已经没人使用的 `shl` 要留给 DCE——instcombine 只做**局部**化简，不负责全局的死代码消除。
+
+动画把一次不动点迭代拆成五步：每个恒等模式单独一步，worklist、当前指令、命中的规则和替换结果都在状态面板里；最后一步停在 worklist 里剩下的 `%b`，说明 instcombine 不负责 DCE。箭头只指向当前被 visit 的那条指令，因此能看到一次改写如何把使用者重新入队。
 
 ## 代价
 

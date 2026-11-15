@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Live Interval', 'Greedy', 'Spill', 'Coalescing']
 demo: regalloc
 source: llvm/lib/CodeGen/RegAllocGreedy.cpp
-updated: 2026-11-10
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -127,6 +127,8 @@ MOV32mr %stack.0, 1, _, 0, _, %12:gr32   ; spill
 ```
 
 这不是“多了一条指令”这么简单：spill 会改变活跃区间、增加内存流量，还可能把热循环变成 load / store 密集的代码。`-stats` 里的 `spills` 和 `folded-spills` 是观察它的直接指标。
+
+动画把 greedy 的一次运行拆成十二步：算区间、按 spill weight 排序、在 COPY 处合并、依次给区间选寄存器、再用 virtregrewriter 逐条改写并删除 COPY。状态面板列出每个区间的端点、权重和分配结果；箭头停在当前处理的指令，能看清 `%2/%3` 和 `%4` 是在哪一步共享 `$eax` 的。
 
 ## 代价与坑
 

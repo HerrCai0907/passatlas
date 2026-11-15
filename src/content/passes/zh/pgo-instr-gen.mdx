@@ -10,7 +10,7 @@ stage: []
 tags: ['PGO', 'Instrumentation', 'Counters', 'ValueProfile']
 demo: pgo-instr-gen
 source: llvm/lib/Transforms/Instrumentation/PGOInstrumentation.cpp
-updated: 2026-11-09
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -93,6 +93,8 @@ call void @llvm.instrprof.value.profile(ptr @__profn_dispatch, i64 1709570221313
 - `llvm.instrprof.increment` → 对 `@__profc_<func>` 数组的 load / add / store；循环里可能做 counter promotion。
 - `llvm.instrprof.value.profile` → `__llvm_profile_instrument_target`（kind 0/2）或 `__llvm_profile_instrument_memop`（kind 1）。
 - 每个函数还有 `@__profd_<func>` 的 profile data 结构，记录函数名 hash、CFG hash、计数器指针和 value site 数。
+
+动画先算生成树和计数器数量，再逐个插入 increment 和 value.profile。状态面板记录每条被计数的边、counter index 和 value kind；箭头停在当前插入点，所以能区分「边计数」和「值采样」是两类不同的插桩。
 
 ## 代价与坑
 

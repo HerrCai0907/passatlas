@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Cloning', 'ValueMap', 'CFG']
 demo: inline-function
 source: llvm/lib/Transforms/Utils/InlineFunction.cpp
-updated: 2026-11-09
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -27,7 +27,7 @@ This page only covers "how the rewrite happens". Which call is worth inlining is
 
 `InlineFunction` is a utility in `llvm/lib/Transforms/Utils/InlineFunction.cpp`, not a standalone pass. `InlinerPass` calls it after the advisor says yes; `AlwaysInlinerPass` reuses the same machinery.
 
-The step-by-step animation above walks through a callee with a branch: `@pick` returns once from `%pos` and once from `%neg`, so after inlining the caller has two extra branch targets and a `%cont` block.
+The step-by-step animation uses a single-block callee to play the mechanism below one instruction at a time; CFG stitching for branches and multiple returns is described under “Splitting and stitching”.
 
 ### Start with CanInlineCallSite
 
@@ -92,6 +92,8 @@ Cloned instructions inherit the original `!dbg` and build an `inlinedAt` chain s
 - the pass then calls `updateCGAndAnalysisManagerForCGSCCPass` to update the call graph, invalidate analyses and split SCCs when necessary.
 
 If the callee is internal, has zero live uses and is not a lib function, `InlinerPass` empties its body and queues it, eventually calling `CG.markDeadFunction`. That step is outside `InlineFunction` and belongs to the pass's cleanup.
+
+The animation uses a single-block callee to walk the mechanism in six steps: check the call site, split at the call, clone and remap instruction by instruction with the ValueMap, replace uses of the call result with the cloned return value, and delete the callee. The state panel shows the ValueMap, the return mapping and the block structure; the arrow stops at the instruction being processed. CFG stitching for multiple returns is described earlier in this section.
 
 ## Cost and pitfalls
 

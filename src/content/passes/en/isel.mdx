@@ -10,7 +10,7 @@ stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
 tags: ['SelectionDAG', 'GlobalISel', 'Legalization', 'MIR']
 demo: isel
 source: llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp
-updated: 2026-11-10
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -108,6 +108,8 @@ The difference is in “multiply by 3 and add 1”:
 - **AArch64** is a three-address machine. `ADDWrs %2, %2, 1` means `w2 + (w2 << 1)`, and `ADDWri` adds an immediate. There are no implicit flags and no COPY inserted to satisfy a two-address constraint.
 
 These are not “optimisation tricks”; they are target constraints that selection must satisfy. `%0:gr64` is virtual register 0 with register class `gr64`; `$rdi` is a physical register. The function is still SSA at this point; only types and operations have moved to the target.
+
+The animation separates the two levels of GlobalISel: the first six steps choose a register bank for one vreg at a time, and the last six replace one `G_*` instruction at a time. The state panel lists each vreg's bank and selected instruction, and the arrow points at the current instruction, so you can see in which step the `MOV32rm` addressing mode and the `LEA` scale are folded in.
 
 ## Cost and pitfalls
 

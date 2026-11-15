@@ -10,7 +10,7 @@ stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
 tags: ['SSA', 'PHI', 'Critical Edge', 'MIR']
 demo: phi-elim
 source: llvm/lib/CodeGen/PHIElimination.cpp
-updated: 2026-11-10
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -109,6 +109,8 @@ bb.5.crit:
   %2:gr32 = COPY %1:gr32
   JMP_1 %bb.3.merge
 ```
+
+The animation splits φ elimination into six steps: read the incoming edges, find the critical edge, split it, write one COPY in each predecessor, and delete the PHI. The state panel lists the predecessor/value pairs and where each COPY lands; the arrow stops at the PHI or at the block that receives the COPY.
 
 ## Cost and pitfalls
 

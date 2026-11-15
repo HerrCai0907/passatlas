@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Peephole', 'Worklist', 'Canonicalization']
 demo: instcombine
 source: llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
-updated: 2026-11-03
+updated: 2026-11-15
 ---
 
 ## What problem does it solve
@@ -67,6 +67,8 @@ LLVM IR has `poison` and `undef`, plus promises such as `nsw`, `nuw` and `exact`
 - before deleting an instruction, confirm it has no side effects: `store`, `call` and `fence` are out.
 
 This is why, in the demo on this page, after `sub %b, %b` folds to `0`, the now-unused `shl` is left for DCE — instcombine only performs **local** simplification and does not do global dead-code elimination.
+
+The animation splits one fixed-point iteration into five steps: each identity pattern gets its own step, and the state panel shows the worklist, the current instruction, the matched rule and the replacement. The last step stops at the `%b` left in the worklist, which shows that instcombine does not run DCE; the arrow only ever points at the instruction being visited, so you can watch a rewrite push its users back onto the worklist.
 
 ## Cost
 

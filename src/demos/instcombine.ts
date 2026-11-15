@@ -1,7 +1,8 @@
 import { makeDemo } from './types.ts';
 
-const step0 = `
+const input = `
 define i32 @scale(i32 %x) {
+entry:
   %a = add i32 %x, 0
   %b = mul i32 %a, 8
   %c = sub i32 %b, %b
@@ -10,66 +11,137 @@ define i32 @scale(i32 %x) {
 }
 `;
 
-const step1 = `
+const afterAdd = `
 define i32 @scale(i32 %x) {
+entry:
   %b = mul i32 %x, 8
   %c = sub i32 %b, %b
-  ret i32 %c
+  %d = or i32 %c, 0
+  ret i32 %d
 }
 `;
 
-const step2 = `
+const afterMul = `
 define i32 @scale(i32 %x) {
+entry:
   %b = shl i32 %x, 3
   %c = sub i32 %b, %b
-  ret i32 %c
+  %d = or i32 %c, 0
+  ret i32 %d
 }
 `;
 
-const step3 = `
+const afterSub = `
 define i32 @scale(i32 %x) {
+entry:
+  %b = shl i32 %x, 3
+  %d = or i32 0, 0
+  ret i32 %d
+}
+`;
+
+const afterOr = `
+define i32 @scale(i32 %x) {
+entry:
   %b = shl i32 %x, 3
   ret i32 0
 }
 `;
 
+const addState = [
+  'worklist        current  rule              result',
+  '%a %b %c %d ret  %a      add X, 0 -> X     %a -> %x',
+].join('\n');
+
+const mulState = [
+  'worklist        current  rule              result',
+  '%b %c %d ret    %b      mul 2^3 -> shl     %b -> shl',
+].join('\n');
+
+const subState = [
+  'worklist        current  rule              result',
+  '%c %d ret       %c      X - X -> 0         %c -> 0',
+].join('\n');
+
+const orState = [
+  'worklist        current  rule              result',
+  '%d ret          %d      or X, 0 -> X       %d -> 0',
+].join('\n');
+
+const doneState = [
+  'worklist        current  rule              result',
+  '%b              %b      no users, left to DCE  -',
+].join('\n');
+
 export const instcombineDemo = makeDemo('instcombine', 'instcombine', [
   {
-    title: '第 1 步 · 消掉恒等运算',
-    note: 'add x, 0 与 or x, 0 不改变值，直接用操作数替换所有使用者，指令本身随即删除。这类改写不需要额外分析，纯模式匹配即可。',
-    before: step0,
-    after: step1,
+    title: '第 1 步 · add X, 0 直接用 X 替换',
+    note: 'InstCombine 从 worklist 弹出 %a，命中恒等模式：add 的右操作数是 0，结果就是 %x。所有使用者被改成 %x，%a 删除；%b 因为操作数变了，被重新压回 worklist。',
+    before: input,
+    after: afterAdd,
+    cursor: { line: '%a = add i32 %x, 0' },
+    focus: ['%a = add i32 %x, 0'],
+    state: addState,
   },
   {
-    title: '第 2 步 · 乘以 2 的幂变成左移',
-    note: '常量 8 是 2 的幂，乘法可以换成移位。指令更便宜，也给后端的指令选择留下更明确的形状。',
-    before: step1,
-    after: step2,
+    title: '第 2 步 · 乘 2 的幂改成左移',
+    note: '处理 %b：8 是 2^3，mul 换成 shl %x, 3。这条指令的 def-use 没变，但指令本身进了 worklist；新形态可能再触发别的模式。',
+    before: afterAdd,
+    after: afterMul,
+    cursor: { line: '%b = mul i32 %x, 8' },
+    focus: ['%b = mul i32 %x, 8'],
+    state: mulState,
   },
   {
-    title: '第 3 步 · x - x 折叠成 0',
-    note: 'sub %b, %b 恒为 0，ret 直接返回常量。注意 %b 已经没人使用，但 instcombine 只做局部化简，这条死代码要留给 DCE。',
-    before: step2,
-    after: step3,
+    title: '第 3 步 · X - X 折叠成 0',
+    note: '处理 %c：两个操作数相同，sub 恒为 0。指令被常量 0 替换并删除，%d 的操作数立刻变成 or 0, 0。',
+    before: afterMul,
+    after: afterSub,
+    cursor: { line: '%c = sub i32 %b, %b' },
+    focus: ['%c = sub i32 %b, %b'],
+    state: subState,
+  },
+  {
+    title: '第 4 步 · or 0, 0 折叠成 0',
+    note: 'x | 0 等于 x，所以 or 0, 0 等于 0；ret 直接返回常量。注意这一步只处理 %d，%b 现在没有任何使用者，但 instcombine 不会替 DCE 做全局清扫。',
+    before: afterSub,
+    after: afterOr,
+    cursor: { line: '%d = or i32 0, 0' },
+    focus: ['%d = or i32 0, 0'],
+    state: orState,
+  },
+  {
+    title: '第 5 步 · worklist 清空，死代码留给 DCE',
+    note: 'worklist 里最后剩下重新入队的 %b。它没有使用者，但 instcombine 的职责是模式匹配，不是删除所有死指令；随后的 DCE / ADCE 会把 %b 清掉。',
+    before: afterOr,
+    after: afterOr,
+    cursor: { line: '%b = shl i32 %x, 3' },
     focus: ['%b = shl i32 %x, 3'],
+    state: doneState,
   },
-],
-  {
-    en: {
-      steps: [
+], {
+  en: {
+    steps: [
       {
-        title: 'Step 1 · Remove identity operations',
-        note: 'add x, 0 and or x, 0 do not change the value, so every use is replaced with the operand and the instruction disappears. This needs no analysis — pure pattern matching.',
+        title: 'Step 1 · Replace add X, 0 with X',
+        note: 'InstCombine pops %a from the worklist and matches an identity: the right operand of the add is 0, so the result is %x. Every use is rewritten to %x and %a is erased; %b is pushed back onto the worklist because its operand changed.',
       },
       {
-        title: 'Step 2 · Turn multiply-by-power-of-two into a shift',
-        note: 'The constant 8 is a power of two, so the multiply becomes a shift. It is cheaper, and gives instruction selection a clearer shape.',
+        title: 'Step 2 · Turn multiply by a power of two into a shift',
+        note: 'Processing %b: 8 is 2^3, so the mul becomes shl %x, 3. The def-use chain is unchanged, but the new instruction is put back on the worklist because its new shape may match another pattern.',
       },
       {
-        title: 'Step 3 · Fold x - x to 0',
-        note: 'sub %b, %b is always 0, so ret returns a constant. Note that %b is now unused, but instcombine only does local simplification; this dead code is left to DCE.',
+        title: 'Step 3 · Fold X - X to 0',
+        note: 'Processing %c: both operands are the same value, so the sub is always 0. The instruction is replaced by the constant 0 and erased, and the operand of %d immediately becomes or 0, 0.',
       },
-      ],
-    },
+      {
+        title: 'Step 4 · Fold or 0, 0 to 0',
+        note: 'x | 0 equals x, so or 0, 0 equals 0 and ret returns a constant. This step only processes %d; %b now has no users, but instcombine does not run a global sweep in place of DCE.',
+      },
+      {
+        title: 'Step 5 · Empty worklist, dead code left to DCE',
+        note: 'The last worklist entry is %b, pushed back earlier. It has no users, but instcombine is a pattern engine, not a pass that deletes every dead instruction; the following DCE / ADCE removes %b.',
+      },
+    ],
   },
-);
+});

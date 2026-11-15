@@ -10,7 +10,7 @@ stage: ['-O2', '-O3']
 tags: ['CSSPGO', 'SamplePGO', 'PseudoProbe', 'Context']
 demo: sample-profile-inline
 source: llvm/lib/Transforms/IPO/SampleProfile.cpp
-updated: 2026-11-09
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -133,6 +133,8 @@ SizeLimit = clamp(函数指令数 × 12, 100, 10000)
 内联完才标注权重（`computeAndPropagateWeights` → `generateMDProfMetadata`）。内联进来的指令不需要复制 profile：`findFunctionSamples` 沿指令的 DILocation inline stack 往上走，在 profile 树里找到对应节点；probe 模式更直接，`FS->findSamplesAt(Probe->Id, Probe->Discriminator)`。
 
 这也是 CSSPGO 相对「按行号 + 函数名」的老 AutoFDO 最本质的变化：**上下文是 key，内联只是把 key 变长了**。
+
+动画把一次自顶向下的内联拆成六步：入队、比较阈值、展开 `foo`、发现 `bar` 的新上下文、展开 `bar`、队列清空。状态面板显示候选队列、样本数和上下文；箭头停在当前 call site，能看清内联如何把更长的上下文暴露出来。
 
 ## 代价与坑
 

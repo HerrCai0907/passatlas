@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['Live Interval', 'Greedy', 'Spill', 'Coalescing']
 demo: regalloc
 source: llvm/lib/CodeGen/RegAllocGreedy.cpp
-updated: 2026-11-10
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -127,6 +127,8 @@ MOV32mr %stack.0, 1, _, 0, _, %12:gr32   ; spill
 ```
 
 This is more than “one extra instruction”: a spill changes live ranges, adds memory traffic, and can turn a hot loop into load / store code. `spills` and `folded-spills` in `-stats` are the direct indicators.
+
+The animation splits one greedy run into twelve steps: compute intervals, sort by spill weight, coalesce at the COPY, assign registers interval by interval, then let virtregrewriter rewrite instructions and remove COPYs. The state panel lists each interval's endpoints, weight and assignment; the arrow stops at the current instruction, so you can see where `%2/%3` and `%4` start sharing `$eax`.
 
 ## Cost and pitfalls
 

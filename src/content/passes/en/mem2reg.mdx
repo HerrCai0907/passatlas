@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['SSA', 'Promotion', 'Dominance']
 demo: mem2reg
 source: llvm/lib/Transforms/Utils/Mem2Reg.cpp
-updated: 2026-11-01
+updated: 2026-11-15
 ---
 
 ## What problem does it solve
@@ -76,6 +76,8 @@ After renaming, the `store`s and the `alloca` have no users left and are removed
 A block only needs a φ when several predecessor paths bring different definitions together. `DF(X)` is exactly the set of blocks that a definition in X can reach but that X does not dominate — those are the places where values from different paths have to be merged.
 
 In the animation above, `then` and `else` both write `%slot` and meet at `merge`, so a φ is inserted at `merge`; the definition in `entry` does not reach `merge` (entry dominates merge, and every path must pass through a redefining block), so `entry` needs no φ.
+
+The animation walks the dominator tree: the state panel shows the promotable alloca, the dominance frontier, the two incoming edges of the φ and the rename stack, while the arrow stops on the current load or store. The φ incoming values are filled one at a time and the stores and alloca are deleted one at a time, so promotion is not a black box.
 
 ## Cost and pitfalls
 

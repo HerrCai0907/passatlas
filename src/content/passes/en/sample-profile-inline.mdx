@@ -10,7 +10,7 @@ stage: ['-O2', '-O3']
 tags: ['CSSPGO', 'SamplePGO', 'PseudoProbe', 'Context']
 demo: sample-profile-inline
 source: llvm/lib/Transforms/IPO/SampleProfile.cpp
-updated: 2026-11-09
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -133,6 +133,8 @@ Non-CS profiles have no context tree; the equivalent is `-sample-profile-merge-i
 Weights are annotated only after inlining (`computeAndPropagateWeights` → `generateMDProfMetadata`). Nothing needs to be copied into the inlined body: `findFunctionSamples` walks the instruction's DILocation inline stack up the profile tree to the right node, and probe mode is more direct still — `FS->findSamplesAt(Probe->Id, Probe->Discriminator)`.
 
 That is the real difference from line-number AutoFDO: **the context is the key, and inlining merely makes the key longer**.
+
+The animation splits one top-down inlining run into six steps: queue, threshold check, expand `foo`, discover `bar`'s new context, expand `bar`, drain the queue. The state panel shows the candidate queue, sample counts and contexts; the arrow stops at the current call site, so you can see how inlining exposes a longer context.
 
 ## Cost and pitfalls
 

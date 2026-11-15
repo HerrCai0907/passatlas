@@ -10,7 +10,7 @@ stage: []
 tags: ['AVX', 'SSE', 'MIR', 'ABI', 'x86-64']
 demo: x86-insert-vzeroupper
 source: llvm/lib/Target/X86/X86InsertVZeroUpper.cpp
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -131,6 +131,8 @@ CALL64pcrel32 target-flags(x86-plt) @sse_sum, csr_64, implicit $rsp, implicit $s
 ```
 
 这也是 pass 只敢在调用和返回前插的原因：这些位置按 ABI 不允许有活着的 YMM 值跨过，清零不会破坏任何东西。函数内部则默认「开了 AVX 就不会生成 legacy SSE」，不需要在内联的 SSE 指令前插。
+
+动画按块扫描，逐步跟踪 YMM 的高位状态：两次 256 位 load 和乘法把它写脏，于是在 call 前插 `VZEROUPPER`；调用后状态回到 clean，后面的 256 位 load/add 又把它写脏，返回前再插一条。状态面板只记 state、last write 和插入点，箭头停在当前指令。
 
 ## 代价与坑
 

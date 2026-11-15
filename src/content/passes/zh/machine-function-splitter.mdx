@@ -10,7 +10,7 @@ stage: []
 tags: ['PGO', 'Code Layout', 'Section', 'MIR', 'AutoFDO']
 demo: machine-function-splitter
 source: llvm/lib/CodeGen/MachineFunctionSplitter.cpp
-updated: 2026-11-12
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -128,6 +128,8 @@ bb.2.cold (bbsections Cold):
 ### 与 basic block sections 的关系
 
 MFS 借用了 basic block sections 的机制（section ID、排序、符号），但它的粒度是“一个函数的冷区域”，不是“每个块一个 section”。LLVM 23 里两者可以同时出现：如果某个函数在 basic-block-sections profile 里，`BasicBlockSections` 负责它，MFS 跳过；`-basic-block-sections=all` 时 MFS 直接不跑。更早的版本里两者互斥，`TargetPassConfig` 检测到 BB sections 就不会添加 MFS。
+
+动画把 MFS 拆成四步：读 profile、给每个块判冷热、给 `bb.2.cold` 打上 `bbsections Cold`、交给 AsmPrinter 放进 `.text.split`。状态面板显示块的执行次数、冷热判定和 section 归属；箭头停在 profile 或当前被标记的块上，指令本身一条没变。
 
 ## 代价与坑
 

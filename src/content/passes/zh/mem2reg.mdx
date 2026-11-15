@@ -10,7 +10,7 @@ stage: ['-O1', '-O2', '-O3', '-Os']
 tags: ['SSA', 'Promotion', 'Dominance']
 demo: mem2reg
 source: llvm/lib/Transforms/Utils/Mem2Reg.cpp
-updated: 2026-11-01
+updated: 2026-11-15
 ---
 
 ## 它解决什么问题
@@ -76,6 +76,8 @@ rename(B):
 一个基本块只有在多条前驱路径带来不同定义时，才需要 φ 来汇合。支配边界 `DF(X)` 恰好是「X 的定义能到达、但 X 并不支配」的块集合——这些地方必须把不同路径的值合并。
 
 上面的演示里，`then` 和 `else` 都写了 `%slot`，而它们在 `merge` 汇合，所以 `merge` 处插入 φ；`entry` 的定义不会到达 `merge`（`entry` 支配 `merge`，路径上必然经过某个重新定义的块），因此 `entry` 不需要 φ。
+
+动画按支配树走了一遍：状态面板依次给出可提升的 alloca、支配边界、φ 的两条入边和重命名栈，箭头则停在当前处理的 load / store。φ 的入边是一个一个填上的，store 和 alloca 也分步删除，所以「提升」不是一次黑盒改写。
 
 ## 代价与坑
 

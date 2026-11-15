@@ -10,7 +10,7 @@ stage: ['-O0', '-O1', '-O2', '-O3', '-Os']
 tags: ['SelectionDAG', 'GlobalISel', 'Legalization', 'MIR']
 demo: isel
 source: llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp
-updated: 2026-11-10
+updated: 2026-11-15
 ---
 
 import I18nLink from '../../../components/I18nLink.astro';
@@ -108,6 +108,8 @@ bb.0:
 - **AArch64** 是三地址机器。`ADDWrs %2, %2, 1` 表示 `w2 + (w2 << 1)`，`ADDWri` 加立即数；没有隐式 flags，也没有为了满足两地址约束而插入的 COPY。
 
 这些不是“优化技巧”，而是指令选择必须兑现的目标约束。MIR 里的 `%0:gr64` 是虚拟寄存器 0、寄存器类 `gr64`；`$rdi` 是物理寄存器。到这个阶段函数仍然是 SSA，只是类型和操作已经落到 target 上。
+
+动画把 GlobalISel 的两级选择拆开：前六步 regbankselect 一次只给一个 vreg 选寄存器组，后六步 instruction-select 一次只换一条 `G_*` 指令。状态面板同时列出每个 vreg 的 bank 和最终指令，箭头指向当前处理的那条，所以能看清 `MOV32rm` 的寻址模式和 `LEA` 的 scale 是在哪一步折进去的。
 
 ## 代价与坑
 
