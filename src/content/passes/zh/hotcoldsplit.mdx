@@ -1,0 +1,270 @@
+---
+title: hotcoldsplit
+subtitle: 冷代码外提：把冷区域拆成独立的 cold 函数
+summary: 用 profile 或静态线索找出冷区域，在 IR 层把它外提成独立的 cold 函数，让热函数更小、冷代码独立布局。代价是一次真实调用、参数数量上限，以及 EH、noinline 和 sanitizer 带来的限制。
+category: interproc
+difficulty: 3
+status: ready
+order: 26
+stage: []
+tags: ['PGO', 'CodeExtractor', 'Outlining', 'Cold Code']
+demo: hotcoldsplit
+source: llvm/lib/Transforms/IPO/HotColdSplitting.cpp
+updated: 2026-11-16
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+一个函数在 IR 里只有一个入口，热路径和错误处理却共享同一个函数体、同一个 `.text` 段和同一套寄存器分配。错误处理、日志、罕见的兜底分支几乎不执行，但它们仍然要占位置：
+
+```text
+未拆分
+  read: [ 热路径 ................................ ][ 错误处理 ][ 清理 ]
+
+拆分后
+  read:        [ 热路径 ................ ]
+  read.cold.1:                              [ 错误处理 ][ 清理 ]
+```
+
+这伤害三件事：
+
+- **i-cache / iTLB**：热路径和冷代码挤在同一段连续地址里，热代码的有效密度下降；冷代码还可能把热函数推到更多页上。
+- **寄存器与栈帧**：寄存器分配器看到的是整个函数。只在冷路径上活跃的值仍然占着虚拟寄存器，热路径的 prologue/epilogue 可能因此多保存几个寄存器。
+- **优化尺度**：冷代码不能单独按“最小体积”编译；要么整条函数一起优化，要么一起放弃优化。
+
+HotColdSplitting（HCS）在 IR 层解决这个问题：把由冷块组成的区域外提成一个新函数，原函数里所有进入该区域的边改成一次普通调用。新函数立刻带上 `cold` 和 `minsize`，入口计数置 0，于是它可以被单独做 size 优化，也可以被链接器放到冷代码区。
+
+这里的拆分对象是**函数结构**，不是 section。HCS 跑在指令选择和寄存器分配之前，出来的 `read.cold.1` 是一个真正独立的函数，有自己的 ABI、栈帧和寄存器分配。这和 <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink> 正好相反：MFS 在寄存器分配之后只改基本块的 section 归属，不新增调用。两者解决同一个局部性问题，但一个付调用开销换更小的热函数，另一个不付调用开销、只换布局。
+
+## 算法
+
+### 入口：一个默认关闭的 ModulePass
+
+HCS 是模块级 pass，默认不跑。`-hot-cold-split` 打开它；clang 没有独立的前端开关，通过 `-mllvm -hot-cold-split` 传给后端：
+
+```cpp
+// PassBuilderPipelines.cpp
+if (EnableHotColdSplit && !isLTOPreLink(LTOPhase))
+  MPM.addPass(HotColdSplittingPass());
+```
+
+`opt` 里可以直接点名：`opt -passes=hotcoldsplit`。
+
+pass 遍历模块里的每个函数，先做一轮“根本不看”的筛选：
+
+- 声明、`optnone` 函数直接跳过；
+- `isFunctionCold`：已经带 `cold` 属性、使用 `coldcc`、或者入口计数被 profile 判冷的函数，本身已经够冷了，不需要再拆；
+- `shouldOutlineFrom`：`alwaysinline`、`noinline`、`noreturn`、ASan / HWASan / TSan / MSan 插桩过的函数，以及使用 scoped EH personality 的函数都不拆。
+
+`noinline` 这条值得记住：给函数加 `noinline` 会顺带关掉它的拆分机会。`alwaysinline` 同理。`noreturn` 被跳过是因为它的 `unreachable` 终止符可能只是 trampoline 的形态，不能当成普通冷路径。
+
+### 冷块判定：profile 优先，静态线索兜底
+
+HCS 先看模块里有没有 profile summary：
+
+- **有**：为函数构建 `BlockFrequencyInfo`，交给 `ProfileSummaryInfo::isColdBlock` 按全程序分布判断。这是全程序分位，不是函数内相对频率。
+- **没有**：按 RPO 遍历，读取条件分支上的 `!prof` 分支权重；某个后继的概率低于冷阈值，就把它记进 `AnnotatedColdBlocks`。阈值默认来自 `TTI.getPredictableBranchThreshold().getCompl()`（通常是 1/100），也可以用 `-hotcoldsplit-cold-probability-denom` 改分母。`__builtin_expect` 和 PGO 都会产生这类权重。
+
+无论有没有 profile，静态分析都会继续参与，默认打开（`-hot-cold-static-analysis`）：
+
+- 基本块是 EH pad，或者以 `resume` 终止；
+- 块里调用了带 `cold` 属性的函数（带 `nosanitize` 元数据的调用除外，避免把 sanitizer 的 trap 当冷路径）；
+- 块没有后继，且终止符不是 `ret` / `indirectbr`——也就是看起来以 `unreachable` 结束。例外是它前面紧挨着一条 `noreturn` 调用（例如 `longjmp`），这种块不算冷。
+
+所以没有 profile 也可能触发拆分：一个 `__attribute__((cold))` 的日志函数、一个 `abort` 位置、一个 `unreachable`，都是线索。反过来说，既没有 profile、也没有这些静态形状的函数，HCS 什么都不会做。
+
+### 从 sink 长出单入口区域
+
+第一遍扫描按 RPO 找到第一个冷块，它就是 sink。区域不是“所有冷块”，而是围绕 sink 用支配关系长出来的：
+
+1. **反向**：沿前驱做 inverse DFS，只保留被 sink 后支配的前驱（`PDT.dominates(sink, pred)`）。离 sink 最远、且可以抽取的前驱成为建议入口。如果某个冷前驱没有任何前驱，说明整个函数都是冷的，pass 放弃这个函数。
+2. **正向**：沿后继做 DFS，只收下被 sink 支配的后继（`DT.dominates(sink, succ)`），并且不能与反向已经收下的块重复。这样 `sink` 之后的清理、收尾块会一起进来。
+
+```text
+for BB in RPOT:
+  if BB is not cold, or already in a region, or cannot be extracted:
+    continue
+  region = grow(BB)              // 前驱：被 BB 后支配；后继：被 BB 支配
+  while region is not empty:
+    sub = take_single_entry(region)
+    if eligible(sub) and profitable(sub):
+      outline(sub)
+```
+
+CodeExtractor 要求被抽取的区域只有一个入口，而且除入口外每个块的前驱都在区域内。因此当区域有多个候选入口时，`takeSingleEntrySubRegion` 只取“被建议入口支配”的那一块，剩下的块留给下一轮，形成多个互不重叠的区域。已经属于某个区域的块不会再被另一个区域收走；重叠的区域直接放弃。
+
+不是所有块都能搬走。`mayExtractBlock` 拒绝：
+
+- 地址被取过的块（`blockaddress`、`indirectbr` 的目标）；
+- EH pad，以及以 `invoke` / `resume` 终止的块；
+- 含有 token 类型指令的块（例如 `cleanuppad`、`catchpad`）。
+
+EH 的限制最实际：CodeExtractor 要求 `invoke` 的 unwind 目标也在抽取区域内，而把 landing pad 搬进新函数会破坏 EH 类型表。所以 C++ 的 catch / cleanup 冷路径通常拆不出去。这一点和 MFS 不同：MFS 有 `-mfs-split-ehcode`，可以在 MIR 层静态拆 EH-only 块。
+
+### 收益判定：不是“冷就拆”
+
+区域确定后，`CodeExtractor::findInputsOutputs` 先数清它需要几个输入、产生几个输出。然后比较收益和代价：
+
+- **收益**：区域内所有非终结指令按 `TTI` 的 code-size 成本累加。
+- **代价**：基准阈值 `-hotcoldsplit-threshold`（默认 2，单位是 `TCC_Basic`），加上每个参数 2 个单位的搬运成本，加上每个输出 / 被拆开的出口 PHI 3 个单位的 alloca 与 reload 成本。
+- **参数上限**：输入 + 输出 + 被拆开的出口 PHI 超过 `-hotcoldsplit-max-params`（默认 4）时，代价直接记为无穷大，不拆。
+- **不返回奖励**：如果区域里所有终止符都不返回（例如都以 `unreachable` 结束），减掉区域块数，因为不需要在 caller 里恢复控制流。
+- **多出口惩罚**：区域外有多个后继时，caller 里需要 switch，按多出来的后继数加成本。
+
+只有收益严格大于代价才拆。把 `-hotcoldsplit-threshold` 设为 0 或负数会跳过整个代价计算，连参数上限也不再检查，收益为正的区域都会被拆——调试和测试常用，生产上很容易把代码拆得过碎。
+
+页首动画里的区域只有 3 条调用指令：收益 3，参数为 0，代价就是阈值 2，所以 3 > 2，值得拆。如果错误处理只有一条调用，收益 1 小于代价 2，它就会留在原函数里。
+
+### 抽取与标记
+
+`extractColdRegion` 调用 CodeExtractor 完成真正的改写：
+
+- 新函数名是 `<原函数>.cold.<N>`，`N` 从 1 开始，每个被外提的区域递增；
+- 区域的输入变成新函数的参数，区域里的 `ret` 变成新函数的返回值；有多个出口时，caller 里会生成一个 switch，把返回值送回对应的出口；
+- 原函数里所有进入区域入口的边改接到一个新的 `codeRepl` 块，块里是一条调用，后面跟着原区域的出口（`ret`、`unreachable`，或者按出口分派的 switch）；
+- CodeExtractor 以 `AggregateArgs=false`、`AllowVarArgs=false`、`AllowAlloca=false` 运行，避免把参数打包成结构体、也不接受可变参数或区域内的 `alloca`。
+
+抽取完成后，HCS 立刻给新函数打标记：
+
+```cpp
+markFunctionCold(*OutF, /*UpdateEntryCount=*/true);
+```
+
+也就是加 `cold`、加 `minsize`、把入口计数设为 0。`cold` 让后续 pass 知道这段代码不重要，`minsize` 让它按体积优化，入口计数 0 让按 profile 布局的链接器把它归到冷区。调用点本身会加 `noinline`，防止后面的内联器又把冷代码拉回热函数。如果目标 TTI 的 `useColdCCForColdCall` 为真，调用约定还会改成 `coldcc`；x86-64 和 AArch64 默认不这么做。
+
+section 的处理有两种：
+
+- 默认：新函数继承原函数的 section（如果原函数有显式 section 的话），否则由后端按函数 hotness 和 function sections 决定；
+- `-enable-cold-section`：直接把新函数放进 `__llvm_cold`，section 名可以用 `-hotcoldsplit-cold-section-name` 改。
+
+成功外提会发一条优化 remark：
+
+```text
+remark: <unknown>:0:0: read split cold code into read.cold.1
+```
+
+pass 结束时如果有改动，就返回 `PreservedAnalyses::none()`，让所有分析失效。源码里还留了一个 TODO：没有把 BFI / BPI 传给 CodeExtractor，所以新调用边和出口分支没有更新后的概率信息；依赖 profile 的下游 pass 会在这一点上看到旧数据。
+
+## 代价与坑
+
+- **默认关闭，而且没有 clang 前端开关。** 用 `-mllvm -hot-cold-split` 打开，或者用 `opt -passes=hotcoldsplit` 单独跑。忘记打开时，代码里不会出现任何 `.cold` 函数。
+- **冷块判定依赖 profile 或静态形状。** 有 profile 时按全程序分位判冷；没 profile 时只看分支权重、cold 调用、EH 和 `unreachable`。一个普通的 `if (err) return -1;` 如果没有权重也没有 cold 调用，在只看静态线索时不会被拆。
+- **`noinline` 函数整个跳过。** 想拆一个函数，别给它加 `noinline`；反过来，热函数里调用的冷函数本身可以是 `noinline`，这不会阻止热函数被拆。
+- **sanitizer 构建里不拆。** ASan、HWASan、TSan、MSan 函数都被 `shouldOutlineFrom` 排除，插桩后的冷路径仍然留在原函数里。
+- **EH 路径基本拆不了。** landing pad、`invoke`、`resume`、token 指令都不在可抽取范围内，原因不是保守，而是 CodeExtractor 和 EH 类型表的约束。EH 冷代码的布局要靠 MFS 的 `-mfs-split-ehcode`。
+- **参数上限 4 很紧。** 输入、输出和出口 PHI 都算参数；一个引用很多局部变量的冷区域很容易超限。`-hotcoldsplit-max-params` 可以调大，但每个参数都要在 caller 里搬运，调用开销会同步上涨。
+- **小区域不划算。** 收益必须严格大于代价；一条调用的冷块通常不拆。阈值设为 0 能强行拆，但会制造大量只有一两条指令的 `.cold` 函数，代码体积和编译时间都变差。
+- **冷函数被按 size 编译。** `minsize` 会关掉不少优化；这是有意的取舍，但如果冷路径其实偶尔很热，就会付出真实代价。profile 漂移时尤其明显。
+- **profile 信息不会自动修补。** 新函数的入口计数是 0，但原函数里被改接的分支仍然带着旧的 `!prof` 权重；pass 没有把 BFI / BPI 传给 CodeExtractor，切分后的调用边没有概率信息。下游的 block placement、MFS 或 BOLT 可能需要重新跑 profile。
+- **section 收益需要链接器配合。** 默认情况下新函数只是一个独立函数；没有 function sections 或链接器收口，它不会自动和别的冷代码聚在一起。确认最终二进制里冷函数真的离开了热段。
+- **符号和栈回溯会变。** 采样栈里会出现 `read.cold.1` 这一帧；按符号名聚合 profile 的工具要认得 `.cold.N` 后缀。它已经是独立函数，不是原函数的一个块。
+- **调用约定可能变。** 个别目标会把两端改成 `coldcc`，这会影响寄存器分配和 ABI；调试器、unwinder 和手写汇编的调用点需要能处理。
+- **和 MFS 是互补关系，不是替代。** HCS 拆出整块冷区域后，热函数里可能还剩一些冷块；MFS 在 MIR 层可以继续按 profile 把它们分到 `.text.split`。两者叠加时，先 HCS 再 MFS，冷函数本身已经带 `cold`，通常不会再被 MFS 拆一遍。
+- **LTO 下位置不同。** 普通管线里它不进 pre-link LTO 阶段；FullLTO 的 post-link 管线会再跑一次。启用 LTO 时要确认 `-hot-cold-split` 确实传到了后端，而不是只停在 driver 层。
+
+## 在管线里的位置
+
+HCS 在模块优化管线的很靠后位置：函数级优化、循环优化、向量化和最后的函数清理都跑完之后，`alloc-token` 之后，`GlobalDCE`、`ConstantMerge` 以及可选的 `MergeFunctions` 之前。
+
+```text
+function simplification → loop → vectorize → late function cleanup
+  → alloc-token
+  → hotcoldsplit          （仅 -hot-cold-split，且非 pre-link LTO）
+  → GlobalDCE → ConstantMerge → [MergeFunctions] → codegen
+```
+
+源码里的注释解释了为什么这么晚：拆分如果发生得太早，会把冷代码从后续优化面前藏起来，反而让这些优化失效；代价是代码体积收益不如早期拆分。放到最后，热函数已经定型，HCS 只负责把冷区域搬出去，不再影响热路径的优化决策。
+
+这也意味着 HCS 的输入是“已经优化完的函数”。如果前面的内联、循环优化把冷路径化简掉了，HCS 可能无块可拆；如果前面的优化把冷代码合并进热块，HCS 也拆不出来。它和 <I18nLink href="/passes/pgo-instr-gen/">pgo-instr-gen</I18nLink> 的关系是消费 profile，而不是生成 profile；profile 在管线更早的位置由插桩或采样得到，块的 `!prof` 分支权重来自 PGO 的边计数、`__builtin_expect` 或采样数据。
+
+在这个位置上，HCS 之后的热函数还会进入代码生成：指令选择、寄存器分配、栈帧降低，最后是 MFS 和 AsmPrinter。HCS 拆出去的新函数走同一条代码生成路径，只是带着 `cold`、`minsize` 和入口计数 0。想看 MIR 层的冷块布局，接着读 <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink>。
+
+## 自己跑一遍
+
+先写一个带冷路径的 C 文件。关键是让冷块里出现带 `cold` 属性的调用，这样不依赖 profile 也能被静态分析抓到。下面的冷路径以 `noreturn` 的 `fail()` 结束：区域没有返回值也没有出口，收益检查更容易过关：
+
+```c
+volatile int errors;
+
+__attribute__((cold, noinline)) void log_error(void) { errors++; }
+__attribute__((cold, noinline)) void log_context(void) { errors++; }
+__attribute__((cold, noinline, noreturn)) void fail(void) { __builtin_trap(); }
+
+int read_or_fail(const int *p, long n) {
+  if (__builtin_expect(n != 0, 1))
+    return p[0];
+  log_error();
+  log_context();
+  fail();
+}
+
+int main(void) {
+  int v = 1;
+  long sum = 0;
+  for (int i = 0; i < 1000; i++)
+    sum += read_or_fail(&v, 1);   /* hot path only */
+  return sum == 1000 ? 0 : 1;
+}
+```
+
+用 clang 打开 pass，直接看 IR：
+
+```bash
+clang -O2 -mllvm -hot-cold-split -S -emit-llvm demo.c -o demo.ll
+grep -n -E "cold\.1|codeRepl" demo.ll
+```
+
+应该能看到一个 `read_or_fail.cold.1`。clang 默认可能丢弃 block 名，直接看 `.cold` 符号就够了；用 `opt` 跑同一份 IR 时能看到 `codeRepl` 块。如果什么都没拆，先确认冷函数确实带 `cold`，并且业务函数上没有 `noinline`：
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo-pre.ll
+grep -n -E "^declare|^define|attributes" demo-pre.ll
+```
+
+也可以先产出未拆分的 IR，再单独跑 pass，这样能反复调整阈值：
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo-pre.ll
+opt -passes=hotcoldsplit -S demo-pre.ll -o demo-split.ll
+
+# 跳过收益检查，强制拆掉所有区域，方便观察
+opt -passes=hotcoldsplit -hotcoldsplit-threshold=0 \
+  -pass-remarks=hotcoldsplit -S demo-pre.ll -o demo-forced.ll
+```
+
+`-pass-remarks=hotcoldsplit` 会把成功外提的区域打到 stderr：
+
+```text
+remark: <unknown>:0:0: read_or_fail split cold code into read_or_fail.cold.1
+```
+
+想看冷 section，直接把新函数放进 `__llvm_cold`：
+
+```bash
+clang -O2 -mllvm -hot-cold-split -mllvm -enable-cold-section \
+  -S demo.c -o demo-cold.s
+grep -n -A2 "__llvm_cold" demo-cold.s
+```
+
+想验证 profile 驱动的判定，用 instrumentation PGO 走一遍：
+
+```bash
+clang -O2 -fprofile-generate demo.c -o demo
+./demo
+llvm-profdata merge -o demo.profdata default.profraw
+
+clang -O2 -fprofile-use=demo.profdata -mllvm -hot-cold-split \
+  -S -emit-llvm demo.c -o demo.pgo.ll
+grep -n -E "cold\.1|function_entry_count" demo.pgo.ll
+```
+
+如果拆分成功，profile 版的新函数会带 `!{!"function_entry_count", i64 0}`。如果 `grep` 只看到冷声明、没有 `.cold` 函数，可能是 `read_or_fail` 被内联掉了，或者收益检查没过；先确认它仍在最终 IR 里，再用阈值 0 对照，或者把参数上限调大：
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -mllvm -hot-cold-split \
+  -mllvm -hotcoldsplit-threshold=0 \
+  -mllvm -hotcoldsplit-max-params=8 \
+  -S -emit-llvm demo.c -o demo-aggressive.ll
+```
