@@ -1,0 +1,270 @@
+---
+title: hotcoldsplit
+subtitle: "Cold code gets its own function: outlining cold regions at IR level"
+summary: Find cold regions with a profile or static hints, then outline them into standalone cold functions at IR level, keeping hot functions small and cold code separately laid out. The price is a real call, a parameter limit, and restrictions around EH, noinline and sanitizers.
+category: interproc
+difficulty: 3
+status: ready
+order: 26
+stage: []
+tags: ['PGO', 'CodeExtractor', 'Outlining', 'Cold Code']
+demo: hotcoldsplit
+source: llvm/lib/Transforms/IPO/HotColdSplitting.cpp
+updated: 2026-11-16
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## What problem does it solve
+
+A function has one entry, but its hot path and its error handling share the same body, the same `.text` span and the same register allocation. Error handling, logging and rare fallbacks almost never execute, yet they still take up space:
+
+```text
+Before splitting
+  read: [ hot path ............................... ][ error handling ][ cleanup ]
+
+After splitting
+  read:        [ hot path ............... ]
+  read.cold.1:                              [ error handling ][ cleanup ]
+```
+
+That hurts three things:
+
+- **i-cache / iTLB**: the hot path and cold code share a contiguous address range, so the density of hot instructions drops; cold code can also push a hot function across more pages.
+- **Registers and frame**: the register allocator sees the whole function. Values live only on the cold path still occupy virtual registers, and the hot path's prologue/epilogue may save registers it never needs.
+- **Optimisation granularity**: cold code cannot be compiled for minimum size on its own; either the whole function is optimised, or none of it is.
+
+HotColdSplitting (HCS) solves this at IR level: it outlines the region made of cold blocks into a new function, and turns every edge into that region into an ordinary call. The new function immediately gets `cold` and `minsize`, its entry count is set to 0, so it can be optimised for size and placed with the rest of the cold code.
+
+The thing being split is **function structure**, not a section. HCS runs before instruction selection and register allocation, so `read.cold.1` is a real function with its own ABI, frame and register allocation. That is the opposite of <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink>: MFS runs after register allocation and only changes a block's section membership without introducing a call. Both attack the same locality problem; one pays a call to shrink the hot function, the other pays nothing and only changes layout.
+
+## Algorithm
+
+### Entry: a module pass that is off by default
+
+HCS is a module pass and does not run by default. `-hot-cold-split` enables it; clang has no dedicated front-end flag, so pass it through the backend with `-mllvm -hot-cold-split`:
+
+```cpp
+// PassBuilderPipelines.cpp
+if (EnableHotColdSplit && !isLTOPreLink(LTOPhase))
+  MPM.addPass(HotColdSplittingPass());
+```
+
+In `opt` you can name it directly: `opt -passes=hotcoldsplit`.
+
+The pass walks every function in the module and first applies a set of gates:
+
+- declarations and `optnone` functions are skipped;
+- `isFunctionCold`: functions that already have the `cold` attribute, use `coldcc`, or have a cold entry count according to the profile are already cold enough to leave alone;
+- `shouldOutlineFrom`: `alwaysinline`, `noinline`, `noreturn`, functions instrumented with ASan / HWASan / TSan / MSan, and functions using a scoped EH personality are not split.
+
+The `noinline` gate is worth remembering: adding `noinline` to a function also turns off its chances of being split, and `alwaysinline` does the same. `noreturn` is skipped because its `unreachable` terminator may just be a trampoline, not an ordinary cold path.
+
+### Cold detection: profile first, static hints as a fallback
+
+HCS first asks whether the module has a profile summary:
+
+- **Yes**: it builds `BlockFrequencyInfo` for the function and asks `ProfileSummaryInfo::isColdBlock` against the program-wide distribution. This is a global percentile, not a function-relative frequency.
+- **No**: it walks the function in RPO order and reads `!prof` branch weights on conditional branches. A successor whose probability falls below the cold threshold is recorded in `AnnotatedColdBlocks`. The threshold defaults to `TTI.getPredictableBranchThreshold().getCompl()` (usually 1/100), and `-hotcoldsplit-cold-probability-denom` can change the denominator. `__builtin_expect` and PGO both produce these weights.
+
+Static analysis participates whether or not there is a profile, and is on by default (`-hot-cold-static-analysis`):
+
+- the block is an EH pad, or terminates in `resume`;
+- the block calls a function with the `cold` attribute (calls carrying `nosanitize` metadata are excluded, so sanitizer traps are not mistaken for cold paths);
+- the block has no successors and its terminator is neither `ret` nor `indirectbr` — in other words, it looks like it ends in `unreachable`. The exception is a block immediately preceded by a `noreturn` call such as `longjmp`, which is not considered cold.
+
+So splitting can happen without a profile: a `__attribute__((cold))` logging function, an `abort` site or an `unreachable` is enough. Conversely, a function with neither a profile nor one of these static shapes gets no attention from HCS at all.
+
+### Growing a single-entry region around the sink
+
+The first pass over the function in RPO order finds the first cold block; that block is the sink. The region is not "all cold blocks" but the result of growing around the sink with dominance information:
+
+1. **Backwards**: an inverse DFS over predecessors keeps only those post-dominated by the sink (`PDT.dominates(sink, pred)`). The farthest extractable predecessor becomes the suggested entry point. If a cold predecessor has no predecessors at all, the whole function is cold, and the pass gives up on it.
+2. **Forwards**: a DFS over successors keeps only those dominated by the sink (`DT.dominates(sink, succ)`) and not already collected by the backwards walk. Cleanup and epilogue blocks after the sink are pulled in this way.
+
+```text
+for BB in RPOT:
+  if BB is not cold, or already in a region, or cannot be extracted:
+    continue
+  region = grow(BB)              // preds post-dominated by BB; succs dominated by BB
+  while region is not empty:
+    sub = take_single_entry(region)
+    if eligible(sub) and profitable(sub):
+      outline(sub)
+```
+
+CodeExtractor requires the extracted region to have a single entry, and every block other than the entry must have all its predecessors inside the region. When the grown region has several candidate entries, `takeSingleEntrySubRegion` extracts only the part dominated by the suggested entry and leaves the rest for the next round, producing several disjoint regions. A block already claimed by a region is never claimed by another one; overlapping regions are rejected outright.
+
+Not every block can move. `mayExtractBlock` rejects:
+
+- blocks whose address is taken (`blockaddress`, `indirectbr` targets);
+- EH pads, and blocks terminating in `invoke` / `resume`;
+- blocks containing token-typed instructions (`cleanuppad`, `catchpad`, …).
+
+The EH restriction is the most visible one in practice: CodeExtractor requires an `invoke`'s unwind destination to be inside the extracted region, and moving landing pads into a new function breaks EH type tables. C++ catch / cleanup cold paths therefore usually stay put. This differs from MFS, which can statically split EH-only blocks on MIR with `-mfs-split-ehcode`.
+
+### Profitability: cold does not automatically mean split
+
+Once a region is chosen, `CodeExtractor::findInputsOutputs` counts how many inputs it needs and how many outputs it produces. Then HCS compares benefit against penalty:
+
+- **Benefit**: the sum of `TTI` code-size costs for all non-terminator instructions in the region.
+- **Penalty**: the base `-hotcoldsplit-threshold` (default 2, in `TCC_Basic` units), plus 2 units per parameter to materialise, plus 3 units per output / split exit PHI for the associated alloca and reload.
+- **Parameter limit**: if inputs + outputs + split exit PHIs exceed `-hotcoldsplit-max-params` (default 4), the penalty is set to infinity and the region is not split.
+- **Noreturn bonus**: if every terminator in the region returns to no one (for example, all end in `unreachable`), the penalty is reduced by the number of blocks, because no control flow has to be restored in the caller.
+- **Multiple-exit penalty**: more than one successor outside the region means a switch in the caller; each extra successor adds cost.
+
+The region is split only when benefit is strictly greater than penalty. Setting `-hotcoldsplit-threshold` to 0 or a negative value skips the whole penalty calculation, including the parameter limit, so every region with positive benefit is split — useful for debugging and tests, but in production it easily shreds the program into tiny cold functions.
+
+The region in the animation at the top has three call instructions: benefit 3, zero parameters, so the penalty is just the threshold 2. Since 3 > 2, it pays off. If the error path had only one call, benefit 1 would lose to penalty 2 and it would stay in the original function.
+
+### Extraction and marking
+
+`extractColdRegion` calls CodeExtractor to do the real rewrite:
+
+- the new function is named `<original>.cold.<N>`, with `N` starting at 1 and incrementing per outlined region;
+- region inputs become parameters, and a `ret` inside the region becomes the new function's return value; with several exits, the caller gets a switch that routes the return value to the right exit;
+- every edge entering the region from the original function is rewired to a new `codeRepl` block containing one call followed by the original region exit (`ret`, `unreachable`, or a dispatch switch for several exits);
+- CodeExtractor runs with `AggregateArgs=false`, `AllowVarArgs=false` and `AllowAlloca=false`, so it does not pack arguments into a struct and does not accept varargs or allocas in the region.
+
+As soon as extraction succeeds, HCS marks the new function:
+
+```cpp
+markFunctionCold(*OutF, /*UpdateEntryCount=*/true);
+```
+
+That adds `cold`, adds `minsize`, and sets the entry count to 0. `cold` tells later passes the code does not matter for speed, `minsize` compiles it for size, and an entry count of 0 lets a profile-driven linker place it with the cold code. The call site itself gets `noinline`, so a later inliner cannot drag the cold code back into the hot function. If the target TTI's `useColdCCForColdCall` is true, both ends switch to `coldcc`; x86-64 and AArch64 do not do that by default.
+
+Sections are handled in one of two ways:
+
+- by default, the new function inherits the original function's section (if it had an explicit one); otherwise the backend decides from function hotness and function sections;
+- with `-enable-cold-section`, the new function goes straight into `__llvm_cold`, whose name can be changed with `-hotcoldsplit-cold-section-name`.
+
+A successful outline emits an optimisation remark:
+
+```text
+remark: <unknown>:0:0: read split cold code into read.cold.1
+```
+
+When anything changed, the pass returns `PreservedAnalyses::none()`, invalidating all analyses. There is also a TODO in the source: BFI / BPI are not passed to CodeExtractor, so the new call edge and exit branches carry no updated probability information. Downstream passes that depend on the profile see stale data at that boundary.
+
+## Cost and pitfalls
+
+- **Off by default, with no clang front-end flag.** Enable it with `-mllvm -hot-cold-split`, or run it alone with `opt -passes=hotcoldsplit`. Forget the flag and no `.cold` function will ever appear.
+- **Cold detection depends on a profile or on static shapes.** With a profile it uses a global percentile; without one it only looks at branch weights, cold calls, EH and `unreachable`. A plain `if (err) return -1;` with no weights and no cold call is not split by the static path.
+- **`noinline` functions are skipped entirely.** Do not mark a function `noinline` if you want it split; on the other hand, a `noinline` cold callee does not prevent the hot caller from being split.
+- **Sanitizer builds do not split.** ASan, HWASan, TSan and MSan functions are all excluded by `shouldOutlineFrom`, so instrumented cold paths stay in the original function.
+- **EH paths mostly cannot be split.** Landing pads, `invoke`, `resume` and token instructions are out of bounds, not out of conservatism but because of CodeExtractor and EH type-table constraints. Cold EH code needs MFS with `-mfs-split-ehcode` instead.
+- **The 4-parameter limit is tight.** Inputs, outputs and exit PHIs all count; a cold region that reads many locals easily exceeds it. `-hotcoldsplit-max-params` raises the limit, but every parameter has to be moved in the caller, so call overhead grows with it.
+- **Small regions are not worth it.** Benefit must be strictly greater than penalty; a cold block with one call usually stays. Setting the threshold to 0 forces the split, but produces many `.cold` functions with one or two instructions, hurting both code size and compile time.
+- **The cold function is compiled for size.** `minsize` turns off a number of optimisations. That is the intended trade, but if the cold path is occasionally hot the cost is real — especially when the profile drifts.
+- **Profile information is not repaired.** The new function's entry count is 0, but the rewired branch in the original function still carries its old `!prof` weights, and the pass does not hand BFI / BPI to CodeExtractor, so the split call edge has no probability information. Downstream block placement, MFS or BOLT may need a fresh profile.
+- **Section benefits need linker support.** By default the new function is just a separate function; without function sections or linker script support it will not automatically join the other cold code. Check that the final binary really moved it out of the hot text range.
+- **Symbols and stack traces change.** Sampled stacks gain a `read.cold.1` frame; tools that aggregate profiles by symbol need to understand the `.cold.N` suffix. It is a real function now, not a block of the original.
+- **The calling convention may change.** Some targets switch both ends to `coldcc`, which affects register allocation and the ABI; debuggers, unwinders and hand-written assembly call sites need to cope with that.
+- **HCS and MFS are complementary, not alternatives.** After HCS outlines the bulk of the cold region, the hot function may still contain cold blocks; MFS can split those into `.text.split` at MIR level using the profile. When both run, HCS goes first, and the outlined cold function already carries `cold`, so MFS usually leaves it alone.
+- **LTO changes the position.** In the normal pipeline it does not run in the pre-link LTO phase; the FullLTO post-link pipeline runs it once more. When enabling LTO, make sure `-hot-cold-split` actually reaches the backend rather than stopping at the driver.
+
+## Where it sits in the pipeline
+
+HCS sits late in the module optimisation pipeline: after function-level optimisation, loop optimisation, vectorisation and the final function cleanups, after `alloc-token`, and before `GlobalDCE`, `ConstantMerge` and the optional `MergeFunctions`.
+
+```text
+function simplification → loop → vectorize → late function cleanup
+  → alloc-token
+  → hotcoldsplit          (only with -hot-cold-split, and not in pre-link LTO)
+  → GlobalDCE → ConstantMerge → [MergeFunctions] → codegen
+```
+
+The comment in the source explains the late placement: splitting earlier would hide the cold code from subsequent optimisations and make them less effective, at the cost of a smaller code-size win than early splitting. Running late means the hot function has already settled, and HCS only has to move the cold region out without influencing how the hot path was optimised.
+
+That also means HCS consumes a function that is already optimised. If earlier inlining or loop optimisation simplified the cold path away, HCS may have nothing to split; if earlier passes merged cold code into hot blocks, HCS cannot separate it again. Its relationship with <I18nLink href="/passes/pgo-instr-gen/">pgo-instr-gen</I18nLink> is that it consumes a profile rather than producing one: the profile comes from instrumentation or sampling earlier in the pipeline, and the `!prof` branch weights come from PGO edge counts, `__builtin_expect`, or sample data.
+
+After this point the hot function continues into code generation: instruction selection, register allocation, frame lowering, then MFS and AsmPrinter. An outlined function takes the same path, only carrying `cold`, `minsize` and an entry count of 0. For cold-block layout at MIR level, continue with <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink>.
+
+## Run it yourself
+
+Start with a C file that has a cold path. The key is to make the cold block call something with the `cold` attribute, so static analysis can find it without a profile. The cold path below ends in a `noreturn` `fail()`: the region has no return value and no exit, so the profitability check is easier to satisfy:
+
+```c
+volatile int errors;
+
+__attribute__((cold, noinline)) void log_error(void) { errors++; }
+__attribute__((cold, noinline)) void log_context(void) { errors++; }
+__attribute__((cold, noinline, noreturn)) void fail(void) { __builtin_trap(); }
+
+int read_or_fail(const int *p, long n) {
+  if (__builtin_expect(n != 0, 1))
+    return p[0];
+  log_error();
+  log_context();
+  fail();
+}
+
+int main(void) {
+  int v = 1;
+  long sum = 0;
+  for (int i = 0; i < 1000; i++)
+    sum += read_or_fail(&v, 1);   /* hot path only */
+  return sum == 1000 ? 0 : 1;
+}
+```
+
+Build with clang and the pass enabled, then look at the IR:
+
+```bash
+clang -O2 -mllvm -hot-cold-split -S -emit-llvm demo.c -o demo.ll
+grep -n -E "cold\.1|codeRepl" demo.ll
+```
+
+You should see a `read_or_fail.cold.1`. clang may discard block names by default, so the `.cold` symbol is enough to look for; running `opt` on the same IR shows the `codeRepl` block. If nothing was split, check that the cold callees really carry `cold` and that the function under test is not `noinline`:
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo-pre.ll
+grep -n -E "^declare|^define|attributes" demo-pre.ll
+```
+
+You can also produce unsplit IR first and run the pass on its own, which makes it easy to try different thresholds:
+
+```bash
+clang -O2 -S -emit-llvm demo.c -o demo-pre.ll
+opt -passes=hotcoldsplit -S demo-pre.ll -o demo-split.ll
+
+# skip the profitability check and force every region, to see the shape
+opt -passes=hotcoldsplit -hotcoldsplit-threshold=0 \
+  -pass-remarks=hotcoldsplit -S demo-pre.ll -o demo-forced.ll
+```
+
+`-pass-remarks=hotcoldsplit` prints successful outlines to stderr:
+
+```text
+remark: <unknown>:0:0: read_or_fail split cold code into read_or_fail.cold.1
+```
+
+To see the cold section, put the new function straight into `__llvm_cold`:
+
+```bash
+clang -O2 -mllvm -hot-cold-split -mllvm -enable-cold-section \
+  -S demo.c -o demo-cold.s
+grep -n -A2 "__llvm_cold" demo-cold.s
+```
+
+To verify profile-driven decisions, walk the instrumentation-PGO path:
+
+```bash
+clang -O2 -fprofile-generate demo.c -o demo
+./demo
+llvm-profdata merge -o demo.profdata default.profraw
+
+clang -O2 -fprofile-use=demo.profdata -mllvm -hot-cold-split \
+  -S -emit-llvm demo.c -o demo.pgo.ll
+grep -n -E "cold\.1|function_entry_count" demo.pgo.ll
+```
+
+When the split succeeds, the outlined function in the profile build carries `!{!"function_entry_count", i64 0}`. If `grep` only finds the cold declarations and no `.cold` function, `read_or_fail` may have been inlined away, or the profitability check failed; first confirm it is still in the final IR, then compare with the threshold forced to 0 or raise the parameter limit:
+
+```bash
+clang -O2 -fprofile-use=demo.profdata -mllvm -hot-cold-split \
+  -mllvm -hotcoldsplit-threshold=0 \
+  -mllvm -hotcoldsplit-max-params=8 \
+  -S -emit-llvm demo.c -o demo-aggressive.ll
+```

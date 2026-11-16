@@ -3,6 +3,7 @@ import type { Demo } from './types.ts';
 import { localizeDemo } from './types.ts';
 import { dceDemo } from './dce.ts';
 import { heroDemo } from './hero.ts';
+import { hotColdSplitDemo } from './hotcoldsplit.ts';
 import { inlineFunctionDemo } from './inline-function.ts';
 import { instcombineDemo } from './instcombine.ts';
 import { iselDemo } from './isel.ts';
@@ -23,6 +24,7 @@ import { x86InsertVZeroUpperDemo } from './x86-insert-vzeroupper.ts';
 export const demos: Record<string, Demo> = {
   dce: dceDemo,
   hero: heroDemo,
+  hotcoldsplit: hotColdSplitDemo,
   'inline-function': inlineFunctionDemo,
   instcombine: instcombineDemo,
   isel: iselDemo,
