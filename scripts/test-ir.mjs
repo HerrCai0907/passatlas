@@ -3,6 +3,7 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
+import { analysisPasses, analysisScopeOrder, analysisScopes } from '../src/data/analysis.ts';
 import { cfgSamples, localizeSample } from '../src/data/cfg-samples.ts';
 import { machineSnapshots, machineStages } from '../src/data/machine.ts';
 import { pipelineStages } from '../src/data/pipeline.ts';
@@ -10,6 +11,15 @@ import { getDemo } from '../src/demos/registry.ts';
 import { makeDemo, makeStep } from '../src/demos/types.ts';
 import { localizedPath, pathWithoutLocale } from '../src/i18n/paths.ts';
 import { t } from '../src/i18n/ui.ts';
+import {
+  analysesByScope,
+  analysesForPassSlug,
+  analysesForPipelinePass,
+  analysesForStage,
+  analysisAnchor,
+  analysisFor,
+  analysisScopeAnchor,
+} from '../src/lib/analysis.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { canRenderCFG, functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
@@ -598,6 +608,59 @@ entry:
     false,
     '多基本块 MIR 默认 CFG',
   );
+}
+
+// ---- 分析层框架：数据为空时结构、锚点与查询函数仍然可用 ----
+{
+  assert.ok(Array.isArray(analysisPasses));
+  assert.deepEqual(analysisScopeOrder, ['module', 'function', 'loop']);
+  assert.deepEqual(
+    analysisScopeOrder.map((scope) => analysisScopes[scope].manager),
+    ['ModuleAnalysisManager', 'FunctionAnalysisManager', 'LoopAnalysisManager'],
+  );
+
+  for (const scope of analysisScopeOrder) {
+    assert.ok(analysisScopes[scope].note.zh.trim());
+    assert.ok(analysisScopes[scope].note.en.trim());
+    assert.deepEqual(
+      analysesByScope(scope),
+      analysisPasses.filter((entry) => entry.scope === scope),
+    );
+  }
+
+  assert.equal(analysisAnchor('domtree'), 'analysis-domtree');
+  assert.equal(analysisScopeAnchor('function'), 'analysis-function');
+  assert.equal(analysisFor('__missing__'), undefined);
+
+  const ids = new Set(analysisPasses.map((entry) => entry.id));
+  assert.equal(ids.size, analysisPasses.length);
+  const pipelineNames = new Set(
+    pipelineStages.flatMap((stage) => stage.passes.map((item) => item.name)),
+  );
+  for (const entry of analysisPasses) {
+    assert.ok(entry.answers.zh.trim(), `${entry.id} 缺少中文回答`);
+    assert.ok(entry.answers.en.trim(), `${entry.id} 缺少英文回答`);
+    assert.ok(entry.handle.trim(), `${entry.id} 缺少 require 名`);
+    assert.ok(entry.source.endsWith('.cpp'), `${entry.id} 的 source 应指向 .cpp`);
+    for (const dependency of entry.requires) {
+      assert.ok(ids.has(dependency), `${entry.id} 依赖了不存在的分析 ${dependency}`);
+    }
+    for (const consumer of entry.consumers) {
+      assert.ok(
+        pipelineNames.has(consumer) || ids.has(consumer),
+        `${entry.id} 的消费者 ${consumer} 既不是管线 pass，也不是分析`,
+      );
+    }
+  }
+
+  // 空数据时查询函数返回空数组，而不是抛错；补数据后这组条件断言自动跳过。
+  if (analysisPasses.length === 0) {
+    assert.deepEqual(analysesForPipelinePass('inline'), []);
+    assert.deepEqual(analysesForPassSlug('inliner'), []);
+    for (const stage of pipelineStages) {
+      assert.deepEqual(analysesForStage(stage), []);
+    }
+  }
 }
 
 console.log('IR parser, CFG layout, Machine IR & i18n: all assertions passed');

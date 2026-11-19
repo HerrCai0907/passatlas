@@ -4,6 +4,7 @@ import BaseLayout from '../../../layouts/BaseLayout.astro';
 import PassRow from '../../../components/PassRow.astro';
 import PgoSiteRow from '../../../components/PgoSiteRow.astro';
 import PipelineMap from '../../../components/PipelineMap.astro';
+import AnalysisLayer from '../../../components/AnalysisLayer.astro';
 import PassRegistry from '../../../components/PassRegistry.astro';
 import MachineTrack from '../../../components/MachineTrack.astro';
 import { pipelineStages } from '../../../data/pipeline';
@@ -68,6 +69,7 @@ const groups = categoryOrder
       </header>
 
       <PipelineMap stages={pipelineStages} pages={passes} locale={locale} />
+      <AnalysisLayer pages={passes} locale={locale} />
       <PassRegistry pages={passes} locale={locale} />
 
       <p class="pipeline__cta">

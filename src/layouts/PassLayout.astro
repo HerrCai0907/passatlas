@@ -8,6 +8,7 @@ import { getDemo } from '../demos/registry';
 import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import { categories, categoryName, difficultyLabel } from '../lib/categories';
+import { analysesForPassSlug, analysisAnchor } from '../lib/analysis';
 import { pipelineStageNumber, stagesForPass, stageAnchor } from '../lib/pipeline';
 import { passSlug, passSubtitle, type PassEntry } from '../lib/passes';
 import { site, llvmSourceUrl } from '../site';
@@ -36,38 +37,59 @@ const categoryLine =
     : categoryMeta.en;
 const slug = passSlug(pass);
 const passStages = stagesForPass(slug);
+const passAnalyses = analysesForPassSlug(slug);
 const atlasHref = url('/passes/', locale);
 ---
 
 <BaseLayout title={title} description={summary} locale={locale}>
   <article class={`pass cat-${category}`}>
     <div class="container">
-      {/* 页面最开头：直接跳到图鉴里这个 pass 出现的管线阶段 */}
-      <nav class="pass__where" aria-label={t(locale, 'pass.where')}>
-        <span class="pass__where-label">{t(locale, 'pass.where')}</span>
-        {
-          passStages.length > 0 ? (
-            passStages.map((stage) => (
-              <a
-                class="pass__where-link"
-                href={`${atlasHref}#${stageAnchor(stage.id)}`}
-                aria-label={t(locale, 'pass.whereLink', { title: stage.title[locale] })}
-              >
-                <span class="pass__where-no" aria-hidden="true">
-                  {String(pipelineStageNumber(stage.id)).padStart(2, '0')}
-                </span>
-                <span class="pass__where-name">{stage.title[locale]}</span>
+      {/* 页面最开头：直接跳到图鉴里这个 pass 出现的管线阶段与它依赖的分析 */}
+      <div class="pass__where-group">
+        <nav class="pass__where" aria-label={t(locale, 'pass.where')}>
+          <span class="pass__where-label">{t(locale, 'pass.where')}</span>
+          {
+            passStages.length > 0 ? (
+              passStages.map((stage) => (
+                <a
+                  class="pass__where-link"
+                  href={`${atlasHref}#${stageAnchor(stage.id)}`}
+                  aria-label={t(locale, 'pass.whereLink', { title: stage.title[locale] })}
+                >
+                  <span class="pass__where-no" aria-hidden="true">
+                    {String(pipelineStageNumber(stage.id)).padStart(2, '0')}
+                  </span>
+                  <span class="pass__where-name">{stage.title[locale]}</span>
+                  <span class="pass__where-arrow" aria-hidden="true">↘</span>
+                </a>
+              ))
+            ) : (
+              <a class="pass__where-link" href={`${atlasHref}#pipeline`}>
+                <span class="pass__where-name">{t(locale, 'passes.pipeline.title')}</span>
                 <span class="pass__where-arrow" aria-hidden="true">↘</span>
               </a>
-            ))
-          ) : (
-            <a class="pass__where-link" href={`${atlasHref}#pipeline`}>
-              <span class="pass__where-name">{t(locale, 'passes.pipeline.title')}</span>
-              <span class="pass__where-arrow" aria-hidden="true">↘</span>
-            </a>
-          )
+            )
+          }
+        </nav>
+
+        {
+          passAnalyses.length > 0 ? (
+            <nav class="pass__where" aria-label={t(locale, 'pass.analyses')}>
+              <span class="pass__where-label">{t(locale, 'pass.analyses')}</span>
+              {passAnalyses.map((analysis) => (
+                <a
+                  class="pass__where-link pass__where-link--analysis"
+                  href={`${atlasHref}#${analysisAnchor(analysis.id)}`}
+                  aria-label={t(locale, 'pass.analysesLink', { name: analysis.name })}
+                >
+                  <span class="pass__where-name">{analysis.name}</span>
+                  <span class="pass__where-arrow" aria-hidden="true">↘</span>
+                </a>
+              ))}
+            </nav>
+          ) : null
         }
-      </nav>
+      </div>
 
       <nav class="crumbs" aria-label={t(locale, 'pass.crumbs')}>
         <a href={url('/', locale)}>PassAtlas</a>
@@ -179,13 +201,18 @@ const atlasHref = url('/passes/', locale);
     padding-top: 28px;
   }
 
-  /* ---------- 顶部定位条：跳到 /passes 里这个 pass 出现的阶段 ---------- */
+  /* ---------- 顶部定位条：跳到 /passes 里这个 pass 出现的阶段与分析 ---------- */
+  .pass__where-group {
+    display: grid;
+    gap: 7px;
+    margin-bottom: 22px;
+  }
+
   .pass__where {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 7px 8px;
-    margin-bottom: 22px;
     font-family: var(--font-mono);
     font-size: 11.5px;
   }
@@ -220,6 +247,11 @@ const atlasHref = url('/passes/', locale);
     border-color: var(--cat, var(--accent));
     background: color-mix(in srgb, var(--cat, var(--accent)) 12%, var(--surface));
     transform: translateY(-1px);
+  }
+
+  /* 分析 chip 用虚线，和管线阶段 chip 区分 */
+  .pass__where-link--analysis {
+    border-style: dashed;
   }
 
   .pass__where-no {

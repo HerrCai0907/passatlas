@@ -2,8 +2,10 @@
 import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import type { PipelineStage } from '../data/pipeline';
+import { analysisPasses } from '../data/analysis';
 import { passRegistry } from '../data/pass-registry';
 import { llvmSourceUrl } from '../site';
+import { analysesForStage, analysisAnchor } from '../lib/analysis';
 import { stageAnchor } from '../lib/pipeline';
 import { passSlug, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
@@ -32,6 +34,7 @@ const levelKeys = {
     {
       t(locale, 'passes.pipeline.stats', {
         pipeline: stages.reduce((count, stage) => count + stage.passes.length, 0),
+        analysis: analysisPasses.length,
         registry: passRegistry.length,
       })
     }
@@ -59,7 +62,9 @@ const levelKeys = {
 
   <ol class="map" aria-label={t(locale, 'passes.pipeline.mapLabel')}>
     {
-      stages.map((stage, index) => (
+      stages.map((stage, index) => {
+        const stageAnalyses = analysesForStage(stage);
+        return (
         <li class={`stage stage--${stage.level}`}>
           {index > 0 ? (
             stage.adaptor || stage.entry ? (
@@ -205,10 +210,28 @@ const levelKeys = {
                 );
               })}
             </ul>
+
+            {stageAnalyses.length > 0 ? (
+              <p class="panel__needs">
+                <span class="panel__needs-label">
+                  {t(locale, 'passes.analysis.mapNeeds')}
+                </span>
+                {stageAnalyses.map((analysis, analysisIndex) => (
+                  <>
+                    {analysisIndex > 0 ? (
+                      <span class="panel__needs-sep" aria-hidden="true">·</span>
+                    ) : null}
+                    <a href={`#${analysisAnchor(analysis.id)}`} title={analysis.analysis}>
+                      {analysis.name}
+                    </a>
+                  </>
+                ))}
+              </p>
+            ) : null}
           </article>
         </li>
-      ))
-    }
+        );
+      })}
   </ol>
 
   <p class="footnote">
@@ -478,6 +501,43 @@ const levelKeys = {
     margin: 14px 0 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* 每个阶段直接依赖的分析：文字行，不是节点 chip，避免主图再长出一层图 */
+  .panel__needs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 3px 6px;
+    margin-top: 12px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--line);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+
+  .panel__needs-label {
+    margin-right: 2px;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .panel__needs a {
+    color: var(--accent-strong);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .panel__needs a:hover {
+    text-decoration: underline;
+  }
+
+  .panel__needs-sep {
+    color: var(--line-strong);
   }
 
   .node {
