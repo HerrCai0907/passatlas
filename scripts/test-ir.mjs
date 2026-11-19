@@ -3,7 +3,12 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
-import { analysisPasses, analysisScopeOrder, analysisScopes } from '../src/data/analysis.ts';
+import { analysisPasses } from '../src/data/analysis.ts';
+import {
+  analysisRegistry,
+  analysisScopeOrder,
+  analysisScopes,
+} from '../src/data/analysis-registry.ts';
 import { cfgSamples, localizeSample } from '../src/data/cfg-samples.ts';
 import { machineSnapshots, machineStages } from '../src/data/machine.ts';
 import { pipelineStages } from '../src/data/pipeline.ts';
@@ -17,8 +22,10 @@ import {
   analysesForPipelinePass,
   analysesForStage,
   analysisAnchor,
+  analysisDepth,
   analysisFor,
   analysisScopeAnchor,
+  curatedAnalysisFor,
 } from '../src/lib/analysis.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { canRenderCFG, functionToIR, parseIR } from '../src/lib/ir/parse.ts';
@@ -610,37 +617,54 @@ entry:
   );
 }
 
-// ---- 分析层框架：数据为空时结构、锚点与查询函数仍然可用 ----
+// ---- 分析层：完整注册表 + 15 个核心分析的依赖 ----
 {
-  assert.ok(Array.isArray(analysisPasses));
-  assert.deepEqual(analysisScopeOrder, ['module', 'function', 'loop']);
+  assert.deepEqual(analysisScopeOrder, ['module', 'cgscc', 'function', 'loop']);
   assert.deepEqual(
     analysisScopeOrder.map((scope) => analysisScopes[scope].manager),
-    ['ModuleAnalysisManager', 'FunctionAnalysisManager', 'LoopAnalysisManager'],
+    [
+      'ModuleAnalysisManager',
+      'CGSCCAnalysisManager',
+      'FunctionAnalysisManager',
+      'LoopAnalysisManager',
+    ],
   );
 
   for (const scope of analysisScopeOrder) {
     assert.ok(analysisScopes[scope].note.zh.trim());
     assert.ok(analysisScopes[scope].note.en.trim());
-    assert.deepEqual(
-      analysesByScope(scope),
-      analysisPasses.filter((entry) => entry.scope === scope),
-    );
   }
 
-  assert.equal(analysisAnchor('domtree'), 'analysis-domtree');
-  assert.equal(analysisScopeAnchor('function'), 'analysis-function');
-  assert.equal(analysisFor('__missing__'), undefined);
+  // 完整注册表：67 项 = Module 23 + CGSCC 3 + Function 36 + Loop 5
+  assert.equal(analysisRegistry.length, 67);
+  assert.deepEqual(
+    analysisScopeOrder.map(
+      (scope) => analysisRegistry.filter((item) => item.scope === scope).length,
+    ),
+    [23, 3, 36, 5],
+  );
+  const registryKeys = new Set(
+    analysisRegistry.map((item) => `${item.scope}:${item.name}`),
+  );
+  assert.equal(registryKeys.size, analysisRegistry.length);
+  for (const item of analysisRegistry) {
+    assert.ok(item.analysis.trim(), `${item.scope}:${item.name} 缺少 C++ 分析类`);
+  }
 
+  // 核心卡片必须是注册表里的条目，且 id / 依赖 / 消费者都可解析
   const ids = new Set(analysisPasses.map((entry) => entry.id));
   assert.equal(ids.size, analysisPasses.length);
   const pipelineNames = new Set(
     pipelineStages.flatMap((stage) => stage.passes.map((item) => item.name)),
   );
   for (const entry of analysisPasses) {
+    assert.ok(
+      registryKeys.has(`${entry.scope}:${entry.name}`),
+      `${entry.id} 不在完整注册表里`,
+    );
+    assert.equal(curatedAnalysisFor(entry.scope, entry.name)?.id, entry.id);
     assert.ok(entry.answers.zh.trim(), `${entry.id} 缺少中文回答`);
     assert.ok(entry.answers.en.trim(), `${entry.id} 缺少英文回答`);
-    assert.ok(entry.handle.trim(), `${entry.id} 缺少 require 名`);
     assert.ok(entry.source.endsWith('.cpp'), `${entry.id} 的 source 应指向 .cpp`);
     for (const dependency of entry.requires) {
       assert.ok(ids.has(dependency), `${entry.id} 依赖了不存在的分析 ${dependency}`);
@@ -653,14 +677,34 @@ entry:
     }
   }
 
-  // 空数据时查询函数返回空数组，而不是抛错；补数据后这组条件断言自动跳过。
-  if (analysisPasses.length === 0) {
-    assert.deepEqual(analysesForPipelinePass('inline'), []);
-    assert.deepEqual(analysesForPassSlug('inliner'), []);
-    for (const stage of pipelineStages) {
-      assert.deepEqual(analysesForStage(stage), []);
-    }
+  // 同 scope 内按依赖深度从基础到派生排列；也顺带验证没有环
+  for (const scope of analysisScopeOrder) {
+    const depths = analysisPasses
+      .filter((entry) => entry.scope === scope)
+      .map((entry) => analysisDepth(entry));
+    assert.deepEqual(
+      depths,
+      [...depths].sort((a, b) => a - b),
+      `${scope} 的卡片应按依赖深度排序`,
+    );
   }
+
+  assert.equal(analysisAnchor('domtree'), 'analysis-domtree');
+  assert.equal(analysisScopeAnchor('function'), 'analysis-function');
+  assert.equal(analysisFor('__missing__'), undefined);
+
+  assert.ok(analysesForPipelinePass('inline').some((entry) => entry.id === 'lcg'));
+  assert.ok(analysesForPassSlug('inliner').some((entry) => entry.id === 'bfi'));
+  assert.ok(analysesForPassSlug('loop-reduce').some((entry) => entry.id === 'iv-users'));
+  assert.equal(analysesForPassSlug('dce').length, 0);
+
+  const cgsccStage = pipelineStages.find((stage) => stage.id === 'cgscc');
+  assert.ok(cgsccStage);
+  assert.ok(analysesForStage(cgsccStage).some((entry) => entry.id === 'lcg'));
+  assert.deepEqual(
+    analysesByScope('cgscc'),
+    analysisPasses.filter((entry) => entry.scope === 'cgscc'),
+  );
 }
 
 console.log('IR parser, CFG layout, Machine IR & i18n: all assertions passed');

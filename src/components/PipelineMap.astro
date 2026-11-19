@@ -2,7 +2,7 @@
 import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
 import type { PipelineStage } from '../data/pipeline';
-import { analysisPasses } from '../data/analysis';
+import { analysisRegistry } from '../data/analysis-registry';
 import { passRegistry } from '../data/pass-registry';
 import { llvmSourceUrl } from '../site';
 import { analysesForStage, analysisAnchor } from '../lib/analysis';
@@ -34,7 +34,7 @@ const levelKeys = {
     {
       t(locale, 'passes.pipeline.stats', {
         pipeline: stages.reduce((count, stage) => count + stage.passes.length, 0),
-        analysis: analysisPasses.length,
+        analysis: analysisRegistry.length,
         registry: passRegistry.length,
       })
     }
@@ -222,7 +222,7 @@ const levelKeys = {
                       <span class="panel__needs-sep" aria-hidden="true">·</span>
                     ) : null}
                     <a href={`#${analysisAnchor(analysis.id)}`} title={analysis.analysis}>
-                      {analysis.name}
+                      {analysis.label}
                     </a>
                   </>
                 ))}

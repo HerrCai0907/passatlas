@@ -80,9 +80,9 @@ const atlasHref = url('/passes/', locale);
                 <a
                   class="pass__where-link pass__where-link--analysis"
                   href={`${atlasHref}#${analysisAnchor(analysis.id)}`}
-                  aria-label={t(locale, 'pass.analysesLink', { name: analysis.name })}
+                  aria-label={t(locale, 'pass.analysesLink', { name: analysis.label })}
                 >
-                  <span class="pass__where-name">{analysis.name}</span>
+                  <span class="pass__where-name">{analysis.label}</span>
                   <span class="pass__where-arrow" aria-hidden="true">↘</span>
                 </a>
               ))}

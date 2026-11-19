@@ -95,7 +95,7 @@ const zh = {
   'passes.analysis.eyebrow': 'Analysis',
   'passes.analysis.title': '分析层：优化依赖哪些事实',
   'passes.analysis.body':
-    '优化 pass 按顺序执行；分析不是。分析在第一次被要求时计算，按 IR 单元缓存，改写破坏它时失效。下面按分析所在的 IR 层级分组，卡片里的「基于」就是分析之间的依赖；每个 pass 真正会问哪些分析，写在「被使用」里。',
+    '优化 pass 按顺序执行；分析不是。分析在第一次被要求时计算，按 IR 单元缓存，改写破坏它时失效。下面把默认管线反复用到的 {core} 个核心分析展开成卡片，{total} 个注册项全部列在最后的完整注册表里。',
   'passes.analysis.lifecycleLabel': '分析的生命周期',
   'passes.analysis.lifecycle1':
     '<code>getResult&lt;T&gt;()</code>：pass 第一次要一个分析结果。',
@@ -116,18 +116,16 @@ const zh = {
   'passes.analysis.mapNeeds': '依赖分析',
   'passes.analysis.anchorLabel': '定位到分析「{name}」',
   'passes.analysis.sourceTitle': '在 LLVM 23.1.4 源码中',
-  'passes.analysis.legend': '可点的 pass 已有页面；灰色名字还没有页面。',
+  'passes.analysis.legend': '可点的 pass 已有页面；灰色名字还没有页面。注册表里带「详解」的条目会跳回上面的卡片。',
   'passes.analysis.footnote':
-    '这里只列默认管线反复用到的一组核心分析，不是完整注册表；每条依赖都对应 LLVM 23.1.4 的源码，卡片下的链接固定在同一个 commit。「被使用」只表示会向它提问，不代表这个 pass 一定在默认管线里跑；具体保留哪些结果取决于 PreservedAnalyses，这里不逐 pass 展开。',
-  'passes.analysis.emptyTitle': '分析条目待补',
-  'passes.analysis.emptyBody':
-    '结构和链接已经接好：下一批只往 src/data/analysis.ts 里加条目，卡片、管线阶段脚注和 pass 页的「依赖的分析」会自动出现，不需要再改组件。',
-  'passes.analysis.emptyScopesLabel': '三个 scope 已经就位',
-  'passes.analysis.emptyPreviewLabel': '卡片结构预览',
-  'passes.analysis.previewName': '分析名',
-  'passes.analysis.previewHandle': 'require&lt;handle&gt;',
-  'passes.analysis.previewAnswer': '一句话说明这个分析回答什么问题。',
-  'passes.analysis.previewSource': '源码链接',
+    '上面的卡片只列默认管线反复用到的一组核心分析；每条依赖都对应 LLVM 23.1.4 的源码，卡片下的链接固定在同一个 commit。「被使用」只表示会向它提问，不代表这个 pass 一定在默认管线里跑；具体保留哪些结果取决于 PreservedAnalyses，这里不逐 pass 展开。',
+  'passes.analysisRegistry.title': '完整 analysis 注册表',
+  'passes.analysisRegistry.count': '{count} 个注册项',
+  'passes.analysisRegistry.note':
+    'LLVM 23.1.4 的 PassRegistry.def 快照，只收 ANALYSIS 宏；包含 verify / no-op / pass-instrumentation 等调试与基础设施入口，因此比上面的核心卡片多。未注册的辅助分析（如 GlobalsAA、InlineCostAnalysis）不在这个快照里。',
+  'passes.analysisRegistry.detail': '详解',
+  'passes.analysisRegistry.detailLabel': '跳到「{name}」的详解卡片',
+  'passes.analysisRegistry.source': '查看 LLVM 源码',
   'passes.machine.eyebrow': 'Machine IR · 两条主线',
   'passes.machine.title': '从 IR 到机器指令：x86-64 与 AArch64',
   'passes.machine.body':
@@ -416,7 +414,7 @@ const en: Messages = {
   'passes.analysis.eyebrow': 'Analysis',
   'passes.analysis.title': 'The analysis layer: the facts optimisation relies on',
   'passes.analysis.body':
-    'Optimisation passes run in order; analyses do not. An analysis is computed the first time it is asked for, cached per IR unit, and invalidated when a rewrite breaks it. The cards below are grouped by the IR unit the result belongs to; “Built on” is the analysis-to-analysis dependency, and “Used by” lists the passes that actually ask for it.',
+    'Optimisation passes run in order; analyses do not. An analysis is computed the first time it is asked for, cached per IR unit, and invalidated when a rewrite breaks it. The {core} core analyses used repeatedly by the default pipeline are expanded into cards; all {total} registrations are listed in the full registry at the end.',
   'passes.analysis.lifecycleLabel': 'Lifecycle of an analysis',
   'passes.analysis.lifecycle1':
     '<code>getResult&lt;T&gt;()</code>: a pass asks for an analysis for the first time.',
@@ -438,18 +436,17 @@ const en: Messages = {
   'passes.analysis.mapNeeds': 'Analyses',
   'passes.analysis.anchorLabel': 'Permalink to the {name} analysis',
   'passes.analysis.sourceTitle': 'In the LLVM 23.1.4 source',
-  'passes.analysis.legend': 'Clickable passes already have a page; grey names do not yet.',
+  'passes.analysis.legend':
+    'Clickable passes already have a page; grey names do not yet. Entries marked “detail” in the registry jump back to a card.',
   'passes.analysis.footnote':
-    'This is a core set used repeatedly by the default pipeline, not the full registry; every dependency maps to the LLVM 23.1.4 source, and each card links to the same pinned commit. “Used by” means the pass will ask for the analysis, not that it always runs in the default pipeline; what survives a pass depends on the PreservedAnalyses it returns, which this layer does not enumerate.',
-  'passes.analysis.emptyTitle': 'Analysis entries are still being written',
-  'passes.analysis.emptyBody':
-    'The structure and links are in place: the next batch only adds entries to src/data/analysis.ts, and the cards, stage footnotes and pass-page “Analyses” rows appear automatically without touching the components.',
-  'passes.analysis.emptyScopesLabel': 'The three scopes are already wired',
-  'passes.analysis.emptyPreviewLabel': 'Card anatomy preview',
-  'passes.analysis.previewName': 'Analysis name',
-  'passes.analysis.previewHandle': 'require&lt;handle&gt;',
-  'passes.analysis.previewAnswer': 'One sentence explaining what this analysis answers.',
-  'passes.analysis.previewSource': 'Source link',
+    'The cards above cover the core analyses used repeatedly by the default pipeline; every dependency maps to the LLVM 23.1.4 source, and each card links to the same pinned commit. “Used by” means the pass will ask for the analysis, not that it always runs in the default pipeline; what survives a pass depends on the PreservedAnalyses it returns, which this layer does not enumerate.',
+  'passes.analysisRegistry.title': 'Full analysis registry',
+  'passes.analysisRegistry.count': '{count} registrations',
+  'passes.analysisRegistry.note':
+    'A snapshot of LLVM 23.1.4’s PassRegistry.def, covering only the ANALYSIS macros. It includes debugging and infrastructure entries such as verify / no-op / pass-instrumentation, so it is larger than the core cards above. Auxiliary analyses that are not registered here (GlobalsAA, InlineCostAnalysis, …) are outside this snapshot.',
+  'passes.analysisRegistry.detail': 'detail',
+  'passes.analysisRegistry.detailLabel': 'Jump to the {name} detail card',
+  'passes.analysisRegistry.source': 'View the LLVM source',
   'passes.machine.eyebrow': 'Machine IR · two lanes',
   'passes.machine.title': 'From IR to machine instructions: x86-64 and AArch64',
   'passes.machine.body':

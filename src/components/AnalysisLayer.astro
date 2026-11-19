@@ -1,11 +1,12 @@
 ---
 import type { Locale } from '../i18n/config';
 import { t } from '../i18n/ui';
+import { analysisPasses } from '../data/analysis';
 import {
-  analysisPasses,
+  analysisRegistry,
   analysisScopeOrder,
   analysisScopes,
-} from '../data/analysis';
+} from '../data/analysis-registry';
 import { llvmSourceUrl } from '../site';
 import {
   analysesByScope,
@@ -17,6 +18,7 @@ import {
 import { pipelinePageSlug } from '../lib/pipeline';
 import { passSlug, type PassEntry } from '../lib/passes';
 import { url } from '../lib/url';
+import AnalysisRegistry from './AnalysisRegistry.astro';
 
 interface Props {
   pages: PassEntry[];
@@ -28,6 +30,7 @@ const pagesBySlug = new Map(pages.map((pass) => [passSlug(pass), pass]));
 
 const levelKeys = {
   module: 'passes.pipeline.level.module',
+  cgscc: 'passes.pipeline.level.cgscc',
   function: 'passes.pipeline.level.function',
   loop: 'passes.pipeline.level.loop',
 } as const;
@@ -51,7 +54,12 @@ function consumerHref(consumer: string): string | undefined {
       <p class="eyebrow">{t(locale, 'passes.analysis.eyebrow')}</p>
       <h2 id="analysis-title">{t(locale, 'passes.analysis.title')}</h2>
     </div>
-    <p class="analysis__lead">{t(locale, 'passes.analysis.body')}</p>
+    <p class="analysis__lead">
+      {t(locale, 'passes.analysis.body', {
+        core: analysisPasses.length,
+        total: analysisRegistry.length,
+      })}
+    </p>
   </header>
 
   <ol class="lifecycle" aria-label={t(locale, 'passes.analysis.lifecycleLabel')}>
@@ -68,211 +76,160 @@ function consumerHref(consumer: string): string | undefined {
   </ol>
   <p class="analysis__example" set:html={t(locale, 'passes.analysis.lifecycleNote')} />
 
-  {
-    analysisPasses.length === 0 ? (
-      <div class="analysis__empty">
-        <div class="analysis__empty-copy">
-          <h3>{t(locale, 'passes.analysis.emptyTitle')}</h3>
-          <p>{t(locale, 'passes.analysis.emptyBody')}</p>
-          <p class="analysis__empty-scopes-label">
-            {t(locale, 'passes.analysis.emptyScopesLabel')}
-          </p>
-          <ul class="analysis__empty-scopes">
-            {analysisScopeOrder.map((scope) => (
-              <li>
-                <span class="scope__dot" aria-hidden="true" />
-                <strong>{t(locale, levelKeys[scope])}</strong>
-                <code>{analysisScopes[scope].manager}</code>
-              </li>
-            ))}
+  <p class="analysis__legend">
+    <span>{t(locale, 'passes.analysis.depthLegend')}</span>
+    <span>{t(locale, 'passes.analysis.legend')}</span>
+  </p>
+
+  <div class="scopes">
+    {analysisScopeOrder.map((scope) => {
+      const entries = analysesByScope(scope);
+      if (entries.length === 0) return null;
+      return (
+        <section
+          class="scope"
+          id={analysisScopeAnchor(scope)}
+          aria-labelledby={`${analysisScopeAnchor(scope)}-title`}
+        >
+          <header class="scope__head">
+            <div class="scope__title">
+              <span class="scope__dot" aria-hidden="true" />
+              <h3 id={`${analysisScopeAnchor(scope)}-title`}>
+                {t(locale, levelKeys[scope])}
+              </h3>
+              <code class="scope__manager">{analysisScopes[scope].manager}</code>
+            </div>
+            <p class="scope__note">{analysisScopes[scope].note[locale]}</p>
+          </header>
+
+          <ul class="cards">
+            {entries.map((entry) => {
+              const depth = analysisDepth(entry);
+              return (
+                <li class="card" id={analysisAnchor(entry.id)}>
+                  <article aria-labelledby={`${analysisAnchor(entry.id)}-name`}>
+                    <header class="card__head">
+                      <h4 id={`${analysisAnchor(entry.id)}-name`}>
+                        <code>{entry.label}</code>
+                      </h4>
+                      <span class="card__depth">
+                        <span aria-hidden="true">L{depth}</span>
+                        <span class="sr-only">
+                          {t(locale, 'passes.analysis.depthTitle', { depth })}
+                        </span>
+                      </span>
+                      <a
+                        class="card__anchor"
+                        href={`#${analysisAnchor(entry.id)}`}
+                        aria-label={t(locale, 'passes.analysis.anchorLabel', {
+                          name: entry.label,
+                        })}
+                      >
+                        #
+                      </a>
+                    </header>
+
+                    <p class="card__meta">
+                      <code>require&lt;{entry.name}&gt;</code>
+                      <span class="card__sep" aria-hidden="true">·</span>
+                      <code>{entry.analysis}</code>
+                    </p>
+                    <p class="card__answers">{entry.answers[locale]}</p>
+
+                    <dl class="card__facts">
+                      <dt>{t(locale, 'passes.analysis.basedOn')}</dt>
+                      <dd>
+                        {entry.requires.length === 0 ? (
+                          <span class="card__none" aria-hidden="true">—</span>
+                        ) : (
+                          entry.requires.map((id, index) => {
+                            const dependency = analysisFor(id);
+                            return (
+                              <>
+                                {index > 0 ? (
+                                  <span class="card__sep" aria-hidden="true">·</span>
+                                ) : null}
+                                {dependency ? (
+                                  <a
+                                    class="chip chip--analysis"
+                                    href={`#${analysisAnchor(id)}`}
+                                  >
+                                    {dependency.label}
+                                  </a>
+                                ) : (
+                                  <span class="chip chip--muted">{id}</span>
+                                )}
+                              </>
+                            );
+                          })
+                        )}
+                      </dd>
+
+                      <dt>{t(locale, 'passes.analysis.usedBy')}</dt>
+                      <dd>
+                        {entry.consumers.length === 0 ? (
+                          <span class="card__none">
+                            {t(locale, 'passes.analysis.onlyFoundation')}
+                          </span>
+                        ) : (
+                          entry.consumers.map((consumer, index) => {
+                            const consumerAnalysis = analysisFor(consumer);
+                            const href = consumerAnalysis
+                              ? undefined
+                              : consumerHref(consumer);
+                            return (
+                              <>
+                                {index > 0 ? (
+                                  <span class="card__sep" aria-hidden="true">·</span>
+                                ) : null}
+                                {consumerAnalysis ? (
+                                  <a
+                                    class="chip chip--analysis"
+                                    href={`#${analysisAnchor(consumer)}`}
+                                  >
+                                    {consumerAnalysis.label}
+                                    <span class="chip__kind">
+                                      {t(locale, 'passes.analysis.kindAnalysis')}
+                                    </span>
+                                  </a>
+                                ) : href ? (
+                                  <a class="chip chip--pass" href={href}>
+                                    {consumer}
+                                    <span aria-hidden="true">↗</span>
+                                  </a>
+                                ) : (
+                                  <span class="chip chip--muted">{consumer}</span>
+                                )}
+                              </>
+                            );
+                          })
+                        )}
+                      </dd>
+                    </dl>
+
+                    <p class="card__source">
+                      <a
+                        href={llvmSourceUrl(entry.source)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={t(locale, 'passes.analysis.sourceTitle')}
+                      >
+                        <code>{entry.source}</code> ↗
+                      </a>
+                    </p>
+                  </article>
+                </li>
+              );
+            })}
           </ul>
-        </div>
+        </section>
+      );
+    })}
+  </div>
 
-        <div class="analysis__preview">
-          <p class="analysis__empty-label">
-            {t(locale, 'passes.analysis.emptyPreviewLabel')}
-          </p>
-          <article class="card card--preview" aria-hidden="true">
-            <header class="card__head">
-              <h4>
-                <code>{t(locale, 'passes.analysis.previewName')}</code>
-              </h4>
-              <span class="card__depth">L0</span>
-              <span class="card__anchor">#</span>
-            </header>
-            <p class="card__meta">
-              <code set:html={t(locale, 'passes.analysis.previewHandle')} />
-            </p>
-            <p class="card__answers">{t(locale, 'passes.analysis.previewAnswer')}</p>
-            <dl class="card__facts">
-              <dt>{t(locale, 'passes.analysis.basedOn')}</dt>
-              <dd><span class="card__none">—</span></dd>
-              <dt>{t(locale, 'passes.analysis.usedBy')}</dt>
-              <dd><span class="chip chip--muted">…</span></dd>
-            </dl>
-            <p class="card__source">
-              {t(locale, 'passes.analysis.previewSource')} ↗
-            </p>
-          </article>
-        </div>
-      </div>
-    ) : (
-      <>
-        <p class="analysis__legend">
-          <span>{t(locale, 'passes.analysis.depthLegend')}</span>
-          <span>{t(locale, 'passes.analysis.legend')}</span>
-        </p>
+  <p class="footnote">{t(locale, 'passes.analysis.footnote')}</p>
 
-        <div class="scopes">
-          {analysisScopeOrder.map((scope) => {
-            const entries = analysesByScope(scope);
-            if (entries.length === 0) return null;
-            return (
-              <section
-                class="scope"
-                id={analysisScopeAnchor(scope)}
-                aria-labelledby={`${analysisScopeAnchor(scope)}-title`}
-              >
-                <header class="scope__head">
-                  <div class="scope__title">
-                    <span class="scope__dot" aria-hidden="true" />
-                    <h3 id={`${analysisScopeAnchor(scope)}-title`}>
-                      {t(locale, levelKeys[scope])}
-                    </h3>
-                    <code class="scope__manager">{analysisScopes[scope].manager}</code>
-                  </div>
-                  <p class="scope__note">{analysisScopes[scope].note[locale]}</p>
-                </header>
-
-                <ul class="cards">
-                  {entries.map((entry) => {
-                    const depth = analysisDepth(entry);
-                    return (
-                      <li class="card" id={analysisAnchor(entry.id)}>
-                        <article aria-labelledby={`${analysisAnchor(entry.id)}-name`}>
-                          <header class="card__head">
-                            <h4 id={`${analysisAnchor(entry.id)}-name`}>
-                              <code>{entry.name}</code>
-                            </h4>
-                            <span class="card__depth">
-                              <span aria-hidden="true">L{depth}</span>
-                              <span class="sr-only">
-                                {t(locale, 'passes.analysis.depthTitle', { depth })}
-                              </span>
-                            </span>
-                            <a
-                              class="card__anchor"
-                              href={`#${analysisAnchor(entry.id)}`}
-                              aria-label={t(locale, 'passes.analysis.anchorLabel', {
-                                name: entry.name,
-                              })}
-                            >
-                              #
-                            </a>
-                          </header>
-
-                          <p class="card__meta">
-                            <code>require&lt;{entry.handle}&gt;</code>
-                            <span class="card__sep" aria-hidden="true">·</span>
-                            <code>{entry.analysis}</code>
-                          </p>
-                          <p class="card__answers">{entry.answers[locale]}</p>
-
-                          <dl class="card__facts">
-                            <dt>{t(locale, 'passes.analysis.basedOn')}</dt>
-                            <dd>
-                              {entry.requires.length === 0 ? (
-                                <span class="card__none" aria-hidden="true">—</span>
-                              ) : (
-                                entry.requires.map((id, index) => {
-                                  const dependency = analysisFor(id);
-                                  return (
-                                    <>
-                                      {index > 0 ? (
-                                        <span class="card__sep" aria-hidden="true">·</span>
-                                      ) : null}
-                                      {dependency ? (
-                                        <a
-                                          class="chip chip--analysis"
-                                          href={`#${analysisAnchor(id)}`}
-                                        >
-                                          {dependency.name}
-                                        </a>
-                                      ) : (
-                                        <span class="chip chip--muted">{id}</span>
-                                      )}
-                                    </>
-                                  );
-                                })
-                              )}
-                            </dd>
-
-                            <dt>{t(locale, 'passes.analysis.usedBy')}</dt>
-                            <dd>
-                              {entry.consumers.length === 0 ? (
-                                <span class="card__none">
-                                  {t(locale, 'passes.analysis.onlyFoundation')}
-                                </span>
-                              ) : (
-                                entry.consumers.map((consumer, index) => {
-                                  const consumerAnalysis = analysisFor(consumer);
-                                  const href = consumerAnalysis
-                                    ? undefined
-                                    : consumerHref(consumer);
-                                  return (
-                                    <>
-                                      {index > 0 ? (
-                                        <span class="card__sep" aria-hidden="true">·</span>
-                                      ) : null}
-                                      {consumerAnalysis ? (
-                                        <a
-                                          class="chip chip--analysis"
-                                          href={`#${analysisAnchor(consumer)}`}
-                                        >
-                                          {consumerAnalysis.name}
-                                          <span class="chip__kind">
-                                            {t(locale, 'passes.analysis.kindAnalysis')}
-                                          </span>
-                                        </a>
-                                      ) : href ? (
-                                        <a class="chip chip--pass" href={href}>
-                                          {consumer}
-                                          <span aria-hidden="true">↗</span>
-                                        </a>
-                                      ) : (
-                                        <span class="chip chip--muted">{consumer}</span>
-                                      )}
-                                    </>
-                                  );
-                                })
-                              )}
-                            </dd>
-                          </dl>
-
-                          <p class="card__source">
-                            <a
-                              href={llvmSourceUrl(entry.source)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={t(locale, 'passes.analysis.sourceTitle')}
-                            >
-                              <code>{entry.source}</code> ↗
-                            </a>
-                          </p>
-                        </article>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            );
-          })}
-        </div>
-
-        <p class="footnote">{t(locale, 'passes.analysis.footnote')}</p>
-      </>
-    )
-  }
+  <AnalysisRegistry locale={locale} />
 </section>
 
 <style>
@@ -359,85 +316,6 @@ function consumerHref(consumer: string): string | undefined {
     font-size: 10.5px;
     line-height: 1.6;
     color: var(--faint);
-  }
-
-  /* ---------- 空状态：先搭框架，数据后补 ---------- */
-  .analysis__empty {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-    align-items: start;
-    gap: 18px;
-    margin-top: 20px;
-    padding: 18px 18px 20px;
-    border: 1px dashed var(--line-strong);
-    border-radius: var(--radius);
-    background: color-mix(in srgb, var(--surface) 66%, transparent);
-  }
-
-  .analysis__empty-copy h3 {
-    margin-top: 6px;
-    font-size: clamp(19px, 2.2vw, 23px);
-  }
-
-  .analysis__preview {
-    display: grid;
-    align-content: start;
-    gap: 8px;
-  }
-
-  .analysis__empty-copy p {
-    max-width: 68ch;
-    margin-top: 6px;
-    font-size: 13.5px;
-    line-height: 1.7;
-    color: var(--muted);
-  }
-
-  .analysis__empty-label,
-  .analysis__empty-scopes-label {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--faint);
-  }
-
-  .analysis__empty-scopes-label {
-    margin-top: 14px;
-  }
-
-  .analysis__empty-scopes {
-    display: grid;
-    gap: 6px;
-    margin: 8px 0 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .analysis__empty-scopes li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 4px 8px;
-    font-size: 12.5px;
-    color: var(--muted);
-  }
-
-  .analysis__empty-scopes strong {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--ink-soft);
-  }
-
-  .analysis__empty-scopes code {
-    font-size: 10.5px;
-    color: var(--faint);
-  }
-
-  .card--preview {
-    border-style: dashed;
-    opacity: 0.66;
   }
 
   /* ---------- 卡片 ---------- */
@@ -689,8 +567,7 @@ function consumerHref(consumer: string): string | undefined {
   }
 
   @media (max-width: 900px) {
-    .analysis__head,
-    .analysis__empty {
+    .analysis__head {
       grid-template-columns: 1fr;
     }
 

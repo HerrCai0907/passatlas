@@ -1,8 +1,5 @@
-import {
-  analysisPasses,
-  type AnalysisEntry,
-  type AnalysisScope,
-} from '../data/analysis.ts';
+import { analysisPasses, type AnalysisEntry } from '../data/analysis.ts';
+import type { AnalysisScope } from '../data/analysis-registry.ts';
 import { pipelineStages, type PipelineStage } from '../data/pipeline.ts';
 import { pipelinePageSlug } from './pipeline.ts';
 
@@ -21,6 +18,14 @@ export function analysisScopeAnchor(scope: AnalysisScope): string {
 
 export function analysisFor(id: string): AnalysisEntry | undefined {
   return byId.get(id);
+}
+
+/** 完整注册表里的一条记录是否有对应的详解卡片。 */
+export function curatedAnalysisFor(
+  scope: AnalysisScope,
+  name: string,
+): AnalysisEntry | undefined {
+  return analysisPasses.find((entry) => entry.scope === scope && entry.name === name);
 }
 
 /** 按数据里的顺序取某个 scope 的分析，保证「基础 → 派生」的可读顺序。 */
