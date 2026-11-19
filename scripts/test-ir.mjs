@@ -3,6 +3,12 @@
  * 运行：npm run test:ir
  */
 import assert from 'node:assert/strict';
+import { analysisPasses } from '../src/data/analysis.ts';
+import {
+  analysisRegistry,
+  analysisScopeOrder,
+  analysisScopes,
+} from '../src/data/analysis-registry.ts';
 import { cfgSamples, localizeSample } from '../src/data/cfg-samples.ts';
 import { machineSnapshots, machineStages } from '../src/data/machine.ts';
 import { pipelineStages } from '../src/data/pipeline.ts';
@@ -10,6 +16,17 @@ import { getDemo } from '../src/demos/registry.ts';
 import { makeDemo, makeStep } from '../src/demos/types.ts';
 import { localizedPath, pathWithoutLocale } from '../src/i18n/paths.ts';
 import { t } from '../src/i18n/ui.ts';
+import {
+  analysesByScope,
+  analysesForPassSlug,
+  analysesForPipelinePass,
+  analysesForStage,
+  analysisAnchor,
+  analysisDepth,
+  analysisFor,
+  analysisScopeAnchor,
+  curatedAnalysisFor,
+} from '../src/lib/analysis.ts';
 import { diffInstructions, instructionKey } from '../src/lib/ir/diff.ts';
 import { canRenderCFG, functionToIR, parseIR } from '../src/lib/ir/parse.ts';
 import { layoutCFG } from '../src/lib/ir/layout.ts';
@@ -597,6 +614,96 @@ entry:
     prefersIRView(parseMIR(toIR(getDemo('phi-elim', 'zh').steps[0].before))),
     false,
     '多基本块 MIR 默认 CFG',
+  );
+}
+
+// ---- 分析层：完整注册表 + 15 个核心分析的依赖 ----
+{
+  assert.deepEqual(analysisScopeOrder, ['module', 'cgscc', 'function', 'loop']);
+  assert.deepEqual(
+    analysisScopeOrder.map((scope) => analysisScopes[scope].manager),
+    [
+      'ModuleAnalysisManager',
+      'CGSCCAnalysisManager',
+      'FunctionAnalysisManager',
+      'LoopAnalysisManager',
+    ],
+  );
+
+  for (const scope of analysisScopeOrder) {
+    assert.ok(analysisScopes[scope].note.zh.trim());
+    assert.ok(analysisScopes[scope].note.en.trim());
+  }
+
+  // 完整注册表：67 项 = Module 23 + CGSCC 3 + Function 36 + Loop 5
+  assert.equal(analysisRegistry.length, 67);
+  assert.deepEqual(
+    analysisScopeOrder.map(
+      (scope) => analysisRegistry.filter((item) => item.scope === scope).length,
+    ),
+    [23, 3, 36, 5],
+  );
+  const registryKeys = new Set(
+    analysisRegistry.map((item) => `${item.scope}:${item.name}`),
+  );
+  assert.equal(registryKeys.size, analysisRegistry.length);
+  for (const item of analysisRegistry) {
+    assert.ok(item.analysis.trim(), `${item.scope}:${item.name} 缺少 C++ 分析类`);
+  }
+
+  // 核心卡片必须是注册表里的条目，且 id / 依赖 / 消费者都可解析
+  const ids = new Set(analysisPasses.map((entry) => entry.id));
+  assert.equal(ids.size, analysisPasses.length);
+  const pipelineNames = new Set(
+    pipelineStages.flatMap((stage) => stage.passes.map((item) => item.name)),
+  );
+  for (const entry of analysisPasses) {
+    assert.ok(
+      registryKeys.has(`${entry.scope}:${entry.name}`),
+      `${entry.id} 不在完整注册表里`,
+    );
+    assert.equal(curatedAnalysisFor(entry.scope, entry.name)?.id, entry.id);
+    assert.ok(entry.answers.zh.trim(), `${entry.id} 缺少中文回答`);
+    assert.ok(entry.answers.en.trim(), `${entry.id} 缺少英文回答`);
+    assert.ok(entry.source.endsWith('.cpp'), `${entry.id} 的 source 应指向 .cpp`);
+    for (const dependency of entry.requires) {
+      assert.ok(ids.has(dependency), `${entry.id} 依赖了不存在的分析 ${dependency}`);
+    }
+    for (const consumer of entry.consumers) {
+      assert.ok(
+        pipelineNames.has(consumer) || ids.has(consumer),
+        `${entry.id} 的消费者 ${consumer} 既不是管线 pass，也不是分析`,
+      );
+    }
+  }
+
+  // 同 scope 内按依赖深度从基础到派生排列；也顺带验证没有环
+  for (const scope of analysisScopeOrder) {
+    const depths = analysisPasses
+      .filter((entry) => entry.scope === scope)
+      .map((entry) => analysisDepth(entry));
+    assert.deepEqual(
+      depths,
+      [...depths].sort((a, b) => a - b),
+      `${scope} 的卡片应按依赖深度排序`,
+    );
+  }
+
+  assert.equal(analysisAnchor('domtree'), 'analysis-domtree');
+  assert.equal(analysisScopeAnchor('function'), 'analysis-function');
+  assert.equal(analysisFor('__missing__'), undefined);
+
+  assert.ok(analysesForPipelinePass('inline').some((entry) => entry.id === 'lcg'));
+  assert.ok(analysesForPassSlug('inliner').some((entry) => entry.id === 'bfi'));
+  assert.ok(analysesForPassSlug('loop-reduce').some((entry) => entry.id === 'iv-users'));
+  assert.equal(analysesForPassSlug('dce').length, 0);
+
+  const cgsccStage = pipelineStages.find((stage) => stage.id === 'cgscc');
+  assert.ok(cgsccStage);
+  assert.ok(analysesForStage(cgsccStage).some((entry) => entry.id === 'lcg'));
+  assert.deepEqual(
+    analysesByScope('cgscc'),
+    analysisPasses.filter((entry) => entry.scope === 'cgscc'),
   );
 }
 

@@ -1,0 +1,243 @@
+---
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import {
+  analysisRegistry,
+  analysisScopeOrder,
+  type AnalysisScope,
+} from '../data/analysis-registry';
+import { curatedAnalysisFor, analysisAnchor } from '../lib/analysis';
+import { llvmSourceUrl } from '../site';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+
+const levelKeys = {
+  module: 'passes.pipeline.level.module',
+  cgscc: 'passes.pipeline.level.cgscc',
+  function: 'passes.pipeline.level.function',
+  loop: 'passes.pipeline.level.loop',
+} as const satisfies Record<AnalysisScope, string>;
+
+const groups = analysisScopeOrder.map((scope) => ({
+  scope,
+  items: analysisRegistry.filter((item) => item.scope === scope),
+}));
+---
+
+<section
+  class="analysis-registry"
+  id="analysis-registry"
+  aria-labelledby="analysis-registry-title"
+>
+  <header class="areg__head">
+    <h3 id="analysis-registry-title">{t(locale, 'passes.analysisRegistry.title')}</h3>
+    <span class="areg__count">
+      {t(locale, 'passes.analysisRegistry.count', { count: analysisRegistry.length })}
+    </span>
+  </header>
+  <p class="areg__note">{t(locale, 'passes.analysisRegistry.note')}</p>
+
+  <div class="areg__groups">
+    {
+      groups.map((group) => (
+        <section
+          class="areg__group"
+          aria-labelledby={`analysis-registry-${group.scope}`}
+        >
+          <h4 id={`analysis-registry-${group.scope}`}>
+            {t(locale, levelKeys[group.scope])}
+            <span class="areg__n">{group.items.length}</span>
+          </h4>
+          <ul class="areg__list">
+            {group.items.map((item) => {
+              const curated = curatedAnalysisFor(item.scope, item.name);
+              return (
+                <li class:list={['areg__item', { 'is-detail': Boolean(curated) }]}>
+                  {curated ? (
+                    <a
+                      class="areg__name"
+                      href={`#${analysisAnchor(curated.id)}`}
+                      aria-label={t(locale, 'passes.analysisRegistry.detailLabel', {
+                        name: curated.label,
+                      })}
+                    >
+                      <code>{item.name}</code>
+                      <span class="areg__detail">
+                        {t(locale, 'passes.analysisRegistry.detail')}
+                      </span>
+                    </a>
+                  ) : (
+                    <span class="areg__name">
+                      <code>{item.name}</code>
+                    </span>
+                  )}
+                  <span class="areg__class">{item.analysis}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))
+    }
+  </div>
+
+  <p class="areg__source">
+    <a
+      href={llvmSourceUrl('llvm/lib/Passes/PassRegistry.def')}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {t(locale, 'passes.analysisRegistry.source')} ↗
+    </a>
+  </p>
+</section>
+
+<style>
+  .analysis-registry {
+    margin-top: 30px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+
+  .areg__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 12px;
+  }
+
+  .areg__head h3 {
+    font-size: clamp(20px, 2.2vw, 24px);
+  }
+
+  .areg__count {
+    padding: 1px 8px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+
+  .areg__note {
+    max-width: 92ch;
+    margin-top: 8px;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+
+  .areg__groups {
+    display: grid;
+    gap: 18px;
+    margin-top: 18px;
+  }
+
+  .areg__group h4 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 0 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .areg__n {
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    color: var(--faint);
+  }
+
+  .areg__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 2px 18px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .areg__item {
+    display: grid;
+    min-width: 0;
+    gap: 1px;
+    padding: 3px 0;
+  }
+
+  .areg__name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 5px;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .areg__name code {
+    font-size: inherit;
+    color: inherit;
+  }
+
+  a.areg__name {
+    color: var(--accent-strong);
+  }
+
+  a.areg__name:hover {
+    text-decoration: underline;
+  }
+
+  .areg__class {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1.5;
+    color: var(--faint);
+    overflow-wrap: anywhere;
+  }
+
+  .areg__detail {
+    padding: 0 4px;
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+    border-radius: 3px;
+    font-size: 8.5px;
+    line-height: 1.5;
+    color: var(--accent-strong);
+  }
+
+  .areg__source {
+    margin-top: 16px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+
+  .areg__source a {
+    color: var(--accent-strong);
+    text-decoration: none;
+  }
+
+  .areg__source a:hover {
+    text-decoration: underline;
+  }
+
+  @media (max-width: 520px) {
+    .areg__list {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

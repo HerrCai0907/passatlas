@@ -1,0 +1,600 @@
+---
+import type { Locale } from '../i18n/config';
+import { t } from '../i18n/ui';
+import { analysisPasses } from '../data/analysis';
+import {
+  analysisRegistry,
+  analysisScopeOrder,
+  analysisScopes,
+} from '../data/analysis-registry';
+import { llvmSourceUrl } from '../site';
+import {
+  analysesByScope,
+  analysisAnchor,
+  analysisDepth,
+  analysisFor,
+  analysisScopeAnchor,
+} from '../lib/analysis';
+import { pipelinePageSlug } from '../lib/pipeline';
+import { passSlug, type PassEntry } from '../lib/passes';
+import { url } from '../lib/url';
+import AnalysisRegistry from './AnalysisRegistry.astro';
+
+interface Props {
+  pages: PassEntry[];
+  locale: Locale;
+}
+
+const { pages, locale } = Astro.props;
+const pagesBySlug = new Map(pages.map((pass) => [passSlug(pass), pass]));
+
+const levelKeys = {
+  module: 'passes.pipeline.level.module',
+  cgscc: 'passes.pipeline.level.cgscc',
+  function: 'passes.pipeline.level.function',
+  loop: 'passes.pipeline.level.loop',
+} as const;
+
+const lifecycleKeys = [
+  'passes.analysis.lifecycle1',
+  'passes.analysis.lifecycle2',
+  'passes.analysis.lifecycle3',
+  'passes.analysis.lifecycle4',
+] as const;
+
+function consumerHref(consumer: string): string | undefined {
+  const page = pagesBySlug.get(pipelinePageSlug({ name: consumer }));
+  return page ? url(`/passes/${passSlug(page)}/`, locale) : undefined;
+}
+---
+
+<section class="analysis" id="analysis" aria-labelledby="analysis-title">
+  <header class="analysis__head">
+    <div class="analysis__intro">
+      <p class="eyebrow">{t(locale, 'passes.analysis.eyebrow')}</p>
+      <h2 id="analysis-title">{t(locale, 'passes.analysis.title')}</h2>
+    </div>
+    <p class="analysis__lead">
+      {t(locale, 'passes.analysis.body', {
+        core: analysisPasses.length,
+        total: analysisRegistry.length,
+      })}
+    </p>
+  </header>
+
+  <ol class="lifecycle" aria-label={t(locale, 'passes.analysis.lifecycleLabel')}>
+    {
+      lifecycleKeys.map((key, index) => (
+        <li class="lifecycle__step">
+          <span class="lifecycle__no" aria-hidden="true">
+            {String(index + 1).padStart(2, '0')}
+          </span>
+          <p class="lifecycle__text" set:html={t(locale, key)} />
+        </li>
+      ))
+    }
+  </ol>
+  <p class="analysis__example" set:html={t(locale, 'passes.analysis.lifecycleNote')} />
+
+  <p class="analysis__legend">
+    <span>{t(locale, 'passes.analysis.depthLegend')}</span>
+    <span>{t(locale, 'passes.analysis.legend')}</span>
+  </p>
+
+  <div class="scopes">
+    {analysisScopeOrder.map((scope) => {
+      const entries = analysesByScope(scope);
+      if (entries.length === 0) return null;
+      return (
+        <section
+          class="scope"
+          id={analysisScopeAnchor(scope)}
+          aria-labelledby={`${analysisScopeAnchor(scope)}-title`}
+        >
+          <header class="scope__head">
+            <div class="scope__title">
+              <span class="scope__dot" aria-hidden="true" />
+              <h3 id={`${analysisScopeAnchor(scope)}-title`}>
+                {t(locale, levelKeys[scope])}
+              </h3>
+              <code class="scope__manager">{analysisScopes[scope].manager}</code>
+            </div>
+            <p class="scope__note">{analysisScopes[scope].note[locale]}</p>
+          </header>
+
+          <ul class="cards">
+            {entries.map((entry) => {
+              const depth = analysisDepth(entry);
+              return (
+                <li class="card" id={analysisAnchor(entry.id)}>
+                  <article aria-labelledby={`${analysisAnchor(entry.id)}-name`}>
+                    <header class="card__head">
+                      <h4 id={`${analysisAnchor(entry.id)}-name`}>
+                        <code>{entry.label}</code>
+                      </h4>
+                      <span class="card__depth">
+                        <span aria-hidden="true">L{depth}</span>
+                        <span class="sr-only">
+                          {t(locale, 'passes.analysis.depthTitle', { depth })}
+                        </span>
+                      </span>
+                      <a
+                        class="card__anchor"
+                        href={`#${analysisAnchor(entry.id)}`}
+                        aria-label={t(locale, 'passes.analysis.anchorLabel', {
+                          name: entry.label,
+                        })}
+                      >
+                        #
+                      </a>
+                    </header>
+
+                    <p class="card__meta">
+                      <code>require&lt;{entry.name}&gt;</code>
+                      <span class="card__sep" aria-hidden="true">·</span>
+                      <code>{entry.analysis}</code>
+                    </p>
+                    <p class="card__answers">{entry.answers[locale]}</p>
+
+                    <dl class="card__facts">
+                      <dt>{t(locale, 'passes.analysis.basedOn')}</dt>
+                      <dd>
+                        {entry.requires.length === 0 ? (
+                          <span class="card__none" aria-hidden="true">—</span>
+                        ) : (
+                          entry.requires.map((id, index) => {
+                            const dependency = analysisFor(id);
+                            return (
+                              <>
+                                {index > 0 ? (
+                                  <span class="card__sep" aria-hidden="true">·</span>
+                                ) : null}
+                                {dependency ? (
+                                  <a
+                                    class="chip chip--analysis"
+                                    href={`#${analysisAnchor(id)}`}
+                                  >
+                                    {dependency.label}
+                                  </a>
+                                ) : (
+                                  <span class="chip chip--muted">{id}</span>
+                                )}
+                              </>
+                            );
+                          })
+                        )}
+                      </dd>
+
+                      <dt>{t(locale, 'passes.analysis.usedBy')}</dt>
+                      <dd>
+                        {entry.consumers.length === 0 ? (
+                          <span class="card__none">
+                            {t(locale, 'passes.analysis.onlyFoundation')}
+                          </span>
+                        ) : (
+                          entry.consumers.map((consumer, index) => {
+                            const consumerAnalysis = analysisFor(consumer);
+                            const href = consumerAnalysis
+                              ? undefined
+                              : consumerHref(consumer);
+                            return (
+                              <>
+                                {index > 0 ? (
+                                  <span class="card__sep" aria-hidden="true">·</span>
+                                ) : null}
+                                {consumerAnalysis ? (
+                                  <a
+                                    class="chip chip--analysis"
+                                    href={`#${analysisAnchor(consumer)}`}
+                                  >
+                                    {consumerAnalysis.label}
+                                    <span class="chip__kind">
+                                      {t(locale, 'passes.analysis.kindAnalysis')}
+                                    </span>
+                                  </a>
+                                ) : href ? (
+                                  <a class="chip chip--pass" href={href}>
+                                    {consumer}
+                                    <span aria-hidden="true">↗</span>
+                                  </a>
+                                ) : (
+                                  <span class="chip chip--muted">{consumer}</span>
+                                )}
+                              </>
+                            );
+                          })
+                        )}
+                      </dd>
+                    </dl>
+
+                    <p class="card__source">
+                      <a
+                        href={llvmSourceUrl(entry.source)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={t(locale, 'passes.analysis.sourceTitle')}
+                      >
+                        <code>{entry.source}</code> ↗
+                      </a>
+                    </p>
+                  </article>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      );
+    })}
+  </div>
+
+  <p class="footnote">{t(locale, 'passes.analysis.footnote')}</p>
+
+  <AnalysisRegistry locale={locale} />
+</section>
+
+<style>
+  .analysis {
+    margin-top: clamp(30px, 4.5vw, 48px);
+    padding-top: clamp(24px, 4vw, 36px);
+    border-top: 1px solid var(--line);
+  }
+
+  .analysis__head {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: end;
+    gap: 10px clamp(24px, 4vw, 56px);
+  }
+
+  .analysis__intro h2 {
+    margin-top: 8px;
+    font-size: clamp(26px, 3vw, 34px);
+  }
+
+  .analysis__lead {
+    max-width: 70ch;
+    font-size: 14.5px;
+    line-height: 1.75;
+    color: var(--muted);
+  }
+
+  /* ---------- 生命周期 ---------- */
+  .lifecycle {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 22px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lifecycle__step {
+    padding: 13px 15px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+  }
+
+  .lifecycle__no {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+  }
+
+  .lifecycle__text {
+    margin-top: 5px;
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .lifecycle__text :global(code) {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+  }
+
+  .analysis__example {
+    max-width: 92ch;
+    margin-top: 10px;
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--faint);
+  }
+
+  .analysis__example :global(code) {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+  }
+
+  .analysis__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    margin-top: 16px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.6;
+    color: var(--faint);
+  }
+
+  /* ---------- 卡片 ---------- */
+  .scopes {
+    display: grid;
+    gap: 26px;
+    margin-top: 22px;
+  }
+
+  .scope__head {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 12px;
+  }
+
+  .scope__title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+  }
+
+  .scope__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    align-self: center;
+  }
+
+  .scope__title h3 {
+    font-size: clamp(20px, 2.2vw, 24px);
+  }
+
+  .scope__manager {
+    font-size: 10.5px;
+    color: var(--faint);
+  }
+
+  .scope__note {
+    max-width: 82ch;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .card {
+    min-width: 0;
+    padding: 14px 16px 15px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    scroll-margin-top: 96px;
+  }
+
+  .card:target {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+    background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+    box-shadow:
+      0 0 0 3px var(--accent-soft),
+      var(--shadow-sm);
+  }
+
+  .card__head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .card__head h4 {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .card__head h4 code {
+    font-size: inherit;
+  }
+
+  .card__depth {
+    flex: none;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1.6;
+    color: var(--accent-strong);
+  }
+
+  .card__anchor {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1;
+    color: var(--faint);
+    text-decoration: none;
+  }
+
+  .card__anchor:hover {
+    color: var(--accent);
+  }
+
+  .card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 3px 6px;
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--faint);
+    overflow-wrap: anywhere;
+  }
+
+  .card__meta code {
+    font-size: 10px;
+    color: var(--faint);
+  }
+
+  .card__answers {
+    margin-top: 8px;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--ink-soft);
+  }
+
+  .card__facts {
+    display: grid;
+    grid-template-columns: 4.6em minmax(0, 1fr);
+    gap: 6px 10px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .card__facts dt {
+    padding-top: 1px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .card__facts dd {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 6px;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .card__sep {
+    font-size: 10px;
+    color: var(--line-strong);
+  }
+
+  .card__none {
+    font-size: 12px;
+    color: var(--faint);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    padding: 0 6px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.7;
+    color: var(--muted);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .chip--analysis {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+    color: var(--accent-strong);
+  }
+
+  .chip--analysis:hover {
+    background: var(--accent-soft);
+  }
+
+  .chip--pass {
+    border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+    color: var(--ink-soft);
+  }
+
+  .chip--pass:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .chip--muted {
+    color: var(--faint);
+  }
+
+  .chip__kind {
+    font-size: 8.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  .card__source {
+    margin-top: 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--faint);
+  }
+
+  .card__source a {
+    color: var(--faint);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .card__source a:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+  }
+
+  .footnote {
+    max-width: 88ch;
+    margin-top: 22px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--faint);
+  }
+
+  @media (max-width: 900px) {
+    .analysis__head {
+      grid-template-columns: 1fr;
+    }
+
+    .lifecycle {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 760px) {
+    .cards,
+    .lifecycle {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 440px) {
+    .card {
+      padding: 13px 13px 14px;
+    }
+
+    .card__facts {
+      grid-template-columns: 1fr;
+      gap: 2px;
+    }
+
+    .card__facts dt {
+      margin-top: 6px;
+    }
+  }
+</style>

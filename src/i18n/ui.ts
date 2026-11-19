@@ -87,11 +87,45 @@ const zh = {
   'passes.pipeline.level.loop': 'Loop',
   'passes.pipeline.level.vectorize': 'Function / Loop',
   'passes.pipeline.level.codegen': 'Machine IR',
-  'passes.pipeline.stats': '主图 {pipeline} 个节点 · LLVM 注册表 {registry} 项',
+  'passes.pipeline.stats': '主图 {pipeline} 个节点 · 分析层 {analysis} 项 · LLVM 注册表 {registry} 项',
   'passes.pipeline.legendConditional': '条件启用',
   'passes.pipeline.legendTarget': '目标专属 pass',
   'passes.pipeline.source': 'PassBuilderPipelines.cpp',
   'passes.pipeline.conditional': '条件启用：取决于优化级别、PGO 或 target',
+  'passes.analysis.eyebrow': 'Analysis',
+  'passes.analysis.title': '分析层：优化依赖哪些事实',
+  'passes.analysis.body':
+    '优化 pass 按顺序执行；分析不是。分析在第一次被要求时计算，按 IR 单元缓存，改写破坏它时失效。下面把默认管线反复用到的 {core} 个核心分析展开成卡片，{total} 个注册项全部列在最后的完整注册表里。',
+  'passes.analysis.lifecycleLabel': '分析的生命周期',
+  'passes.analysis.lifecycle1':
+    '<code>getResult&lt;T&gt;()</code>：pass 第一次要一个分析结果。',
+  'passes.analysis.lifecycle2':
+    '缓存 / 计算：结果按 IR 单元保存；没人问的分析不花时间。',
+  'passes.analysis.lifecycle3':
+    '<code>PreservedAnalyses</code>：pass 结束时报告它改了什么、哪些结果还能用。',
+  'passes.analysis.lifecycle4':
+    '<code>invalidate</code>：被破坏的结果丢掉；下一次 <code>getResult</code> 重新算。',
+  'passes.analysis.lifecycleNote':
+    '例如 <code>ScalarEvolution</code> 建立在 <code>DominatorTree</code>、<code>LoopInfo</code>、<code>AssumptionCache</code>、<code>TargetLibraryInfo</code> 上；一个改写了 CFG 却不保留它的 pass，会让下一次 <code>getResult&lt;ScalarEvolutionAnalysis&gt;()</code> 重算整条链。',
+  'passes.analysis.depthLegend': 'L0 直接读 IR 或目标信息；数字越大，越依赖其它分析。',
+  'passes.analysis.depthTitle': '依赖深度 L{depth}',
+  'passes.analysis.basedOn': '基于',
+  'passes.analysis.usedBy': '被使用',
+  'passes.analysis.onlyFoundation': '只作为其它分析的基础',
+  'passes.analysis.kindAnalysis': '分析',
+  'passes.analysis.mapNeeds': '依赖分析',
+  'passes.analysis.anchorLabel': '定位到分析「{name}」',
+  'passes.analysis.sourceTitle': '在 LLVM 23.1.4 源码中',
+  'passes.analysis.legend': '可点的 pass 已有页面；灰色名字还没有页面。注册表里带「详解」的条目会跳回上面的卡片。',
+  'passes.analysis.footnote':
+    '上面的卡片只列默认管线反复用到的一组核心分析；每条依赖都对应 LLVM 23.1.4 的源码，卡片下的链接固定在同一个 commit。「被使用」只表示会向它提问，不代表这个 pass 一定在默认管线里跑；具体保留哪些结果取决于 PreservedAnalyses，这里不逐 pass 展开。',
+  'passes.analysisRegistry.title': '完整 analysis 注册表',
+  'passes.analysisRegistry.count': '{count} 个注册项',
+  'passes.analysisRegistry.note':
+    'LLVM 23.1.4 的 PassRegistry.def 快照，只收 ANALYSIS 宏；包含 verify / no-op / pass-instrumentation 等调试与基础设施入口，因此比上面的核心卡片多。未注册的辅助分析（如 GlobalsAA、InlineCostAnalysis）不在这个快照里。',
+  'passes.analysisRegistry.detail': '详解',
+  'passes.analysisRegistry.detailLabel': '跳到「{name}」的详解卡片',
+  'passes.analysisRegistry.source': '查看 LLVM 源码',
   'passes.machine.eyebrow': 'Machine IR · 两条主线',
   'passes.machine.title': '从 IR 到机器指令：x86-64 与 AArch64',
   'passes.machine.body':
@@ -111,7 +145,7 @@ const zh = {
   'passes.registry.title': '完整 pass 注册表',
   'passes.registry.count': '{count} 个注册项',
   'passes.registry.note':
-    'LLVM 23.1.4 的 PassRegistry.def 快照，不含 analysis 和 pipeline alias。它只覆盖 IR pass manager；Machine IR 的 pass 由 target 的 PassConfig 插入，因此不在这个注册表里。包含 print / dot / verify / no-op 等调试入口，因此比主图多；主图只画默认优化管线。',
+    'LLVM 23.1.4 的 PassRegistry.def 快照，不含 analysis 和 pipeline alias；分析单独放在上面的分析层。它只覆盖 IR pass manager；Machine IR 的 pass 由 target 的 PassConfig 插入，因此不在这个注册表里。包含 print / dot / verify / no-op 等调试入口，因此比主图多；主图只画默认优化管线。',
   'passes.registry.level.loopnest': 'Loop nest',
   'passes.registry.source': '查看 LLVM 源码',
 
@@ -131,6 +165,8 @@ const zh = {
   'pass.stageNone': '由 target 或 -fprofile-generate 等开关启用，不在固定 -O 级别里。',
   'pass.where': '管线位置',
   'pass.whereLink': '跳到图鉴管线中的「{title}」阶段',
+  'pass.analyses': '依赖的分析',
+  'pass.analysesLink': '跳到分析层中的「{name}」',
 
   'pgo.site.samples': '采样',
   'pgo.site.writes': '写成',
@@ -368,12 +404,49 @@ const en: Messages = {
   'passes.pipeline.level.vectorize': 'Function / Loop',
   'passes.pipeline.level.codegen': 'Machine IR',
 
-  'passes.pipeline.stats': 'Map: {pipeline} nodes · LLVM registry: {registry} entries',
+  'passes.pipeline.stats':
+    'Map: {pipeline} nodes · Analysis layer: {analysis} entries · LLVM registry: {registry} entries',
   'passes.pipeline.legendConditional': 'Conditional',
   'passes.pipeline.legendTarget': 'Target-specific pass',
   'passes.pipeline.source': 'PassBuilderPipelines.cpp',
   'passes.pipeline.conditional':
     'Conditional: depends on the optimisation level, PGO or target',
+  'passes.analysis.eyebrow': 'Analysis',
+  'passes.analysis.title': 'The analysis layer: the facts optimisation relies on',
+  'passes.analysis.body':
+    'Optimisation passes run in order; analyses do not. An analysis is computed the first time it is asked for, cached per IR unit, and invalidated when a rewrite breaks it. The {core} core analyses used repeatedly by the default pipeline are expanded into cards; all {total} registrations are listed in the full registry at the end.',
+  'passes.analysis.lifecycleLabel': 'Lifecycle of an analysis',
+  'passes.analysis.lifecycle1':
+    '<code>getResult&lt;T&gt;()</code>: a pass asks for an analysis for the first time.',
+  'passes.analysis.lifecycle2':
+    'Cache / compute: the result is stored per IR unit; analyses nobody asks for cost nothing.',
+  'passes.analysis.lifecycle3':
+    '<code>PreservedAnalyses</code>: when the pass finishes it reports what changed and which results survive.',
+  'passes.analysis.lifecycle4':
+    '<code>invalidate</code>: broken results are dropped; the next <code>getResult</code> recomputes them.',
+  'passes.analysis.lifecycleNote':
+    'For example, <code>ScalarEvolution</code> is built on <code>DominatorTree</code>, <code>LoopInfo</code>, <code>AssumptionCache</code> and <code>TargetLibraryInfo</code>; a pass that changes the CFG without preserving it makes the next <code>getResult&lt;ScalarEvolutionAnalysis&gt;()</code> rebuild the whole chain.',
+  'passes.analysis.depthLegend':
+    'L0 reads the IR or target facts directly; higher numbers depend on more analyses.',
+  'passes.analysis.depthTitle': 'Dependency depth L{depth}',
+  'passes.analysis.basedOn': 'Built on',
+  'passes.analysis.usedBy': 'Used by',
+  'passes.analysis.onlyFoundation': 'Only a foundation for other analyses',
+  'passes.analysis.kindAnalysis': 'analysis',
+  'passes.analysis.mapNeeds': 'Analyses',
+  'passes.analysis.anchorLabel': 'Permalink to the {name} analysis',
+  'passes.analysis.sourceTitle': 'In the LLVM 23.1.4 source',
+  'passes.analysis.legend':
+    'Clickable passes already have a page; grey names do not yet. Entries marked “detail” in the registry jump back to a card.',
+  'passes.analysis.footnote':
+    'The cards above cover the core analyses used repeatedly by the default pipeline; every dependency maps to the LLVM 23.1.4 source, and each card links to the same pinned commit. “Used by” means the pass will ask for the analysis, not that it always runs in the default pipeline; what survives a pass depends on the PreservedAnalyses it returns, which this layer does not enumerate.',
+  'passes.analysisRegistry.title': 'Full analysis registry',
+  'passes.analysisRegistry.count': '{count} registrations',
+  'passes.analysisRegistry.note':
+    'A snapshot of LLVM 23.1.4’s PassRegistry.def, covering only the ANALYSIS macros. It includes debugging and infrastructure entries such as verify / no-op / pass-instrumentation, so it is larger than the core cards above. Auxiliary analyses that are not registered here (GlobalsAA, InlineCostAnalysis, …) are outside this snapshot.',
+  'passes.analysisRegistry.detail': 'detail',
+  'passes.analysisRegistry.detailLabel': 'Jump to the {name} detail card',
+  'passes.analysisRegistry.source': 'View the LLVM source',
   'passes.machine.eyebrow': 'Machine IR · two lanes',
   'passes.machine.title': 'From IR to machine instructions: x86-64 and AArch64',
   'passes.machine.body':
@@ -393,7 +466,7 @@ const en: Messages = {
   'passes.registry.title': 'Full pass registry',
   'passes.registry.count': '{count} registrations',
   'passes.registry.note':
-    'A snapshot of LLVM 23.1.4’s PassRegistry.def, excluding analyses and pipeline aliases. It only covers the IR pass manager; Machine IR passes are inserted by the target PassConfig and are not registered here. It includes debugging entries such as print / dot / verify / no-op, so it is larger than the map above, which only shows the default optimisation pipeline.',
+    'A snapshot of LLVM 23.1.4’s PassRegistry.def, excluding analyses and pipeline aliases; analyses live in the analysis layer above. It only covers the IR pass manager; Machine IR passes are inserted by the target PassConfig and are not registered here. It includes debugging entries such as print / dot / verify / no-op, so it is larger than the map above, which only shows the default optimisation pipeline.',
   'passes.registry.level.loopnest': 'Loop nest',
   'passes.registry.source': 'View the LLVM source',
 
@@ -414,6 +487,8 @@ const en: Messages = {
   'pass.stageNone': 'Enabled by flags such as -fprofile-generate or target options, not by a fixed -O level.',
   'pass.where': 'In the pipeline',
   'pass.whereLink': 'Jump to the “{title}” stage in the atlas pipeline',
+  'pass.analyses': 'Analyses',
+  'pass.analysesLink': 'Jump to the {name} analysis in the analysis layer',
 
   'pgo.site.samples': 'Samples',
   'pgo.site.writes': 'Becomes',
