@@ -20,21 +20,21 @@ import I18nLink from '../../../components/I18nLink.astro';
 A sampling profiler never tells you how many times an edge ran. It interrupts the program at a fixed period, records the PC, and attributes that PC to a function and a line or block through debug info or pseudo probes. The result is a set of **sparse, noisy block counts**:
 
 ```text
-Only two blocks have samples:
-  entry 100        left ?        right ?        join 100
+Samples cover only part of the function; the loop header has no probe:
+  entry 100   loop ?   body 450   then ?   latch ?   exit 100
 
 Treat missing as zero:
-  entry 100        left 0        right 0        join 0
-  → left / right / join look cold, and 100 ≠ 0 + 0
+  entry 100   loop 0   body 450   then 0   latch 0   exit 100
+  → loop and then look cold, and the back-edge flow has no explanation
 
 profi infers:
-  entry 100        left 50       right 50       join 100
-  → every block satisfies flow conservation
+  entry 100   loop 550 body 450   then 225 latch 450   exit 100
+  → loop header = entry 100 + back edge 450, every block conserves flow
 ```
 
-Filling gaps with zero cannot work. `entry` has 100 samples, so its two outgoing edges must carry 100 executions in total; `join` has 100 samples, so its incoming edges must also sum to 100. Annotate only part of that and the remaining edges either have no weight or contradict their blocks. Everything that consumes block frequencies — BFI, the inliner, loop unrolling, block placement, Machine IR section assignment — then sees a profile that does not add up.
+Filling gaps with zero cannot work. `entry` has 100 samples, all of which enter the loop; `body` has 450, so the back edge must carry 450 executions; `exit` has 100, so the loop can only leave 100 times. The `latch` has no samples: it receives body's 450 and sends it straight back. Together these force the loop header to 100 + 450 = 550. Set the missing `loop` to 0 and you get 100 ≠ 450 + 100; set `then` to 0 and body's 450 has nowhere to go. Everything that consumes block frequencies — BFI, the inliner, loop unrolling, block placement, Machine IR section assignment — then sees a profile that does not add up.
 
-The old `sample-profile` loader used three rounds of `propagateThroughEdges`: copy the block count across a single predecessor/successor, or subtract the known edges from the block count when only one edge is missing. That rule is not guaranteed to converge on cycles, and when samples conflict it can only clamp an unknown edge to zero. The source carries a FIXME asking for a scheme that is guaranteed to finalise. More often the branch simply gets no `!prof` at all: in the experiment at the end of this page, without profi `opt` writes `function_entry_count = 1` and nothing on the conditional branch.
+The old `sample-profile` loader used three rounds of `propagateThroughEdges`: copy the block count across a single predecessor/successor, or subtract the known edges from the block count when only one edge is missing. That rule is not guaranteed to converge on cycles, and when samples conflict it can only clamp an unknown edge to zero. The source carries a FIXME asking for a scheme that is guaranteed to finalise. More often the branch weights are badly distorted: in the loop experiment at the end of this page, without profi `opt` writes `function_entry_count = 1` and a `451 : 2` loop branch, while the branch inside the loop gets no `!prof` at all.
 
 LLVM's profi replaces the local heuristic with a global objective. The comment at the top of the implementation says it directly:
 
@@ -123,7 +123,7 @@ With the network built, `MinCostMaxFlow` repeatedly finds a shortest augmenting 
 
 Shortest paths alone are not enough. `EvenFlowDistribution` (`-sample-profile-even-flow-distribution`, on by default in the CLI) handles the “several paths cost the same” case. It marks every edge that lies on a shortest path and has residual capacity at least `max(PathCapacity / 2, 1)`, collects those edges into an augmenting DAG with a bounded DFS (at most 10 visits per node), and then distributes flow by out-degree. Fractional remainders are rounded up and excess flow is sent back along reverse edges, so conservation holds and at least one edge saturates per DAG augmentation.
 
-That is one source of the 50 : 50 in the animation. `entry` and `join` have 100 samples each, `left` and `right` are unknown, and both routes are free; minimum cost cannot distinguish them, so even-flow splits 100 by out-degree. The post-processing step `rebalanceUnknownSubgraphs` applies the same even split to the same unknown subgraph, so turning off even-flow alone may not change the result; with both disabled the answer becomes 100 : 0. **50 : 50 is a tie-breaking rule, not a guess that the branch is 50 %.** If `left` carries 80 samples, its quota anchors the flow and the result is 80 : 20 (there is a verification command at the end of the page).
+The animation is a concrete example. The `loop` header, `then` and `latch` have no samples, `body` has 450, and `entry` / `exit` have 100 each. The 450 back edge plus 100 entry pins the header at 550; 550 then splits into 450 for body and 100 for exit. The body's `then` / `latch` branch has no samples, so even-flow splits 450 into 225 / 225; on the simplified CFG in the animation, `rebalanceUnknownSubgraphs` produces the same even split, and only with both disabled does the unknown branch collapse (`body→then` 0, `body→latch` 450). If `then` carries 150 samples, the split becomes 150 / 300 (there is a verification command at the end of the page). **An even split is a tie-breaking rule, not a guess that the branch is 50 %.**
 
 The source states a worst-case complexity of `O(v(f) · m · n)`, where `v(f)` is the max-flow value, `m` the number of edges and `n` the number of nodes; on typical instances it observes sub-quadratic running time. The DAG augmentation pushes a large batch of flow at once instead of one unit at a time, which is what makes it usable on real profiles.
 
@@ -149,9 +149,10 @@ Both clean-ups are on by default (`-sample-profile-join-islands`, `-sample-profi
 
 - **It is not always on by default.** `-sample-profile-use-profi` starts as false; `doInitialization` enables it automatically only when the profile is context-sensitive, probe-based or preinlined. CSSPGO takes that path. A plain line-based AutoFDO profile needs the flag, otherwise the old three-pass propagation runs.
 - **The cost model is not “recover the truth”.** The 10 / 20 / 40 numbers are tuned, not derived from a probability model. When samples conflict, the result can be a compromise that looks odd: entry 70, arms 50 and 100, join 100 comes out as entry 86, arms 19 and 67, join 86 (branch weights 19 : 67) rather than keeping 50 and 100. Minimum cost guarantees the cheapest total edit, not that every block stays close to its sample.
-- **Ties are common.** Moving one unit of flow from A to B often means “A pays a little less, B pays a little more” for the same total. Augmentation order and even-flow decide the result; a different LLVM version or a changed default can change the numbers. Do not treat 50 : 50 as an invariant of the algorithm.
-- **50 : 50 for unknown branches is a prior, not evidence.** A function with only an entry sample will split evenly between two paths with completely different real hotness. Real CSSPGO puts pseudo probes on both paths, giving profi more anchors; a path without probes has only the prior.
+- **Ties are common.** Moving one unit of flow from A to B often means “A pays a little less, B pays a little more” for the same total. Augmentation order and even-flow decide the result; a different LLVM version or a changed default can change the numbers. Do not treat 225 : 225 or 50 : 50 as an invariant of the algorithm.
+- **An even split for unknown branches is a prior, not evidence.** The 225 : 225 for then/latch in the animation is one such split. A function with only an entry sample will split evenly between two paths with completely different real hotness. Real CSSPGO puts pseudo probes on both paths, giving profi more anchors; a path without probes has only the prior.
 - **Unlikely edges are pushed to zero.** An `invoke`'s unwind edge and a jump whose target ends in `unreachable` cost `2³⁰`; unless conservation forces them, their weight is 0. Exception paths and “looks unreachable” paths can therefore disappear from the profile, and EH-aware consumers see an over-hot normal path.
+- **A loop with no samples does not invent iterations.** When only `entry` / `exit` are sampled and both `loop` and body are unknown, profi can set the back edge to 0: 100 calls split into 50 entering the loop and 50 exiting directly, with `loop` 50, body 0 and `exit` 100. Real CSSPGO needs probes inside the loop, otherwise the solver has no evidence to demand a single iteration.
 - **Multiple successors sharing a destination lose information.** profi treats `(pred, succ)` as one edge. When several `switch` cases land on the same block, the loader can only split the edge weight again when writing `branch_weights`; the per-case difference is unrecoverable.
 - **Unreachable blocks are dropped.** Blocks that cannot be reached from the entry, or cannot reach any exit, never enter the network. Samples on infinite loops with no way out take no part in inference and never appear in `BlockWeights`.
 - **Unknown-subgraph rebalancing has preconditions.** The known sink must be unique and the unknown blocks must not form a cycle; otherwise `rebalanceUnknownSubgraphs` gives up, and a cyclic unknown region can keep an arbitrary split.
@@ -171,70 +172,93 @@ In the default pipeline, `sample-profile` is a conditional module pass; profi is
 
 ## Run it yourself
 
-The example below needs a single entry sample to show the difference between profi and the old heuristic. Keep the `if` CFG intact; do not let clang optimise it away:
+The loop below is the same CFG as the animation, written in C so it can be compiled and run. The point is that **only some blocks have samples**: entry, the loop body and the exit have probes; the loop header and one branch inside the body do not.
 
 ```c
-// pick.c
-int pick(int x) {
-  if (x > 0)
-    return x + 1;
-  else
-    return x - 1;
+// loop.c
+int sum(int n) {
+  int s = 0;
+  for (int i = 0; i < n; i++)
+    if ((i & 1) == 0)
+      s += 1;
+  return s;
 }
 ```
 
 ```text
-# pick.prof
-pick:100:0
+# loop.prof
+sum:100:0
  1: 100
+ 3: 450
+ 5: 100
 ```
 
-Line numbers in a sample profile are **offsets from the function's start line**, not source line numbers. `pick` starts on line 1 and the `if` is on line 2, so offset 1 is the conditional branch. `-fprofile-sample-use` also gives the function the `"use-sample-profile"` attribute; without that attribute the loader skips the whole function.
+Line numbers in a sample profile are **offsets from the function's start line**, not source line numbers. `sum` starts on line 1:
+
+| Profile line | Source line | Block | Samples |
+| --- | --- | --- | --- |
+| `1` | line 2, `int s = 0;` | entry | 100 |
+| `3` | line 4, `if (...)` | body | 450 |
+| `5` | line 6, `return s;` | exit | 100 |
+
+Line 3 (`for`) and line 5 (`s += 1`) deliberately have no samples, so the loop header, latch and then are unknown. `-fprofile-sample-use` also gives the function the `"use-sample-profile"` attribute; without that attribute the loader skips the whole function.
 
 ```bash
-clang -O1 -g -fprofile-sample-use=pick.prof -Xclang -disable-llvm-passes \
-      -S -emit-llvm pick.c -o pick.ll
+clang -O1 -g -fprofile-sample-use=loop.prof -Xclang -disable-llvm-passes \
+      -S -emit-llvm loop.c -o loop.ll
 
-opt -passes=sample-profile -sample-profile-file=pick.prof \
-    -sample-profile-use-profi -S pick.ll -o pick.out.ll
+opt -passes=sample-profile -sample-profile-file=loop.prof \
+    -sample-profile-use-profi -S loop.ll -o loop.out.ll
 
-grep -n 'branch_weights\|function_entry_count' pick.out.ll
+grep -n 'branch_weights\|function_entry_count' loop.out.ll
 ```
 
 With LLVM 23 the output looks like:
 
 ```text
 !{!"function_entry_count", i64 100}
-!{!"branch_weights", i32 50, i32 50}
+!{!"branch_weights", i32 450, i32 100}
+!{!"branch_weights", i32 225, i32 225}
 ```
 
-`left` and `right` have no samples, both routes are free, and even-flow splits them 50 / 50; `join` has no samples either, so its 100 comes from the two incoming edges. Now give the `then` arm 80 samples:
+The first `branch_weights` is the loop condition: 450 executions go to body, 100 go to exit. The second is `(i & 1) == 0` inside the body: then and latch get 225 each. The loop header has no samples; its 550 = entry 100 + back edge 450 is constrained by both its inflow and its outflow.
+
+Give the `then` arm 150 samples:
 
 ```text
-pick:100:0
+sum:100:0
  1: 100
- 2: 80
+ 3: 450
+ 4: 150
+ 5: 100
 ```
 
-Run it again and the branch weights become `80 : 20`: the sampled quota on the left anchors the flow, and only the remaining 20 is split across the unknown path. That is the direct consequence of “samples are soft constraints, but constraints in different places have different prices”.
+Run it again and the body branch becomes `150 : 300`: the sampled point anchors the split, while the loop header stays at 550 and the back edge stays at 450.
 
 As a control, turn profi off:
 
 ```bash
-opt -passes=sample-profile -sample-profile-file=pick.prof -S pick.ll -o pick.old.ll
-grep -n 'branch_weights\|function_entry_count' pick.old.ll
+opt -passes=sample-profile -sample-profile-file=loop.prof -S loop.ll -o loop.old.ll
+grep -n 'branch_weights\|function_entry_count' loop.old.ll
 ```
 
-The old heuristic only writes `function_entry_count = 1`; the conditional branch has no `branch_weights`, because it has no rule for splitting the missing 100 between two edges. That difference is why CSSPGO enables profi by default.
+The old heuristic writes:
+
+```text
+!{!"function_entry_count", i64 1}
+!{!"branch_weights", i32 451, i32 2}
+```
+
+The loop exit is squeezed to 2 and the branch inside the loop has no `!prof` at all. It copied 450 along the back edge into the header but could not satisfy entry, back edge and exit at the same time; profi's 450 : 100 and 225 : 225 are solved together. That difference is why CSSPGO enables profi by default.
 
 To watch the cost model change, override the prices; they are hidden options, but `opt` accepts them:
 
 ```bash
-opt -passes=sample-profile -sample-profile-file=pick.prof \
+opt -passes=sample-profile -sample-profile-file=loop.prof \
     -sample-profile-use-profi \
     -sample-profile-profi-cost-block-dec=100 \
     -sample-profile-profi-cost-block-unknown-inc=1 \
-    -S pick.ll -o pick.cost.ll
+    -S loop.ll -o loop.cost.ll
 ```
 
-Setting only `-sample-profile-even-flow-distribution=false` may still show 50 / 50, because the post-processing `rebalanceUnknownSubgraphs` performs the same split; add `-sample-profile-rebalance-unknown=false` and the branch weights become `100 : 0`, which shows what each tie-breaker contributes. To see the augmentations themselves you need an assertions build and `-debug-only=sample-profile-inference`; release binaries usually do not expose that flag.
+Setting `-sample-profile-even-flow-distribution=false` changes the body branch from 225 : 225 to `0 : 450`, so on this C loop the even split comes from even-flow; `rebalanceUnknownSubgraphs` does not step in for this CFG. Adding `-sample-profile-rebalance-unknown=false` does not change that result, but it does affect unknown subgraphs that satisfy the unique-known-sink and acyclic conditions. To see the augmentations themselves you need an assertions build and `-debug-only=sample-profile-inference`; release binaries usually do not expose that flag.

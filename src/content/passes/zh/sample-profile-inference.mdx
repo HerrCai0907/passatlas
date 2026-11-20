@@ -20,21 +20,21 @@ import I18nLink from '../../../components/I18nLink.astro';
 采样剖析器不会告诉你「这条边走了多少次」。它按固定周期打断程序，把当时的 PC 记下来，再按 debug info 或 pseudo probe 归因到「函数 + 行 / 块」。于是 profile 里只有一组**稀疏、带噪声的块计数**：
 
 ```text
-样本只覆盖两个块：
-  entry 100        left ?        right ?        join 100
+样本只覆盖一部分块，循环头恰好没有探针：
+  entry 100   loop ?   body 450   then ?   latch ?   exit 100
 
 把缺失当成 0：
-  entry 100        left 0        right 0        join 0
-  → left / right / join 被下游当成冷代码，而且 100 ≠ 0 + 0
+  entry 100   loop 0   body 450   then 0   latch 0   exit 100
+  → loop 与 then 被当成冷代码，回边流量也无从谈起
 
 profi 推断：
-  entry 100        left 50       right 50       join 100
-  → 每个块都满足流量守恒
+  entry 100   loop 550 body 450   then 225 latch 450   exit 100
+  → loop 头 = 入口 100 + 回边 450，每个块都守恒
 ```
 
-这件事不能靠「缺失就补 0」解决。`entry` 有 100 个样本，它的两条出边就必须一共走 100 次；`join` 有 100 个样本，它的入边也必须一共走 100 次。只填一部分，剩下的边要么没有权重，要么和块计数对不上。依赖块频率的 BFI、内联器、循环展开、块布局和 Machine IR 的 section 划分，读到的就是一份自相矛盾的 profile。
+这件事不能靠「缺失就补 0」解决。`entry` 有 100 个样本，全部进入循环；`body` 有 450，说明回边要带回 450 次；`exit` 有 100，说明循环只能退出 100 次。`latch` 没有样本，它收到 body 的 450 后原样送回循环。三件事同时成立时，循环头必须是 100 + 450 = 550。把缺失的 `loop` 当成 0，就会得到 100 ≠ 450 + 100 的矛盾；把 `then` 当成 0，body 的 450 就无处可去。依赖块频率的 BFI、内联器、循环展开、块布局和 Machine IR 的 section 划分，读到的就是一份自相矛盾的 profile。
 
-旧的 `sample-profile` 用三轮 `propagateThroughEdges` 做局部传播：一条边能由「块计数减去其它已知边」推出来就推，单前驱 / 单后继就直接抄。这个规则在环上不保证收敛，遇到互相矛盾的样本只能把未知边截成 0；源码里留着一条 FIXME，明确说想换成一个保证终止的方案。更常见的结果是分支干脆没有 `!prof`：页面最后的实验里，不开 profi 时 `opt` 只写出 `function_entry_count = 1`，条件分支上什么也没有。
+旧的 `sample-profile` 用三轮 `propagateThroughEdges` 做局部传播：一条边能由「块计数减去其它已知边」推出来就推，单前驱 / 单后继就直接抄。这个规则在环上不保证收敛，遇到互相矛盾的样本只能把未知边截成 0；源码里留着一条 FIXME，明确说想换成一个保证终止的方案。更常见的结果是分支权重被严重扭曲：页面最后的循环实验里，不开 profi 时 `opt` 只写出 `function_entry_count = 1` 和一组 `451 : 2` 的循环分支权重，循环体内的分支干脆没有 `!prof`。
 
 LLVM 的 profi 换了一个全局目标。源码开头写得很直白：
 
@@ -123,7 +123,7 @@ loader 先把当前函数的 CFG 整理成 `FlowFunction`：每个块一个 `Flo
 
 只有最短路还不够。`EvenFlowDistribution`（`-sample-profile-even-flow-distribution`，CLI 默认开）处理「多条路径同价」的情况：它先找出所有位于最短路上、剩余容量不小于 `max(PathCapacity / 2, 1)` 的边，再用一次受限 DFS 把它们收成一个增广 DAG（每个节点最多访问 10 次），最后按出度把流量均分。小数部分向上取整，再把多出来的流量沿反向边退回，保证守恒；一次 DAG 增广至少饱和一条边。
 
-这就是页首动画里 50 : 50 的一个来源：`entry` 和 `join` 都有 100 个样本，`left` / `right` 都是未知块，两条路都免费，最小费用无法区分它们，even-flow 于是把 100 按出度分成两份。后处理里的 `rebalanceUnknownSubgraphs` 也会对同一个未知子图做同样的均分，所以只关掉 even-flow 未必能看到变化；把两者都关掉，结果才是 100 : 0。**50 : 50 不是「猜 50%」，而是一条平局规则**。如果 `left` 自带 80 个样本，它的配额会把流量锚在左边，结果就是 80 : 20（页面最后有验证命令）。
+页首动画就是一个循环的例子：`loop` 头、`then` 和 `latch` 都没有样本，`body` 450，`entry` / `exit` 各 100。回边 450 加上入口 100 把循环头钉在 550；550 再分成 450（body）和 100（exit）。body 的 `then` / `latch` 分支没有样本，even-flow 把 450 均分成 225 / 225；在页首动画这张简化 CFG 上，后处理里的 `rebalanceUnknownSubgraphs` 也会给出同样的均分，把两者都关掉才会看到 `body→then` 0、`body→latch` 450。如果 `then` 自带 150 个样本，结果就是 150 / 300（页面最后有验证命令）。**均分是平局规则，不是「猜 50%」**。
 
 源码给出的最坏复杂度是 `O(v(f) · m · n)`，其中 `v(f)` 是最大流值，`m` 是边数，`n` 是节点数；在典型实例上观测到的运行时间是亚二次的。DAG 增广一次推一大批流，而不是一个单位一个单位地推，这是它在真实 profile 上还能跑得动的原因。
 
@@ -149,9 +149,10 @@ loader 先把当前函数的 CFG 整理成 `FlowFunction`：每个块一个 `Flo
 
 - **默认不一定是开的。** `-sample-profile-use-profi` 的初始值是 false；只有 profile 是 context-sensitive、probe-based 或 preinlined 时，`doInitialization` 才自动把它打开。CSSPGO 走的就是这条路；普通的行号 AutoFDO profile 需要你显式传这个开关，否则还是旧的三轮传播。
 - **代价模型不是「还原真值」。** 10 / 20 / 40 这些数字是调出来的，不是从概率推出来的。样本互相矛盾时，输出可能是看起来不直观的折中：入口 70、两臂 50 和 100、join 100 的输入会被解成入口 86、两臂 19 和 67、join 86（分支权重 19 : 67），而不是「保留 50 和 100」。代价只保证总代价最小，不保证每个块都接近样本。
-- **平局很常见。** 把一单位流量从 A 挪到 B，常常是「A 少付一点、B 多付一点」，总价不变。结果由增广顺序和 even-flow 决定，换一个 LLVM 版本、改一个默认值，数字就可能变。不要把 50 : 50 当成算法的不变量。
-- **未知分支的 50 : 50 是先验，不是证据。** 一个只有入口样本的函数，两条冷热完全不同的路径也会得到均分。真实 CSSPGO 会在两条路径上都放 pseudo probe，从而给 profi 更多锚点；没有探针的路径只能靠先验。
+- **平局很常见。** 把一单位流量从 A 挪到 B，常常是「A 少付一点、B 多付一点」，总价不变。结果由增广顺序和 even-flow 决定，换一个 LLVM 版本、改一个默认值，数字就可能变。不要把 225 : 225 或 50 : 50 当成算法的不变量。
+- **未知分支的均分是先验，不是证据。** 页首动画里 `then` / `latch` 的 225 : 225 就是一条没有样本的分支被平局规则均分。一个只有入口样本的函数，两条冷热完全不同的路径也会得到均分。真实 CSSPGO 会在两条路径上都放 pseudo probe，从而给 profi 更多锚点；没有探针的路径只能靠先验。
 - **unlikely 边会被压到 0。** `invoke` 的 unwind 边和目标块以 `unreachable` 结束的边都带 `2³⁰` 的代价，除非流量守恒逼着它走，否则权重是 0。异常路径和「看起来不可达」的路径因此可能在 profile 里消失，下游的 EH 优化会看到一份偏热的正常路径。
+- **循环没有样本时不会凭空发明迭代次数。** 只有 `entry` / `exit` 有样本、`loop` 与 body 都未知时，profi 可以让回边为 0：100 次调用被拆成 50 次进入循环、50 次直接退出，`loop` 50、body 0、`exit` 100。真实 CSSPGO 必须在循环体里放 probe，否则求解器没有任何证据要求一次迭代。
 - **多后继共享一个目标会丢信息。** profi 把 `(pred, succ)` 当成一条边；`switch` 的多个 case 落到同一个块时，loader 只能在写 `branch_weights` 时把这条边的权重再均分。case 之间的真实差异无法恢复。
 - **不可达块被直接丢掉。** 不能从入口到达、或不能到达任何出口的块不进入网络；只有死循环、没有出口路径的块上的样本不会参与推断，也不会出现在 `BlockWeights` 里。
 - **unknown 子图的重平衡有前提。** 已知汇点必须唯一，未知块之间不能有环，否则 `rebalanceUnknownSubgraphs` 直接放弃。带环的未知区域仍然可能保留一个任意的流量分配。
@@ -171,70 +172,93 @@ loader 先把当前函数的 CFG 整理成 `FlowFunction`：每个块一个 `Flo
 
 ## 自己跑一遍
 
-下面这个例子只需要一个入口样本，就能看到 profi 和老启发式的区别。先把 `if` 的 CFG 留住，不要跑 clang 自己的优化：
+下面这个循环和页首动画是同一张 CFG，只是用 C 写出来，方便直接跑。关键是**只给一部分块样本**：入口、循环体、出口有探针，循环头和循环体内的一条分支没有。
 
 ```c
-// pick.c
-int pick(int x) {
-  if (x > 0)
-    return x + 1;
-  else
-    return x - 1;
+// loop.c
+int sum(int n) {
+  int s = 0;
+  for (int i = 0; i < n; i++)
+    if ((i & 1) == 0)
+      s += 1;
+  return s;
 }
 ```
 
 ```text
-# pick.prof
-pick:100:0
+# loop.prof
+sum:100:0
  1: 100
+ 3: 450
+ 5: 100
 ```
 
-profile 里的行号是**相对函数起始行的偏移**，不是源码行号：`pick` 从第 1 行开始，`if` 在第 2 行，所以偏移 1 就是条件分支。`-fprofile-sample-use` 会顺手给函数加上 `"use-sample-profile"` 属性，缺少这个属性时 loader 会跳过整个函数。
+profile 里的行号是**相对函数起始行的偏移**，不是源码行号。`sum` 从第 1 行开始：
+
+| profile 行 | 源码行 | 归属 | 样本 |
+| --- | --- | --- | --- |
+| `1` | 第 2 行 `int s = 0;` | entry | 100 |
+| `3` | 第 4 行 `if (...)` | body | 450 |
+| `5` | 第 6 行 `return s;` | exit | 100 |
+
+第 3 行（`for`）和第 5 行（`s += 1`）故意没有样本，所以 loop 头、latch 和 then 都是未知块。`-fprofile-sample-use` 会顺手给函数加上 `"use-sample-profile"` 属性，缺少这个属性时 loader 会跳过整个函数。
 
 ```bash
-clang -O1 -g -fprofile-sample-use=pick.prof -Xclang -disable-llvm-passes \
-      -S -emit-llvm pick.c -o pick.ll
+clang -O1 -g -fprofile-sample-use=loop.prof -Xclang -disable-llvm-passes \
+      -S -emit-llvm loop.c -o loop.ll
 
-opt -passes=sample-profile -sample-profile-file=pick.prof \
-    -sample-profile-use-profi -S pick.ll -o pick.out.ll
+opt -passes=sample-profile -sample-profile-file=loop.prof \
+    -sample-profile-use-profi -S loop.ll -o loop.out.ll
 
-grep -n 'branch_weights\|function_entry_count' pick.out.ll
+grep -n 'branch_weights\|function_entry_count' loop.out.ll
 ```
 
 在 LLVM 23 上，输出形如：
 
 ```text
 !{!"function_entry_count", i64 100}
-!{!"branch_weights", i32 50, i32 50}
+!{!"branch_weights", i32 450, i32 100}
+!{!"branch_weights", i32 225, i32 225}
 ```
 
-`left` 和 `right` 都没有样本，两条路都免费，所以 even-flow 把它们分成 50 / 50；`join` 没有样本，它的 100 来自两条入边。把 profile 改成给 `then` 一侧 80 个样本：
+第一条 `branch_weights` 是循环条件：450 次进 body、100 次到 exit；第二条是 body 里的 `(i & 1) == 0`：then 与 latch 各 225。loop 头本身没有样本，它的 550 = 入口 100 + 回边 450，是两侧流量一起约束出来的。
+
+给 then 一侧补 150 个样本：
 
 ```text
-pick:100:0
+sum:100:0
  1: 100
- 2: 80
+ 3: 450
+ 4: 150
+ 5: 100
 ```
 
-再跑一次，分支权重会变成 `80 : 20`——左边的样本配额把流量锚住了，剩下的 20 才由未知路径均分。这正是「样本是软约束、但不同位置的约束价格不同」的直接体现。
+再跑一次，body 的分支权重会变成 `150 : 300`——一个已知的采样点把未知分支的均分锚住了；循环头的 550 和回边的 450 不变。
 
 关掉 profi 做对照：
 
 ```bash
-opt -passes=sample-profile -sample-profile-file=pick.prof -S pick.ll -o pick.old.ll
-grep -n 'branch_weights\|function_entry_count' pick.old.ll
+opt -passes=sample-profile -sample-profile-file=loop.prof -S loop.ll -o loop.old.ll
+grep -n 'branch_weights\|function_entry_count' loop.old.ll
 ```
 
-旧启发式只写出 `function_entry_count = 1`，条件分支上没有 `branch_weights`；它不知道缺失的 100 该往哪两条边分。这个差异就是 CSSPGO 默认打开 profi 的原因。
+旧启发式写出的是：
+
+```text
+!{!"function_entry_count", i64 1}
+!{!"branch_weights", i32 451, i32 2}
+```
+
+循环退出被压到 2，循环体内的分支完全没有 `!prof`。它沿回边把 450 抄进了循环头，却没有办法同时满足入口、回边和出口；profi 的 450 : 100 和 225 : 225 是同时解出来的。这个差异就是 CSSPGO 默认打开 profi 的原因。
 
 想观察代价模型，可以直接改价格；它们都是隐藏选项，但 `opt` 接受：
 
 ```bash
-opt -passes=sample-profile -sample-profile-file=pick.prof \
+opt -passes=sample-profile -sample-profile-file=loop.prof \
     -sample-profile-use-profi \
     -sample-profile-profi-cost-block-dec=100 \
     -sample-profile-profi-cost-block-unknown-inc=1 \
-    -S pick.ll -o pick.cost.ll
+    -S loop.ll -o loop.cost.ll
 ```
 
-只把 `-sample-profile-even-flow-distribution` 设为 false，你可能还会看到 50 / 50，因为后处理里的 `rebalanceUnknownSubgraphs` 会做同样的均分；把 `-sample-profile-rebalance-unknown=false` 也加上，分支权重才会变成 `100 : 0`，这样能确认这两个机制各自的作用。要看到内部的增广过程，需要带断言的构建，并加上 `-debug-only=sample-profile-inference`；发布版二进制通常没有这个开关。
+只把 `-sample-profile-even-flow-distribution` 设为 false，body 的分支会从 225 : 225 变成 `0 : 450`，说明这个 C 循环上的均分来自 even-flow；后处理里的 `rebalanceUnknownSubgraphs` 在这个例子上没有介入。再加上 `-sample-profile-rebalance-unknown=false` 不会改变这个结果，但它会影响那些满足「唯一已知汇点 + 无环」条件的未知子图。要看到内部的增广过程，需要带断言的构建，并加上 `-debug-only=sample-profile-inference`；发布版二进制通常没有这个开关。
