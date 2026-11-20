@@ -108,62 +108,100 @@ exit:
 !2 = !{!"branch_weights", i32 225, i32 225}
 `;
 
-const samples = [
-  'block   samples  kind',
-  'entry   100      known',
-  'loop    -        unknown',
-  'body    450      known',
-  'then    -        unknown',
-  'latch   -        unknown',
-  'exit    100      known',
+const stateSamples = [
+  'blocks',
+  'block   samples  flow  in/out',
+  'entry   100      100   -',
+  'loop    -        0     -',
+  'body    450      450   -',
+  'then    -        0     -',
+  'latch   -        0     -',
+  'exit    100      100   -',
+  '----',
+  'meta',
+  'entry_count    -',
+  'loop weights   -',
+  'body weights   -',
 ].join('\n');
 
-const costs = [
-  'block   w     inc  dec  dec-cap',
-  'entry   100   40   10   100',
-  'loop    -     0    0    0',
-  'body    450   10   20   450',
-  'then    -     0    0    0',
-  'latch   -     0    0    0',
-  'exit    100   10   20   100',
+const stateLoop = [
+  'blocks',
+  'block   samples  flow  in/out',
+  'entry   100      100   -',
+  'loop    -        550   -',
+  'body    450      450   -',
+  'then    -        0     -',
+  'latch   -        450   -',
+  'exit    100      100   -',
+  '----',
+  'meta',
+  'entry_count    -',
+  'loop weights   -',
+  'body weights   -',
 ].join('\n');
 
-const circulation = [
-  'edge          flow',
-  'entry->loop   100',
-  'latch->loop   450',
-  'loop->body    450',
-  'loop->exit    100',
-  'loop = 100 + 450 = 550',
+const stateSplit = [
+  'blocks',
+  'block   samples  flow  in/out',
+  'entry   100      100   -',
+  'loop    -        550   -',
+  'body    450      450   -',
+  'then    -        225   -',
+  'latch   -        450   -',
+  'exit    100      100   -',
+  '----',
+  'meta',
+  'entry_count    -',
+  'loop weights   -',
+  'body weights   -',
 ].join('\n');
 
-const split = [
-  'block   in    out   flow',
-  'body    450   450   450',
-  'then    225   225   225',
-  'latch   450   450   450',
+const stateFlows = [
+  'blocks',
+  'block   samples  flow  in/out',
+  'entry   100      100   0/100',
+  'loop    -        550   550/550',
+  'body    450      450   450/450',
+  'then    -        225   225/225',
+  'latch   -        450   450/450',
+  'exit    100      100   100/0',
+  '----',
+  'meta',
+  'entry_count    -',
+  'loop weights   -',
+  'body weights   -',
 ].join('\n');
 
-const flows = [
-  'block   in    out   flow',
-  'entry   0     100   100',
-  'loop    550   550   550',
-  'body    450   450   450',
-  'then    225   225   225',
-  'latch   450   450   450',
-  'exit    100   0     100',
+const stateLoopMD = [
+  'blocks',
+  'block   samples  flow  in/out',
+  'entry   100      100   0/100',
+  'loop    -        550   550/550',
+  'body    450      450   450/450',
+  'then    -        225   225/225',
+  'latch   -        450   450/450',
+  'exit    100      100   100/0',
+  '----',
+  'meta',
+  'entry_count    100',
+  'loop weights   450 : 100',
+  'body weights   -',
 ].join('\n');
 
-const loopMD = [
-  'metadata               value',
-  'function_entry_count   100',
-  'loop branch_weights    450 : 100',
-].join('\n');
-
-const allMD = [
-  'metadata               value',
-  'loop branch_weights    450 : 100',
-  'body branch_weights    225 : 225',
+const stateAllMD = [
+  'blocks',
+  'block   samples  flow  in/out',
+  'entry   100      100   0/100',
+  'loop    -        550   550/550',
+  'body    450      450   450/450',
+  'then    -        225   225/225',
+  'latch   -        450   450/450',
+  'exit    100      100   100/0',
+  '----',
+  'meta',
+  'entry_count    100',
+  'loop weights   450 : 100',
+  'body weights   225 : 225',
 ].join('\n');
 
 export const sampleProfileInferenceDemo = makeDemo(
@@ -177,7 +215,7 @@ export const sampleProfileInferenceDemo = makeDemo(
       after: sampled,
       cursor: { line: 'br i1 %cmp, label %body, label %exit' },
       focus: ['br i1 %cmp, label %body, label %exit'],
-      state: samples,
+      state: stateSamples,
     },
     {
       title: '第 2 步 · 把循环也建成流网络',
@@ -186,7 +224,7 @@ export const sampleProfileInferenceDemo = makeDemo(
       after: sampled,
       cursor: { line: 'br i1 %cmp, label %body, label %exit' },
       focus: ['br i1 %cmp, label %body, label %exit'],
-      state: costs,
+      state: stateSamples,
     },
     {
       title: '第 3 步 · 回边把循环头钉在 550',
@@ -195,7 +233,7 @@ export const sampleProfileInferenceDemo = makeDemo(
       after: sampled,
       cursor: { line: 'br label %loop', occurrence: 2 },
       focus: ['%s.next = phi i32 [ %s, %body ], [ %plus, %then ]'],
-      state: circulation,
+      state: stateLoop,
     },
     {
       title: '第 4 步 · body 的未知分支均分 450',
@@ -204,7 +242,7 @@ export const sampleProfileInferenceDemo = makeDemo(
       after: sampled,
       cursor: { line: 'br i1 %odd, label %then, label %latch' },
       focus: ['br i1 %odd, label %then, label %latch'],
-      state: split,
+      state: stateSplit,
     },
     {
       title: '第 5 步 · 抽出计数，检查循环的流量守恒',
@@ -213,7 +251,7 @@ export const sampleProfileInferenceDemo = makeDemo(
       after: sampled,
       cursor: { line: 'ret i32 %s' },
       focus: ['ret i32 %s'],
-      state: flows,
+      state: stateFlows,
     },
     {
       title: '第 6 步 · 写回循环分支的权重',
@@ -224,7 +262,7 @@ export const sampleProfileInferenceDemo = makeDemo(
         line: 'br i1 %cmp, label %body, label %exit, !prof !1',
         side: 'after',
       },
-      state: loopMD,
+      state: stateLoopMD,
     },
     {
       title: '第 7 步 · 写回循环体内的分支权重',
@@ -235,7 +273,7 @@ export const sampleProfileInferenceDemo = makeDemo(
         line: 'br i1 %odd, label %then, label %latch, !prof !2',
         side: 'after',
       },
-      state: allMD,
+      state: stateAllMD,
     },
   ],
   {
