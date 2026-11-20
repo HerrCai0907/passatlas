@@ -79,6 +79,13 @@ export const pipelineStages: PipelineStage[] = [
       'called-value-propagation',
       { name: 'globalopt', repeat: true },
       { name: 'sample-profile', page: 'sample-profile-inline', conditional: true },
+      {
+        name: 'sample-profile-inference',
+        page: 'sample-profile-inference',
+        label: 'profi',
+        kind: 'helper',
+        conditional: true,
+      },
       { name: 'pgo-instr-gen', conditional: true },
       'always-inline',
     ),

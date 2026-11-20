@@ -1,0 +1,240 @@
+---
+title: sample-profile-inference
+subtitle: CSSPGO 的 CFG 最小费用流 profile 推断
+summary: 样本只落在有探针的块上，边计数和冷块计数都得推。profi 把 CFG 建成流网络，把每个块的样本数当成有价格的软约束，再用最小费用最大流求出一组满足流量守恒的整数块 / 边计数。
+category: interproc
+difficulty: 3
+status: ready
+order: 27
+stage: ['-O2', '-O3']
+tags: ['CSSPGO', 'MinCostFlow', 'ProfileInference', 'CFG']
+demo: sample-profile-inference
+source: llvm/lib/Transforms/Utils/SampleProfileInference.cpp
+updated: 2026-11-20
+---
+
+import I18nLink from '../../../components/I18nLink.astro';
+
+## 它解决什么问题
+
+采样剖析器不会告诉你「这条边走了多少次」。它按固定周期打断程序，把当时的 PC 记下来，再按 debug info 或 pseudo probe 归因到「函数 + 行 / 块」。于是 profile 里只有一组**稀疏、带噪声的块计数**：
+
+```text
+样本只覆盖两个块：
+  entry 100        left ?        right ?        join 100
+
+把缺失当成 0：
+  entry 100        left 0        right 0        join 0
+  → left / right / join 被下游当成冷代码，而且 100 ≠ 0 + 0
+
+profi 推断：
+  entry 100        left 50       right 50       join 100
+  → 每个块都满足流量守恒
+```
+
+这件事不能靠「缺失就补 0」解决。`entry` 有 100 个样本，它的两条出边就必须一共走 100 次；`join` 有 100 个样本，它的入边也必须一共走 100 次。只填一部分，剩下的边要么没有权重，要么和块计数对不上。依赖块频率的 BFI、内联器、循环展开、块布局和 Machine IR 的 section 划分，读到的就是一份自相矛盾的 profile。
+
+旧的 `sample-profile` 用三轮 `propagateThroughEdges` 做局部传播：一条边能由「块计数减去其它已知边」推出来就推，单前驱 / 单后继就直接抄。这个规则在环上不保证收敛，遇到互相矛盾的样本只能把未知边截成 0；源码里留着一条 FIXME，明确说想换成一个保证终止的方案。更常见的结果是分支干脆没有 `!prof`：页面最后的实验里，不开 profi 时 `opt` 只写出 `function_entry_count = 1`，条件分支上什么也没有。
+
+LLVM 的 profi 换了一个全局目标。源码开头写得很直白：
+
+> Given an incomplete and possibly imprecise block counts, the algorithm reconstructs realistic block and edge counts that satisfy flow conservation rules, while minimally modify input block counts.
+
+也就是：**样本是软约束，不是真值**。每个块可以加流量，也可以减流量，但每改一个单位都要付钱；求解器在所有满足流量守恒的整数解里挑总代价最小的那个。这样环、多路径和互相矛盾的计数被放在同一个优化问题里，而不是被局部规则逐个消化。
+
+需要说清楚它不是什么：
+
+- 它不是一个注册 pass。真正的 pass 是 `sample-profile`（`SampleProfileLoaderPass`），profi 是 loader 内部的一个工具类 `SampleProfileInference` / `applyFlowInference`；
+- 它不产生新样本，也不改 CFG；输出只是块计数和边计数，随后被写成 `function_entry_count` 与 `branch_weights`；
+- 它只处理**函数内**的 CFG。跨函数的上下文由 CSSPGO 的 profile 树负责，见 <I18nLink href="/passes/sample-profile-inline/">sample-profile-inline</I18nLink>。
+
+## 算法
+
+### 输入：块、边和「未知」
+
+loader 先把当前函数的 CFG 整理成 `FlowFunction`：每个块一个 `FlowBlock`，每条跳转一个 `FlowJump`。块权重来自 `getBlockWeight`，取块内被采样指令的最大值；如果块里一条带样本的指令都没有，这个块就不在 `SampleBlockWeights` 里：
+
+- `HasUnknownWeight = false` 且 `Weight = w`：有样本，w 可以是 0；
+- `HasUnknownWeight = true` 且 `Weight = 0`：没有样本，不知道它执行了多少次。
+
+这两种「0」必须分开。已知的 0 是一个观测，减少它没有容量；未知的 0 只是没有观测，增加它是免费的，但不能凭空减少。
+
+建图之前还会做一次裁剪：只保留**从入口可达、且能到达某个出口**的块（正向 DFS 与反向 DFS 的交集）。不能到达任何出口的块——例如只有死循环、没有路径能走到出口的块——不进入网络，它们的样本也不会影响结果。入口定义为没有前驱的块，出口定义为没有后继的块；只有一个块或完全没有正样本时直接返回。入口块的已知权重如果是 0，会被改成 1，避免整个网络没有一点流。
+
+### 网络：把「改多少」变成费用
+
+每个块被拆成两个节点：`Bin = 2B` 负责入流，`Bout = 2B + 1` 负责出流。块的计数不再是一个数字，而是穿过这个块的总流量。拆开之后，才有地方放「增加」和「减少」这两条带价格的边。
+
+| 边 | 容量 | 费用 | 作用 |
+| --- | --- | --- | --- |
+| `S → Bin`（入口块） | ∞ | 0 | 把入口接进循环 |
+| `Bout → T`（出口块） | ∞ | 0 | 把出口接进循环 |
+| `Bin → Bout` | ∞ | `inc(B)` | 增加这个块的计数 |
+| `Bout → Bin` | `w` | `dec(B)` | 减少这个块的计数，最多减回 0 |
+| `S1 → Bout` | `w` | 0 | 注入样本 w 的配额 |
+| `Bin → T1` | `w` | 0 | 收走样本 w 的配额 |
+| `Bout(u) → Bin(v)` | ∞ | `inc(u,v)` | 跳转边 |
+| `Bin(v) → Bout(u)` | `w` | `dec(u,v)` | 减少边计数（只有边自带样本时才有） |
+| `T → S` | ∞ | 0 | 让整张图成为循环 |
+
+`S` / `T` 是把函数入口和出口接进同一个循环的哑节点；真正的源汇是 `S1` 和 `T1`。每个有样本的块 w 都从 `S1` 拿到 w 单位的「配额」，必须从某个方向流到 `T1`：
+
+- 想**保留**这个样本：让这 w 单位从 `Bout` 沿跳转边流走，别的入流再从 `Bin` 流进 `T1`；
+- 想**减少**它：让配额走 `Bout → Bin` 的反向边，付 `dec` 的费用；
+- 想**增加**它：让额外的流穿过 `Bin → Bout`，付 `inc` 的费用。
+
+最大流把所有配额都送进网络，最小费用决定哪些块该加、哪些该减。整张图因此是一个最小费用循环：样本是必须被安排掉的流量，改动是绕路时付的钱。
+
+### 费用：默认值决定平局
+
+`ProfiParams` 的默认值不是「越接近样本越好」，而是一组手工调过的价格。当前 loader 通过 `applyFlowInference(FlowFunction&)` 只给块代价赋值：
+
+| 情况 | 增加 | 减少 | 说明 |
+| --- | --- | --- | --- |
+| 普通已知块 | 10 | 20 | 增加比减少便宜 |
+| 入口块 | 40 | 10 | 入口的增加代价最高；它的计数会影响整个函数的 BFI |
+| 已知的零计数块 | 11 | 20 | 比普通块再贵一点，避免把冷块随便抬起来 |
+| 未知块 | 0 | 0 | 没有样本可减，减少容量为 0 |
+| unlikely 边 | 2³⁰ | 2³⁰ | 实际上等于禁止走这条边 |
+| 其它边 | 0 | 0 | 边的代价字段存在，但目前没有命令行开关给它们赋值 |
+
+对应的开关都是隐藏选项：
+
+```text
+-sample-profile-profi-cost-block-inc=10
+-sample-profile-profi-cost-block-dec=20
+-sample-profile-profi-cost-block-entry-inc=40
+-sample-profile-profi-cost-block-entry-dec=10
+-sample-profile-profi-cost-block-zero-inc=11
+-sample-profile-profi-cost-block-unknown-inc=0
+```
+
+「unlikely」由 `findUnlikelyJumps` 标出，只有两种来源：`invoke` 的 unwind 后继（landing pad），以及目标块以 `unreachable` 结束的跳转。前者是异常路径，后者按定义不该被执行；给它们 `2³⁰` 的代价，等于要求求解器尽量把流量送到正常路径。
+
+价格的不对称会直接改变结果。增加一个未知块是免费的，减少一个已知块要 20，而增加一个已知块只要 10——所以在样本互相矛盾时，profi 更愿意「把冷块抬起来」或「把热块压下去」，而不是单纯地相信某一边。多个解的代价完全相同时，由下面的 even-flow 规则决定怎么分。
+
+### 求解：最短增广路，必要时合成 DAG
+
+网络建好后，`MinCostMaxFlow` 在残量图上反复找从 `S1` 到 `T1` 的最短增广路：
+
+- 反向边的费用是负的，但网络里没有负权环，`Dist(Source, V) ≥ 0` 的 invariant 让搜索可以提前停：一旦 `T1` 的距离是 0，或者当前节点的距离已经大于 `T1` 的距离，就不必再扩展；
+- 最短路用队列化的 Bellman-Ford（SPFA 风格）求，而不是 Dijkstra；负费用边来自「撤销之前的增广」；
+- 每条增广路至少让一条边饱和，流值单调增加，直到没有正容量路径。
+
+只有最短路还不够。`EvenFlowDistribution`（`-sample-profile-even-flow-distribution`，CLI 默认开）处理「多条路径同价」的情况：它先找出所有位于最短路上、剩余容量不小于 `max(PathCapacity / 2, 1)` 的边，再用一次受限 DFS 把它们收成一个增广 DAG（每个节点最多访问 10 次），最后按出度把流量均分。小数部分向上取整，再把多出来的流量沿反向边退回，保证守恒；一次 DAG 增广至少饱和一条边。
+
+这就是页首动画里 50 : 50 的一个来源：`entry` 和 `join` 都有 100 个样本，`left` / `right` 都是未知块，两条路都免费，最小费用无法区分它们，even-flow 于是把 100 按出度分成两份。后处理里的 `rebalanceUnknownSubgraphs` 也会对同一个未知子图做同样的均分，所以只关掉 even-flow 未必能看到变化；把两者都关掉，结果才是 100 : 0。**50 : 50 不是「猜 50%」，而是一条平局规则**。如果 `left` 自带 80 个样本，它的配额会把流量锚在左边，结果就是 80 : 20（页面最后有验证命令）。
+
+源码给出的最坏复杂度是 `O(v(f) · m · n)`，其中 `v(f)` 是最大流值，`m` 是边数，`n` 是节点数；在典型实例上观测到的运行时间是亚二次的。DAG 增广一次推一大批流，而不是一个单位一个单位地推，这是它在真实 profile 上还能跑得动的原因。
+
+### 抽取：块计数、边计数和分支权重
+
+流跑完之后，`extractWeights` 把网络里的流量翻译回 CFG：
+
+- 边的计数 = 边自带的样本权重 + 辅助流；自环额外把辅助流截到非负；
+- 块的计数 = `max(入流, 出流)`。一个块至少和它任意一条入边 / 出边执行得一样多，取最大值可以避免在多入多出时低估；
+- loader 把函数入口计数设成推断出的入口块流量（`finalizeWeightPropagation`）；如果它是 0，才退回 `head samples + 1`；
+- 分支权重直接来自终止指令各后继边的流量。和旧启发式不同，profi 的输出已经是整数权重，不再需要 `+1` 去避免零权重传播错误；`switch` 或多个后继指向同一个块时，loader 把这条边的权重按重复边均分，先出现的分支拿余数。
+
+### 后处理：孤岛与未知子图
+
+最小费用流只保证「流量守恒 + 总代价最小」，不保证结果看起来像真实执行。`FlowAdjuster` 再做两件事：
+
+1. **`joinIsolatedComponents`**：如果某个有正流量的块，从入口沿正流量边不可达，它就是一个孤岛。对每个孤岛，用 Dijkstra 找一条从入口到某个出口、经过该块的最短路，沿路给每条边和每个块加 1。`jumpDistance` 会优先选已有正流量的边、避开零流量边和 unlikely 边，所以这条修补路径尽量贴近已有形状。注意它只加 1，不会把整个孤岛搬进入口可达区域。
+2. **`rebalanceUnknownSubgraphs`**：从一个已知、非零流量的块出发，沿未知块做 BFS，直到遇到已知块。只有当已知汇点唯一、未知子图无环、且每个未知块至少有一条能走的出边时，才把子图内每个未知块的流出按出度均分（通常是 50 / 50）。这是对「未知分支应该长什么样」的中性先验；最小费用流本身可能把全部流量压在某一条未知边上。
+
+两个后处理默认都开（`-sample-profile-join-islands`、`-sample-profile-rebalance-unknown`）。它们不改 `Block.Weight`（样本），只调整推断出来的 `Block.Flow`。
+
+## 代价与坑
+
+- **默认不一定是开的。** `-sample-profile-use-profi` 的初始值是 false；只有 profile 是 context-sensitive、probe-based 或 preinlined 时，`doInitialization` 才自动把它打开。CSSPGO 走的就是这条路；普通的行号 AutoFDO profile 需要你显式传这个开关，否则还是旧的三轮传播。
+- **代价模型不是「还原真值」。** 10 / 20 / 40 这些数字是调出来的，不是从概率推出来的。样本互相矛盾时，输出可能是看起来不直观的折中：入口 70、两臂 50 和 100、join 100 的输入会被解成入口 86、两臂 19 和 67、join 86（分支权重 19 : 67），而不是「保留 50 和 100」。代价只保证总代价最小，不保证每个块都接近样本。
+- **平局很常见。** 把一单位流量从 A 挪到 B，常常是「A 少付一点、B 多付一点」，总价不变。结果由增广顺序和 even-flow 决定，换一个 LLVM 版本、改一个默认值，数字就可能变。不要把 50 : 50 当成算法的不变量。
+- **未知分支的 50 : 50 是先验，不是证据。** 一个只有入口样本的函数，两条冷热完全不同的路径也会得到均分。真实 CSSPGO 会在两条路径上都放 pseudo probe，从而给 profi 更多锚点；没有探针的路径只能靠先验。
+- **unlikely 边会被压到 0。** `invoke` 的 unwind 边和目标块以 `unreachable` 结束的边都带 `2³⁰` 的代价，除非流量守恒逼着它走，否则权重是 0。异常路径和「看起来不可达」的路径因此可能在 profile 里消失，下游的 EH 优化会看到一份偏热的正常路径。
+- **多后继共享一个目标会丢信息。** profi 把 `(pred, succ)` 当成一条边；`switch` 的多个 case 落到同一个块时，loader 只能在写 `branch_weights` 时把这条边的权重再均分。case 之间的真实差异无法恢复。
+- **不可达块被直接丢掉。** 不能从入口到达、或不能到达任何出口的块不进入网络；只有死循环、没有出口路径的块上的样本不会参与推断，也不会出现在 `BlockWeights` 里。
+- **unknown 子图的重平衡有前提。** 已知汇点必须唯一，未知块之间不能有环，否则 `rebalanceUnknownSubgraphs` 直接放弃。带环的未知区域仍然可能保留一个任意的流量分配。
+- **入口计数会被改写。** loader 信任 profi 的入口块流量，把它写成 `function_entry_count`；这和 profile 头部的 head samples 可能不同。入口样本为 0 时还会被改成 1。依赖「入口计数 = 调用次数」的下游分析要意识到这一点。
+- **边的代价目前是 0。** `CostJumpInc` / `CostJumpDec` / fall-through 代价字段还在，但 `applyFlowInference` 没有给它们接命令行开关，所以除 unlikely 外，改边计数不花钱。真正被优化的是块计数。
+- **采样噪声不会被消除。** profi 只让计数自洽，不会让它们变准。profile 过期、CFG 变了、probe 被优化掉时，先要靠 stale-profile 匹配去救；救不回来时，最自洽的解也可能是错的。
+
+## 在管线里的位置
+
+`sample-profile`（`SampleProfileLoaderPass`）是模块级 pass，位置在简化管线的前部：读完 profile 之后、CGSCC 内联器和大部分函数级优化之前。它按函数处理，先做热点内联，再调用 `computeAndPropagateWeights`；后者在 `propagateWeights` 里选择 profi 或旧的三轮传播。因此 profi 看到的是**内联之后**的 CFG：内联已经改变了块和边，probe 的上下文也已经物化到新的指令上。
+
+对 CSSPGO 来说，这个顺序很关键：profile 是 context-sensitive 的，内联把 `main:foo` 这样的上下文展开成实际的块；只有展开之后，块计数的推断才有意义。也正因为如此，profi 的结果会被直接写进 `!prof`，供后面的 <I18nLink href="/passes/inliner/">inliner</I18nLink>、循环展开、块布局和 <I18nLink href="/passes/machine-function-splitter/">machine-function-splitter</I18nLink> 使用。热冷拆分 <I18nLink href="/passes/hotcoldsplit/">hotcoldsplit</I18nLink> 也依赖同一套 BFI：冷块判定用的是推断之后的频率分布，而不是原始样本。
+
+它和 <I18nLink href="/passes/pgo-instr-gen/">pgo-instr-gen</I18nLink> 是两条不同的 profile 路径：IR PGO 插桩记录精确的计数器，第二次编译直接读回；profi 处理的是采样 profile，输入本身就是不完整的。两者最后都写成 `!prof`，但一个来自计数，一个来自推断。
+
+在默认管线里，`sample-profile` 是条件启用的模块 pass；profi 不是一个独立的 stage，而是它内部的一个 helper。图鉴的管线图把它画在 `sample-profile` 旁边，并标成「辅助」。
+
+## 自己跑一遍
+
+下面这个例子只需要一个入口样本，就能看到 profi 和老启发式的区别。先把 `if` 的 CFG 留住，不要跑 clang 自己的优化：
+
+```c
+// pick.c
+int pick(int x) {
+  if (x > 0)
+    return x + 1;
+  else
+    return x - 1;
+}
+```
+
+```text
+# pick.prof
+pick:100:0
+ 1: 100
+```
+
+profile 里的行号是**相对函数起始行的偏移**，不是源码行号：`pick` 从第 1 行开始，`if` 在第 2 行，所以偏移 1 就是条件分支。`-fprofile-sample-use` 会顺手给函数加上 `"use-sample-profile"` 属性，缺少这个属性时 loader 会跳过整个函数。
+
+```bash
+clang -O1 -g -fprofile-sample-use=pick.prof -Xclang -disable-llvm-passes \
+      -S -emit-llvm pick.c -o pick.ll
+
+opt -passes=sample-profile -sample-profile-file=pick.prof \
+    -sample-profile-use-profi -S pick.ll -o pick.out.ll
+
+grep -n 'branch_weights\|function_entry_count' pick.out.ll
+```
+
+在 LLVM 23 上，输出形如：
+
+```text
+!{!"function_entry_count", i64 100}
+!{!"branch_weights", i32 50, i32 50}
+```
+
+`left` 和 `right` 都没有样本，两条路都免费，所以 even-flow 把它们分成 50 / 50；`join` 没有样本，它的 100 来自两条入边。把 profile 改成给 `then` 一侧 80 个样本：
+
+```text
+pick:100:0
+ 1: 100
+ 2: 80
+```
+
+再跑一次，分支权重会变成 `80 : 20`——左边的样本配额把流量锚住了，剩下的 20 才由未知路径均分。这正是「样本是软约束、但不同位置的约束价格不同」的直接体现。
+
+关掉 profi 做对照：
+
+```bash
+opt -passes=sample-profile -sample-profile-file=pick.prof -S pick.ll -o pick.old.ll
+grep -n 'branch_weights\|function_entry_count' pick.old.ll
+```
+
+旧启发式只写出 `function_entry_count = 1`，条件分支上没有 `branch_weights`；它不知道缺失的 100 该往哪两条边分。这个差异就是 CSSPGO 默认打开 profi 的原因。
+
+想观察代价模型，可以直接改价格；它们都是隐藏选项，但 `opt` 接受：
+
+```bash
+opt -passes=sample-profile -sample-profile-file=pick.prof \
+    -sample-profile-use-profi \
+    -sample-profile-profi-cost-block-dec=100 \
+    -sample-profile-profi-cost-block-unknown-inc=1 \
+    -S pick.ll -o pick.cost.ll
+```
+
+只把 `-sample-profile-even-flow-distribution` 设为 false，你可能还会看到 50 / 50，因为后处理里的 `rebalanceUnknownSubgraphs` 会做同样的均分；把 `-sample-profile-rebalance-unknown=false` 也加上，分支权重才会变成 `100 : 0`，这样能确认这两个机制各自的作用。要看到内部的增广过程，需要带断言的构建，并加上 `-debug-only=sample-profile-inference`；发布版二进制通常没有这个开关。
