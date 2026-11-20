@@ -13,6 +13,7 @@ import { mem2regDemo } from './mem2reg.ts';
 import { pgoInstrGenDemo } from './pgo-instr-gen.ts';
 import { phiElimDemo } from './phi-elim.ts';
 import { regallocDemo } from './regalloc.ts';
+import { sampleProfileInferenceDemo } from './sample-profile-inference.ts';
 import { sampleProfileInlineDemo } from './sample-profile-inline.ts';
 import { stackSlotColoringDemo } from './stack-slot-coloring.ts';
 import { x86InsertVZeroUpperDemo } from './x86-insert-vzeroupper.ts';
@@ -34,6 +35,7 @@ export const demos: Record<string, Demo> = {
   'pgo-instr-gen': pgoInstrGenDemo,
   'phi-elim': phiElimDemo,
   regalloc: regallocDemo,
+  'sample-profile-inference': sampleProfileInferenceDemo,
   'sample-profile-inline': sampleProfileInlineDemo,
   'stack-slot-coloring': stackSlotColoringDemo,
   'x86-insert-vzeroupper': x86InsertVZeroUpperDemo,

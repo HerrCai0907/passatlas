@@ -130,7 +130,7 @@ Non-CS profiles have no context tree; the equivalent is `-sample-profile-merge-i
 
 ### Afterwards: weights come from the inline stack
 
-Weights are annotated only after inlining (`computeAndPropagateWeights` → `generateMDProfMetadata`). Nothing needs to be copied into the inlined body: `findFunctionSamples` walks the instruction's DILocation inline stack up the profile tree to the right node, and probe mode is more direct still — `FS->findSamplesAt(Probe->Id, Probe->Discriminator)`.
+Weights are annotated only after inlining (`computeAndPropagateWeights` → `generateMDProfMetadata`). Nothing needs to be copied into the inlined body: `findFunctionSamples` walks the instruction's DILocation inline stack up the profile tree to the right node, and probe mode is more direct still — `FS->findSamplesAt(Probe->Id, Probe->Discriminator)`. Turning those sparse block counts into complete block / edge weights that conserve flow is the job of <I18nLink href="/passes/sample-profile-inference/">profi</I18nLink>.
 
 That is the real difference from line-number AutoFDO: **the context is the key, and inlining merely makes the key longer**.
 

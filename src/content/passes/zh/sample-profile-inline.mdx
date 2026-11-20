@@ -130,7 +130,7 @@ SizeLimit = clamp(函数指令数 × 12, 100, 10000)
 
 ### 内联之后：权重从 inline stack 来
 
-内联完才标注权重（`computeAndPropagateWeights` → `generateMDProfMetadata`）。内联进来的指令不需要复制 profile：`findFunctionSamples` 沿指令的 DILocation inline stack 往上走，在 profile 树里找到对应节点；probe 模式更直接，`FS->findSamplesAt(Probe->Id, Probe->Discriminator)`。
+内联完才标注权重（`computeAndPropagateWeights` → `generateMDProfMetadata`）。内联进来的指令不需要复制 profile：`findFunctionSamples` 沿指令的 DILocation inline stack 往上走，在 profile 树里找到对应节点；probe 模式更直接，`FS->findSamplesAt(Probe->Id, Probe->Discriminator)`。从这些稀疏的块计数变成满足流量守恒的完整块 / 边权重，由 <I18nLink href="/passes/sample-profile-inference/">profi</I18nLink> 完成。
 
 这也是 CSSPGO 相对「按行号 + 函数名」的老 AutoFDO 最本质的变化：**上下文是 key，内联只是把 key 变长了**。
 
